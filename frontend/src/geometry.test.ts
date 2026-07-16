@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { sourcePointFromCanvas } from './geometry'
+import {
+  canvasRectFromSourceBox,
+  displayedFrameIndex,
+  sourcePointFromCanvas,
+} from './geometry'
 
 describe('sourcePointFromCanvas', () => {
   it('maps a panoramic source through vertical letterboxing', () => {
@@ -61,5 +65,25 @@ describe('sourcePointFromCanvas', () => {
         { width: 0, height: 0 },
       ),
     ).toBeNull()
+  })
+})
+
+describe('displayedFrameIndex', () => {
+  it('uses the frame currently displayed and clamps to video bounds', () => {
+    expect(displayedFrameIndex(0.05, 30, 930)).toBe(1)
+    expect(displayedFrameIndex(-1, 30, 930)).toBe(0)
+    expect(displayedFrameIndex(31, 30, 930)).toBe(929)
+  })
+})
+
+describe('canvasRectFromSourceBox', () => {
+  it('projects an exclusive source box through panorama letterboxing', () => {
+    expect(
+      canvasRectFromSourceBox(
+        [1024, 256, 2048, 768],
+        { width: 1000, height: 500 },
+        { width: 4096, height: 1024 },
+      ),
+    ).toEqual({ left: 250, top: 187.5, width: 250, height: 125 })
   })
 })

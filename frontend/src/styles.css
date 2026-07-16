@@ -88,6 +88,7 @@ h1 {
 }
 
 .video-stage video,
+.selection-mask,
 .video-overlay {
   position: absolute;
   inset: 0;
@@ -98,6 +99,11 @@ h1 {
 
 .video-stage video {
   object-fit: contain;
+}
+
+.selection-mask {
+  object-fit: contain;
+  pointer-events: none;
 }
 
 .video-overlay {
@@ -126,6 +132,33 @@ h1 {
   border: 1px solid #4d4939;
   border-radius: 0.85rem;
   background: rgba(255, 203, 102, 0.06);
+}
+
+.selection-readout {
+  display: grid;
+  gap: 0.65rem;
+  padding-top: 0.25rem;
+}
+
+.selection-readout .label,
+.selection-readout .value,
+.selection-readout .hint {
+  margin: 0;
+}
+
+.selection-score {
+  color: #2fe1b4;
+}
+
+.selection-error {
+  margin: 0;
+  color: #ffb3a7;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.track-message {
+  color: #c7d6ce;
 }
 
 .coordinate-readout .value {
@@ -179,6 +212,10 @@ h1 {
   }
 
   .coordinate-readout {
+    grid-column: 1 / -1;
+  }
+
+  .selection-readout {
     grid-column: 1 / -1;
   }
 }

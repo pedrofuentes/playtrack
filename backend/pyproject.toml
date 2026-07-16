@@ -5,7 +5,13 @@ description = "FindMe local video API"
 requires-python = ">=3.11,<3.13"
 dependencies = [
   "fastapi>=0.115,<1",
+  "numpy>=1.24.4,<3",
+  "opencv-python-headless>=4.10,<5",
+  "pillow>=9.4,<13",
   "python-multipart>=0.0.20,<1",
+  "sam-2 @ git+https://github.com/facebookresearch/sam2.git@main",
+  "torch>=2.5.1,<3",
+  "torchvision>=0.20.1,<1",
   "uvicorn[standard]>=0.34,<1",
 ]
 
@@ -22,6 +28,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-
+markers = [
+  "integration: requires downloaded model checkpoints and runtime model dependencies",
+]

@@ -8,22 +8,31 @@ import {
 } from 'react'
 
 import {
+  canvasRectFromSourceBox,
   containedMediaRect,
+  displayedFrameIndex,
   type Point,
   sourcePointFromCanvas,
 } from '../geometry'
+import type { ClickSelection } from '../api'
 
 interface VideoStageProps {
   src: string
   sourceWidth: number
   sourceHeight: number
-  onSourceClick: (point: Point) => void
+  fps: number
+  frameCount: number
+  selection: ClickSelection | null
+  onSourceClick: (point: Point, frameIdx: number) => void
 }
 
 export function VideoStage({
   src,
   sourceWidth,
   sourceHeight,
+  fps,
+  frameCount,
+  selection,
   onSourceClick,
 }: VideoStageProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -31,8 +40,14 @@ export function VideoStage({
   const [lastPoint, setLastPoint] = useState<Point | null>(null)
 
   const drawOverlay = useCallback(() => {
-    drawClickMarker(canvasRef, lastPoint, sourceWidth, sourceHeight)
-  }, [lastPoint, sourceHeight, sourceWidth])
+    drawOverlayCanvas(
+      canvasRef,
+      lastPoint,
+      selection,
+      sourceWidth,
+      sourceHeight,
+    )
+  }, [lastPoint, selection, sourceHeight, sourceWidth])
 
   useEffect(() => {
     const video = videoRef.current
@@ -53,7 +68,10 @@ export function VideoStage({
     if (!point) return
     setLastPoint(point)
     console.info('FindMe source click', point)
-    onSourceClick(point)
+    onSourceClick(
+      point,
+      displayedFrameIndex(event.currentTarget.currentTime, fps, frameCount),
+    )
   }
 
   return (
@@ -68,14 +86,23 @@ export function VideoStage({
       >
         Your browser does not support HTML video.
       </video>
+      {selection && (
+        <img
+          className="selection-mask"
+          src={`data:image/png;base64,${selection.maskPng}`}
+          alt=""
+          aria-hidden="true"
+        />
+      )}
       <canvas ref={canvasRef} className="video-overlay" aria-hidden="true" />
     </div>
   )
 }
 
-function drawClickMarker(
+function drawOverlayCanvas(
   canvasRef: RefObject<HTMLCanvasElement | null>,
   point: Point | null,
+  selection: ClickSelection | null,
   sourceWidth: number,
   sourceHeight: number,
 ) {
@@ -90,28 +117,41 @@ function drawClickMarker(
   if (!context) return
   context.scale(pixelRatio, pixelRatio)
   context.clearRect(0, 0, bounds.width, bounds.height)
-  if (!point) return
 
   const media = containedMediaRect(
     { width: bounds.width, height: bounds.height },
     { width: sourceWidth, height: sourceHeight },
   )
   if (!media) return
-  const x = media.left + point.x * media.scale
-  const y = media.top + point.y * media.scale
 
-  context.strokeStyle = '#ffcb66'
-  context.fillStyle = 'rgba(255, 203, 102, 0.22)'
-  context.lineWidth = 2
-  context.beginPath()
-  context.arc(x, y, 10, 0, Math.PI * 2)
-  context.fill()
-  context.stroke()
-  context.beginPath()
-  context.moveTo(x - 15, y)
-  context.lineTo(x + 15, y)
-  context.moveTo(x, y - 15)
-  context.lineTo(x, y + 15)
-  context.stroke()
+  if (selection) {
+    const box = canvasRectFromSourceBox(
+      selection.box,
+      { width: bounds.width, height: bounds.height },
+      { width: sourceWidth, height: sourceHeight },
+    )
+    if (box) {
+      context.strokeStyle = '#2fe1b4'
+      context.lineWidth = 3
+      context.strokeRect(box.left, box.top, box.width, box.height)
+    }
+  }
+
+  if (point) {
+    const x = media.left + point.x * media.scale
+    const y = media.top + point.y * media.scale
+    context.strokeStyle = '#ffcb66'
+    context.fillStyle = 'rgba(255, 203, 102, 0.22)'
+    context.lineWidth = 2
+    context.beginPath()
+    context.arc(x, y, 10, 0, Math.PI * 2)
+    context.fill()
+    context.stroke()
+    context.beginPath()
+    context.moveTo(x - 15, y)
+    context.lineTo(x + 15, y)
+    context.moveTo(x, y - 15)
+    context.lineTo(x, y + 15)
+    context.stroke()
+  }
 }
-

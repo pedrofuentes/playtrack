@@ -57,6 +57,15 @@ class ExtractedFrame:
     scale_y: float
 
 
+@dataclass(frozen=True, slots=True)
+class ExtractedSourceCrop:
+    path: Path
+    x: int
+    y: int
+    width: int
+    height: int
+
+
 class VideoStore:
     """In-memory registry backed by persisted uploads and cached JPEG frames."""
 
@@ -73,6 +82,7 @@ class VideoStore:
         self.data_dir = data_dir.resolve()
         self.upload_dir = self.data_dir / "uploads"
         self.frame_cache_root = self.data_dir / "frames"
+        self.selection_crop_root = self.data_dir / "selection-crops"
         self.ffmpeg_binary = ffmpeg_binary
         self.ffprobe_binary = ffprobe_binary
         self.frame_cache_max_dimension = frame_cache_max_dimension
@@ -112,10 +122,7 @@ class VideoStore:
     def extract_frame(self, video_id: str, frame_idx: int) -> ExtractedFrame:
         record = self.get(video_id)
         metadata = record.metadata
-        if frame_idx < 0 or frame_idx >= metadata.nb_frames:
-            raise InvalidFrameError(
-                f"Frame index must be between 0 and {metadata.nb_frames - 1}"
-            )
+        self._validate_frame_index(metadata, frame_idx)
 
         frame_path = record.frame_cache_dir / f"{frame_idx:08d}.jpg"
         metadata_path = frame_path.with_suffix(".json")
@@ -134,6 +141,51 @@ class VideoStore:
             height=height,
             scale_x=width / metadata.width,
             scale_y=height / metadata.height,
+        )
+
+    def extract_source_crop(
+        self,
+        video_id: str,
+        *,
+        frame_idx: int,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+    ) -> ExtractedSourceCrop:
+        """Extract and cache an exact, full-resolution source-pixel crop."""
+        record = self.get(video_id)
+        metadata = record.metadata
+        self._validate_frame_index(metadata, frame_idx)
+        if (
+            x < 0
+            or y < 0
+            or width <= 0
+            or height <= 0
+            or x + width > metadata.width
+            or y + height > metadata.height
+        ):
+            raise InvalidFrameError("Crop must be fully inside the source frame")
+
+        filename = f"{frame_idx:08d}_{x}_{y}_{width}_{height}.png"
+        destination = self.selection_crop_root / video_id / filename
+        with self._lock:
+            if not destination.is_file():
+                self._extract_source_crop_file(
+                    record,
+                    frame_idx=frame_idx,
+                    x=x,
+                    y=y,
+                    width=width,
+                    height=height,
+                    destination=destination,
+                )
+        return ExtractedSourceCrop(
+            path=destination,
+            x=x,
+            y=y,
+            width=width,
+            height=height,
         )
 
     def _register(self, path: Path) -> VideoRecord:
@@ -221,6 +273,53 @@ class VideoStore:
             raise VideoToolError("Could not extract frame: ffmpeg produced no image")
         temporary.replace(destination)
 
+    def _extract_source_crop_file(
+        self,
+        record: VideoRecord,
+        *,
+        frame_idx: int,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        destination: Path,
+    ) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_suffix(".tmp.png")
+        crop_filter = (
+            f"crop=w={width}:h={height}:x={x}:y={y}:exact=1,format=rgb24"
+        )
+        video_filter = f"select=eq(n\\,{frame_idx}),{crop_filter}"
+        command = [
+            self.ffmpeg_binary,
+            "-v",
+            "error",
+            "-i",
+            str(record.path),
+            "-vf",
+            video_filter,
+            "-frames:v",
+            "1",
+            "-compression_level",
+            "3",
+            "-y",
+            str(temporary),
+        ]
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True)
+        except FileNotFoundError as exc:
+            raise VideoToolError(
+                f"Required video tool not found: {self.ffmpeg_binary}"
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            message = exc.stderr.strip() or "unknown ffmpeg error"
+            raise VideoToolError(f"Could not extract source crop: {message}") from exc
+        if not temporary.is_file() or temporary.stat().st_size == 0:
+            raise VideoToolError(
+                "Could not extract source crop: ffmpeg produced no image"
+            )
+        temporary.replace(destination)
+
     def _load_or_probe_frame_metadata(
         self, frame_path: Path, metadata_path: Path
     ) -> dict[str, int]:
@@ -244,6 +343,13 @@ class VideoStore:
         temporary.write_text(json.dumps(dimensions), encoding="utf-8")
         temporary.replace(metadata_path)
         return dimensions
+
+    @staticmethod
+    def _validate_frame_index(metadata: VideoMetadata, frame_idx: int) -> None:
+        if frame_idx < 0 or frame_idx >= metadata.nb_frames:
+            raise InvalidFrameError(
+                f"Frame index must be between 0 and {metadata.nb_frames - 1}"
+            )
 
     def _run_ffprobe(self, path: Path, entries: str) -> dict[str, object]:
         command = [

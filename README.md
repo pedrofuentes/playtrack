@@ -64,6 +64,22 @@ The example metadata is 4096×1024, 30 fps, 930 frames, and 31 seconds. Cached
 frames retain the source aspect ratio with a maximum dimension of 2048; response
 headers report their dimensions and source scale.
 
+## M1: click-to-select
+
+Install the updated backend dependencies, then download the default SAM 2.1
+base-plus checkpoint:
+
+```bash
+uv sync --project backend --extra dev
+python scripts/fetch_models.py
+```
+
+Clicking the video sends the displayed frame and source-pixel coordinate to
+`POST /api/select/click`. Selection runs on an exact 1024×1024 source crop so
+small players in the panorama retain useful detail. The returned transparent
+mask and source-space box are drawn over the player; tracking remains an M2
+feature.
+
 ### Checks
 
 ```bash

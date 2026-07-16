@@ -1,3 +1,5 @@
+import type { SourceBox } from './geometry'
+
 export interface VideoMetadata {
   videoId: string
   width: number
@@ -5,6 +7,12 @@ export interface VideoMetadata {
   fps: number
   nbFrames: number
   duration: number
+}
+
+export interface ClickSelection {
+  box: SourceBox
+  maskPng: string
+  score: number
 }
 
 export async function registerVideo(path: string): Promise<VideoMetadata> {
@@ -30,3 +38,28 @@ export function videoFileUrl(videoId: string): string {
   return `/api/videos/${encodeURIComponent(videoId)}/file`
 }
 
+export async function selectByClick(
+  videoId: string,
+  frameIdx: number,
+  x: number,
+  y: number,
+  signal?: AbortSignal,
+): Promise<ClickSelection> {
+  const response = await fetch('/api/select/click', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ videoId, frameIdx, x, y }),
+    signal,
+  })
+  if (!response.ok) {
+    let message = `Could not select player (${response.status})`
+    try {
+      const payload = (await response.json()) as { detail?: string }
+      if (payload.detail) message = payload.detail
+    } catch {
+      // Keep the status-based message if the response is not JSON.
+    }
+    throw new Error(message)
+  }
+  return (await response.json()) as ClickSelection
+}
