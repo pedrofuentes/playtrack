@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -11,7 +12,8 @@ from pydantic import BaseModel, Field, ValidationError
 from starlette.datastructures import UploadFile
 
 from .config import settings
-from .models.sam2_engine import get_sam2_engine
+from .jobs import JobNotFoundError, JobRegistry
+from .models.sam2_engine import get_sam2_engine, get_sam2_video_engine
 from .selection import (
     ClickSelection,
     ClickSelector,
@@ -19,6 +21,7 @@ from .selection import (
     SelectionInputError,
     SelectionUnavailableError,
 )
+from .tracking import VideoTracker
 from .videos import (
     InvalidFrameError,
     InvalidVideoError,
@@ -55,11 +58,23 @@ class ClickSelectionResponse(BaseModel):
     score: float
 
 
+class TrackRequest(BaseModel):
+    videoId: str
+    frameIdx: int = Field(ge=0)
+    box: tuple[int, int, int, int]
+
+
+class TrackJobResponse(BaseModel):
+    jobId: str
+
+
 def create_app(
     video_store: VideoStore | None = None,
     *,
     frontend_dist: Path | None = None,
     click_selector: Any | None = None,
+    track_runner: Any | None = None,
+    job_registry: JobRegistry | None = None,
 ) -> FastAPI:
     store = video_store or VideoStore(
         repo_root=settings.repo_root,
@@ -67,6 +82,7 @@ def create_app(
         ffmpeg_binary=settings.ffmpeg_binary,
         ffprobe_binary=settings.ffprobe_binary,
         frame_cache_max_dimension=settings.frame_cache_max_dimension,
+        tracking_max_dimension=settings.tracking_max_dimension,
     )
     selector = click_selector
     if selector is None:
@@ -77,10 +93,24 @@ def create_app(
             ),
             crop_size=settings.sam2_crop_size,
         )
+    tracker = track_runner
+    if tracker is None:
+        tracker = VideoTracker(
+            store,
+            engine_provider=lambda: get_sam2_video_engine(
+                settings.sam2_checkpoint,
+                settings.sam2_model_config,
+                offload_video_to_cpu=settings.sam2_offload_video_to_cpu,
+                offload_state_to_cpu=settings.sam2_offload_state_to_cpu,
+            ),
+        )
+    jobs = job_registry or JobRegistry()
 
     app = FastAPI(title="FindMe", version="0.1.0")
     app.state.video_store = store
     app.state.click_selector = selector
+    app.state.track_runner = tracker
+    app.state.job_registry = jobs
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -196,6 +226,63 @@ def create_app(
             "maskPng": result.mask_png,
             "score": result.score,
         }
+
+    @app.post("/api/track", response_model=TrackJobResponse, status_code=202)
+    def start_track(payload: TrackRequest) -> dict[str, str]:
+        try:
+            record = store.get(payload.videoId)
+        except VideoNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        if payload.frameIdx >= record.metadata.nb_frames:
+            raise HTTPException(
+                422,
+                f"Frame index must be between 0 and {record.metadata.nb_frames - 1}",
+            )
+        x1, y1, x2, y2 = payload.box
+        if not (
+            0 <= x1 < x2 <= record.metadata.width
+            and 0 <= y1 < y2 <= record.metadata.height
+        ):
+            raise HTTPException(422, "Track box must be inside the source frame")
+        box = tuple(payload.box)
+        job_id = jobs.submit(
+            lambda report: tracker.track(
+                payload.videoId,
+                payload.frameIdx,
+                box,
+                on_update=report,
+            )
+        )
+        return {"jobId": job_id}
+
+    @app.get("/api/track/{job_id}")
+    def get_track(job_id: str) -> dict[str, object]:
+        try:
+            return jobs.get(job_id).to_dict()
+        except JobNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.websocket("/ws/jobs/{job_id}")
+    async def track_updates(websocket: WebSocket, job_id: str) -> None:
+        try:
+            snapshot = jobs.get(job_id)
+        except JobNotFoundError:
+            await websocket.close(code=4404, reason="Tracking job not found")
+            return
+        await websocket.accept()
+        try:
+            while True:
+                await websocket.send_json(snapshot.to_dict())
+                if snapshot.state in ("completed", "failed"):
+                    return
+                snapshot = await asyncio.to_thread(
+                    jobs.wait_for_update,
+                    job_id,
+                    snapshot.version,
+                    30.0,
+                )
+        except WebSocketDisconnect:
+            return
 
     static_dir = frontend_dist if frontend_dist is not None else settings.frontend_dist
     if static_dir.is_dir():

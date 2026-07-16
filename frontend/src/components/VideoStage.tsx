@@ -15,6 +15,8 @@ import {
   sourcePointFromCanvas,
 } from '../geometry'
 import type { ClickSelection } from '../api'
+import type { TrackFrame } from '../api'
+import { TrackOverlay } from './TrackOverlay'
 
 interface VideoStageProps {
   src: string
@@ -23,6 +25,7 @@ interface VideoStageProps {
   fps: number
   frameCount: number
   selection: ClickSelection | null
+  track: readonly TrackFrame[]
   onSourceClick: (point: Point, frameIdx: number) => void
 }
 
@@ -33,6 +36,7 @@ export function VideoStage({
   fps,
   frameCount,
   selection,
+  track,
   onSourceClick,
 }: VideoStageProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -95,6 +99,14 @@ export function VideoStage({
         />
       )}
       <canvas ref={canvasRef} className="video-overlay" aria-hidden="true" />
+      <TrackOverlay
+        videoRef={videoRef}
+        track={track}
+        sourceWidth={sourceWidth}
+        sourceHeight={sourceHeight}
+        fps={fps}
+        frameCount={frameCount}
+      />
     </div>
   )
 }

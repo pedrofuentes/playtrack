@@ -176,7 +176,146 @@ class SAM2Engine:
         return torch
 
 
+class SAM2VideoEngine:
+    """Lazy, serialized wrapper around the official SAM 2 video predictor."""
+
+    def __init__(
+        self,
+        checkpoint_path: Path,
+        model_config: str,
+        *,
+        offload_video_to_cpu: bool = False,
+        offload_state_to_cpu: bool = False,
+    ) -> None:
+        self.checkpoint_path = Path(checkpoint_path)
+        self.model_config = model_config
+        self.offload_video_to_cpu = offload_video_to_cpu
+        self.offload_state_to_cpu = offload_state_to_cpu
+        self._predictor: Any | None = None
+        self._profile: DeviceProfile | None = None
+        self._lock = threading.RLock()
+
+    @property
+    def is_loaded(self) -> bool:
+        with self._lock:
+            return self._predictor is not None
+
+    @property
+    def device_profile(self) -> DeviceProfile:
+        with self._lock:
+            if self._profile is None:
+                self._profile = detect_device()
+            return self._profile
+
+    def propagate(
+        self,
+        frame_directory: Path,
+        anchor_frame_idx: int,
+        box: tuple[int, int, int, int],
+        *,
+        reverse: bool,
+    ) -> object:
+        with self._lock:
+            torch = SAM2Engine._import_torch()
+            predictor = self._ensure_predictor(torch)
+            try:
+                import numpy as np
+            except ModuleNotFoundError as exc:
+                raise SAM2DependencyError(
+                    "NumPy is required for SAM 2 video propagation"
+                ) from exc
+
+            with ExitStack() as contexts:
+                contexts.enter_context(torch.inference_mode())
+                profile = self.device_profile
+                if profile.device == "cuda" and profile.autocast_dtype is not None:
+                    contexts.enter_context(
+                        torch.autocast(
+                            device_type="cuda",
+                            dtype=getattr(torch, profile.autocast_dtype),
+                        )
+                    )
+                # MPS cannot hold the stacked full-video tensor once it
+                # exceeds INT_MAX elements (~750 frames at 1024x1024), so
+                # frames must stay on CPU regardless of configuration.
+                force_offload = profile.device == "mps"
+                state = predictor.init_state(
+                    video_path=str(frame_directory),
+                    offload_video_to_cpu=self.offload_video_to_cpu or force_offload,
+                    offload_state_to_cpu=self.offload_state_to_cpu or force_offload,
+                )
+                predictor.add_new_points_or_box(
+                    inference_state=state,
+                    frame_idx=anchor_frame_idx,
+                    obj_id=1,
+                    box=np.asarray(box, dtype=np.float32),
+                )
+                propagation = predictor.propagate_in_video(
+                    state,
+                    start_frame_idx=anchor_frame_idx,
+                    reverse=reverse,
+                )
+                for output_frame_idx, object_ids, mask_logits in propagation:
+                    object_id_values = np.asarray(object_ids).reshape(-1).tolist()
+                    try:
+                        object_index = object_id_values.index(1)
+                    except ValueError:
+                        continue
+                    logits = mask_logits[object_index]
+                    if hasattr(logits, "detach"):
+                        logits = logits.detach()
+                    if hasattr(logits, "cpu"):
+                        logits = logits.cpu()
+                    mask = np.asarray(logits > 0, dtype=bool).squeeze()
+                    yield int(output_frame_idx), mask
+
+    def _ensure_predictor(self, torch: Any) -> Any:
+        if self._predictor is not None:
+            return self._predictor
+        if not self.checkpoint_path.is_file():
+            raise SAM2CheckpointMissingError(
+                f"SAM 2 checkpoint not found: {self.checkpoint_path}. "
+                "Run scripts/fetch_models.py first."
+            )
+        try:
+            from sam2.build_sam import build_sam2_video_predictor
+        except ModuleNotFoundError as exc:
+            raise SAM2DependencyError(
+                "The official SAM-2 package is required for video tracking"
+            ) from exc
+
+        profile = self.device_profile
+        if profile.device == "cuda" and profile.compute_capability is not None:
+            SAM2Engine._configure_cuda_attention(torch, profile)
+        try:
+            self._predictor = build_sam2_video_predictor(
+                self.model_config,
+                str(self.checkpoint_path),
+                device=profile.device,
+            )
+        except Exception as exc:
+            raise SAM2EngineError(f"Could not load SAM 2 video predictor: {exc}") from exc
+        return self._predictor
+
+
 @lru_cache(maxsize=None)
 def get_sam2_engine(checkpoint_path: Path, model_config: str) -> SAM2Engine:
     """Return one lazy engine per checkpoint/configuration pair."""
     return SAM2Engine(Path(checkpoint_path), model_config)
+
+
+@lru_cache(maxsize=None)
+def get_sam2_video_engine(
+    checkpoint_path: Path,
+    model_config: str,
+    *,
+    offload_video_to_cpu: bool = False,
+    offload_state_to_cpu: bool = False,
+) -> SAM2VideoEngine:
+    """Return one lazy video engine per model and offload configuration."""
+    return SAM2VideoEngine(
+        Path(checkpoint_path),
+        model_config,
+        offload_video_to_cpu=offload_video_to_cpu,
+        offload_state_to_cpu=offload_state_to_cpu,
+    )

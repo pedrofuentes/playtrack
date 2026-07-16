@@ -77,12 +77,35 @@ python scripts/fetch_models.py
 Clicking the video sends the displayed frame and source-pixel coordinate to
 `POST /api/select/click`. Selection runs on an exact 1024×1024 source crop so
 small players in the panorama retain useful detail. The returned transparent
-mask and source-space box are drawn over the player; tracking remains an M2
-feature.
+mask and source-space box are drawn over the player and become the M2 tracking
+anchor.
+
+## M2: video tracking
+
+After selecting a player, choose **Track this player** to start bidirectional
+SAM 2 propagation. The UI receives partial results over a WebSocket and draws
+the current frame's tracked box while the video plays or scrubs. Tracking jobs
+are also available through `POST /api/track`, `GET /api/track/{jobId}`, and
+`WS /ws/jobs/{jobId}`.
+
+Tracking uses its own sequential JPEG cache rather than the UI thumbnail
+cache. Its maximum source dimension defaults to 2048 and can be raised for
+small subjects in high-resolution panoramas:
+
+```bash
+TRACKING_MAX_DIM=4096 ./scripts/dev.sh
+```
+
+Low-memory machines can independently offload decoded video frames and SAM 2
+state to system memory:
+
+```bash
+SAM2_OFFLOAD_VIDEO_TO_CPU=true SAM2_OFFLOAD_STATE_TO_CPU=true ./scripts/dev.sh
+```
 
 ### Checks
 
 ```bash
-cd backend && uv run --extra dev pytest
+cd backend && uv run --extra dev pytest -m 'not integration'
 cd frontend && npm test && npm run typecheck && npm run build
 ```

@@ -3,7 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.models.sam2_engine import SAM2Engine, detect_device, get_sam2_engine
+from app.models.sam2_engine import (
+    SAM2Engine,
+    SAM2VideoEngine,
+    detect_device,
+    get_sam2_engine,
+    get_sam2_video_engine,
+)
 
 
 class FakeCuda:
@@ -77,3 +83,29 @@ def test_singleton_is_lazy_and_reuses_matching_configuration(tmp_path: Path) -> 
     assert isinstance(first, SAM2Engine)
     assert first is second
     assert first.is_loaded is False
+
+
+def test_video_singleton_is_lazy_and_keeps_offload_configuration(
+    tmp_path: Path,
+) -> None:
+    get_sam2_video_engine.cache_clear()
+    checkpoint = tmp_path / "model.pt"
+
+    first = get_sam2_video_engine(
+        checkpoint,
+        "configs/model.yaml",
+        offload_video_to_cpu=True,
+        offload_state_to_cpu=False,
+    )
+    second = get_sam2_video_engine(
+        checkpoint,
+        "configs/model.yaml",
+        offload_video_to_cpu=True,
+        offload_state_to_cpu=False,
+    )
+
+    assert isinstance(first, SAM2VideoEngine)
+    assert first is second
+    assert first.is_loaded is False
+    assert first.offload_video_to_cpu is True
+    assert first.offload_state_to_cpu is False

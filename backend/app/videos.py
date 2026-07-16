@@ -66,6 +66,16 @@ class ExtractedSourceCrop:
     height: int
 
 
+@dataclass(frozen=True, slots=True)
+class TrackingFrameSequence:
+    path: Path
+    width: int
+    height: int
+    frame_count: int
+    scale_x: float
+    scale_y: float
+
+
 class VideoStore:
     """In-memory registry backed by persisted uploads and cached JPEG frames."""
 
@@ -77,15 +87,18 @@ class VideoStore:
         ffmpeg_binary: str = "ffmpeg",
         ffprobe_binary: str = "ffprobe",
         frame_cache_max_dimension: int = 2048,
+        tracking_max_dimension: int = 2048,
     ) -> None:
         self.repo_root = repo_root.resolve()
         self.data_dir = data_dir.resolve()
         self.upload_dir = self.data_dir / "uploads"
         self.frame_cache_root = self.data_dir / "frames"
         self.selection_crop_root = self.data_dir / "selection-crops"
+        self.tracking_frame_root = self.data_dir / "tracking-frames"
         self.ffmpeg_binary = ffmpeg_binary
         self.ffprobe_binary = ffprobe_binary
         self.frame_cache_max_dimension = frame_cache_max_dimension
+        self.tracking_max_dimension = tracking_max_dimension
         self._records: dict[str, VideoRecord] = {}
         self._lock = threading.RLock()
 
@@ -187,6 +200,39 @@ class VideoStore:
             width=width,
             height=height,
         )
+
+    def prepare_tracking_frames(
+        self, video_id: str, *, frame_limit: int | None = None
+    ) -> TrackingFrameSequence:
+        """Extract a dedicated sequential JPEG cache for SAM 2 propagation."""
+        record = self.get(video_id)
+        if frame_limit is not None and frame_limit <= 0:
+            raise InvalidFrameError("Tracking frame limit must be positive")
+        requested_count = (
+            record.metadata.nb_frames
+            if frame_limit is None
+            else min(frame_limit, record.metadata.nb_frames)
+        )
+        cache_name = f"max-{self.tracking_max_dimension}"
+        if frame_limit is not None:
+            cache_name += f"-first-{requested_count}"
+        destination = self.tracking_frame_root / video_id / cache_name
+
+        with self._lock:
+            cached = self._load_tracking_sequence(record, destination)
+            if cached is not None and cached.frame_count == requested_count:
+                return cached
+            if destination.exists():
+                shutil.rmtree(destination)
+            self._extract_tracking_frame_sequence(
+                record,
+                destination,
+                frame_limit=requested_count,
+            )
+            cached = self._load_tracking_sequence(record, destination)
+            if cached is None:
+                raise VideoToolError("Could not read tracking frame cache")
+            return cached
 
     def _register(self, path: Path) -> VideoRecord:
         metadata = self._probe_video(path)
@@ -319,6 +365,103 @@ class VideoStore:
                 "Could not extract source crop: ffmpeg produced no image"
             )
         temporary.replace(destination)
+
+    def _extract_tracking_frame_sequence(
+        self,
+        record: VideoRecord,
+        destination: Path,
+        *,
+        frame_limit: int,
+    ) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.parent / f".{destination.name}-{uuid.uuid4().hex}.tmp"
+        temporary.mkdir(parents=True)
+        metadata = record.metadata
+        maximum = self.tracking_max_dimension
+        if maximum <= 0:
+            raise VideoToolError("Tracking maximum dimension must be positive")
+        if max(metadata.width, metadata.height) <= maximum:
+            scale_filter = "null"
+        elif metadata.width >= metadata.height:
+            scale_filter = f"scale={maximum}:-2"
+        else:
+            scale_filter = f"scale=-2:{maximum}"
+        command = [
+            self.ffmpeg_binary,
+            "-v",
+            "error",
+            "-i",
+            str(record.path),
+            "-vf",
+            scale_filter,
+            "-frames:v",
+            str(frame_limit),
+            "-q:v",
+            "2",
+            "-start_number",
+            "0",
+            "-y",
+            str(temporary / "%08d.jpg"),
+        ]
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True)
+            frames = sorted(temporary.glob("*.jpg"))
+            if len(frames) != frame_limit:
+                raise VideoToolError(
+                    f"Expected {frame_limit} tracking frames, got {len(frames)}"
+                )
+            payload = self._run_ffprobe(frames[0], "stream=width,height")
+            stream = payload["streams"][0]
+            descriptor = {
+                "width": int(stream["width"]),
+                "height": int(stream["height"]),
+                "frame_count": len(frames),
+            }
+            (temporary / "sequence.json").write_text(
+                json.dumps(descriptor), encoding="utf-8"
+            )
+            temporary.replace(destination)
+        except FileNotFoundError as exc:
+            raise VideoToolError(
+                f"Required video tool not found: {self.ffmpeg_binary}"
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            message = exc.stderr.strip() or "unknown ffmpeg error"
+            raise VideoToolError(
+                f"Could not extract tracking frames: {message}"
+            ) from exc
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise VideoToolError("Could not inspect tracking frame dimensions") from exc
+        finally:
+            if temporary.exists():
+                shutil.rmtree(temporary)
+
+    @staticmethod
+    def _load_tracking_sequence(
+        record: VideoRecord, destination: Path
+    ) -> TrackingFrameSequence | None:
+        descriptor_path = destination / "sequence.json"
+        if not descriptor_path.is_file():
+            return None
+        try:
+            descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+            width = int(descriptor["width"])
+            height = int(descriptor["height"])
+            frame_count = int(descriptor["frame_count"])
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            return None
+        if width <= 0 or height <= 0 or frame_count <= 0:
+            return None
+        if len(list(destination.glob("*.jpg"))) != frame_count:
+            return None
+        return TrackingFrameSequence(
+            path=destination,
+            width=width,
+            height=height,
+            frame_count=frame_count,
+            scale_x=width / record.metadata.width,
+            scale_y=height / record.metadata.height,
+        )
 
     def _load_or_probe_frame_metadata(
         self, frame_path: Path, metadata_path: Path

@@ -14,9 +14,24 @@ class Settings:
     sam2_checkpoint: Path
     sam2_model_config: str
     sam2_crop_size: int = 1024
+    sam2_offload_video_to_cpu: bool = False
+    sam2_offload_state_to_cpu: bool = False
     ffmpeg_binary: str = "ffmpeg"
     ffprobe_binary: str = "ffprobe"
     frame_cache_max_dimension: int = 2048
+    tracking_max_dimension: int = 2048
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value")
 
 
 def load_settings() -> Settings:
@@ -42,8 +57,11 @@ def load_settings() -> Settings:
             "configs/sam2.1/sam2.1_hiera_b+.yaml",
         ),
         sam2_crop_size=int(os.environ.get("FINDME_SAM2_CROP_SIZE", "1024")),
+        sam2_offload_video_to_cpu=_env_bool("SAM2_OFFLOAD_VIDEO_TO_CPU"),
+        sam2_offload_state_to_cpu=_env_bool("SAM2_OFFLOAD_STATE_TO_CPU"),
         ffmpeg_binary=os.environ.get("FINDME_FFMPEG", "ffmpeg"),
         ffprobe_binary=os.environ.get("FINDME_FFPROBE", "ffprobe"),
+        tracking_max_dimension=int(os.environ.get("TRACKING_MAX_DIM", "2048")),
     )
 
 
