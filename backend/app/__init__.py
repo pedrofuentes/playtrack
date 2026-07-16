@@ -1,0 +1,2 @@
+"""FindMe backend application package."""
+

@@ -1,7 +1,11 @@
 .venv/
 node_modules/
 __pycache__/
+.pytest_cache/
+*.pyc
 dist/
+.vite/
+.DS_Store
 *.pt
 *.pth
 checkpoints/
