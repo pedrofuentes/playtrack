@@ -14,15 +14,18 @@ import {
   type VideoMetadata,
   videoFileUrl,
   watchTrackJob,
+  uploadVideo,
 } from './api'
 import { VideoStage } from './components/VideoStage'
 import { ExportPanel } from './components/ExportPanel'
+import { OpenVideoPanel } from './components/OpenVideoPanel'
 import type { Point } from './geometry'
 
 const EXAMPLE_PATH = 'examples/example.mp4'
 
 export default function App() {
   const [video, setVideo] = useState<VideoMetadata | null>(null)
+  const [videoName, setVideoName] = useState<string | null>(null)
   const [lastClick, setLastClick] = useState<Point | null>(null)
   const [lastFrame, setLastFrame] = useState<number | null>(null)
   const [currentFrame, setCurrentFrame] = useState(0)
@@ -43,15 +46,21 @@ export default function App() {
   const [cropWindows, setCropWindows] = useState<CropWindow[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadingLabel, setLoadingLabel] = useState(`Opening ${EXAMPLE_PATH}…`)
   const selectionRequest = useRef<AbortController | null>(null)
   const trackSocket = useRef<WebSocket | null>(null)
 
-  const openExample = useCallback(async () => {
+  const openVideo = useCallback(async (
+    register: () => Promise<VideoMetadata>,
+    filename: string,
+    activity: string,
+  ) => {
     selectionRequest.current?.abort()
     selectionRequest.current = null
     trackSocket.current?.close()
     trackSocket.current = null
     setLoading(true)
+    setLoadingLabel(activity)
     setError(null)
     setLastClick(null)
     setLastFrame(null)
@@ -68,14 +77,43 @@ export default function App() {
     setTrackError(null)
     setCropWindows([])
     try {
-      setVideo(await registerVideo(EXAMPLE_PATH))
+      setVideo(await register())
+      setVideoName(filename)
     } catch (reason) {
       setVideo(null)
-      setError(reason instanceof Error ? reason.message : 'Could not open the example video')
+      setVideoName(null)
+      setError(reason instanceof Error ? reason.message : `Could not open ${filename}`)
     } finally {
       setLoading(false)
     }
   }, [])
+
+  const openExample = useCallback(
+    () => openVideo(
+      () => registerVideo(EXAMPLE_PATH),
+      filenameFromPath(EXAMPLE_PATH),
+      `Opening ${EXAMPLE_PATH}…`,
+    ),
+    [openVideo],
+  )
+
+  const openPath = useCallback(
+    (path: string) => openVideo(
+      () => registerVideo(path),
+      filenameFromPath(path),
+      `Opening ${path}…`,
+    ),
+    [openVideo],
+  )
+
+  const openUpload = useCallback(
+    (file: File) => openVideo(
+      () => uploadVideo(file),
+      file.name,
+      `Uploading ${file.name}…`,
+    ),
+    [openVideo],
+  )
 
   useEffect(() => {
     void openExample()
@@ -255,26 +293,23 @@ export default function App() {
     }
   }, [lastFrame, selection, video])
 
+  const workflowStep = currentWorkflowStep(selection, trackJob)
+  const exportReady = Boolean(video && trackJob?.state === 'completed')
+
   return (
     <main className="app-shell">
       <header className="app-header">
         <div>
-          <p className="eyebrow">M4 · Locate and track</p>
+          <p className="eyebrow">Panoramic player tracking</p>
           <h1>FindMe</h1>
         </div>
-        <p className="intro">Open the panoramic match, scrub to any frame, then click a player.</p>
+        <p className="intro">
+          Open any sports video, zoom in to identify a player, then track and export them.
+        </p>
       </header>
 
       <section className="workspace" aria-live="polite">
-        {loading && <div className="status-panel">Opening {EXAMPLE_PATH}…</div>}
-        {error && (
-          <div className="status-panel error-panel">
-            <p>{error}</p>
-            <button type="button" onClick={() => void openExample()}>Retry</button>
-          </div>
-        )}
-        {video && (
-          <>
+        {video ? (
             <VideoStage
               src={videoFileUrl(video.videoId)}
               sourceWidth={video.width}
@@ -289,7 +324,44 @@ export default function App() {
               onCandidateConfirm={handleCandidateConfirm}
               onFrameChange={handleFrameChange}
             />
-            <aside className="details-panel">
+        ) : (
+          <div className={`status-panel${error ? ' error-panel' : ''}`}>
+            {loading ? <p>{loadingLabel}</p> : error ? (
+              <>
+                <p>{error}</p>
+                <button type="button" onClick={() => void openExample()}>Retry example</button>
+              </>
+            ) : <p>Choose a video to begin.</p>}
+          </div>
+        )}
+        <aside className="details-panel">
+          <OpenVideoPanel
+            disabled={loading}
+            onUpload={openUpload}
+            onOpenPath={openPath}
+          />
+          <nav className="workflow-steps" aria-label="FindMe workflow">
+            <ol>
+              {(['Select player', 'Track', 'Export'] as const).map((label, index) => {
+                const step = index + 1
+                return (
+                  <li
+                    key={label}
+                    className={step === workflowStep ? 'is-current' : step < workflowStep ? 'is-complete' : ''}
+                    aria-current={step === workflowStep ? 'step' : undefined}
+                  >
+                    <span>{step}</span>{label}
+                  </li>
+                )
+              })}
+            </ol>
+          </nav>
+          {video && (
+            <>
+              <div className="video-name">
+                <p className="label">Video</p>
+                <p className="value" title={videoName ?? undefined}>{videoName}</p>
+              </div>
               <div>
                 <p className="label">Source</p>
                 <p className="value">{video.width} × {video.height}</p>
@@ -390,19 +462,32 @@ export default function App() {
                 )}
                 {trackError && <p className="selection-error">{trackError}</p>}
               </div>
-              {trackJob?.state === 'completed' && (
-                <ExportPanel
-                  videoId={video.videoId}
-                  trackJobId={trackJob.jobId}
-                  onPlanChange={setCropWindows}
-                />
-              )}
-            </aside>
-          </>
-        )}
+            </>
+          )}
+          <ExportPanel
+            key={`${video?.videoId ?? 'none'}:${trackJob?.jobId ?? 'none'}`}
+            videoId={video?.videoId ?? ''}
+            trackJobId={trackJob?.jobId ?? ''}
+            disabled={!exportReady}
+            onPlanChange={setCropWindows}
+          />
+        </aside>
       </section>
     </main>
   )
+}
+
+export function currentWorkflowStep(
+  selection: ClickSelection | null,
+  trackJob: TrackJobUpdate | null,
+): 1 | 2 | 3 {
+  if (trackJob?.state === 'completed') return 3
+  if (selection) return 2
+  return 1
+}
+
+function filenameFromPath(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path
 }
 
 function formatNumber(value: number): string {

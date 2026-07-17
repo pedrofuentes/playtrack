@@ -1,6 +1,8 @@
 import {
   type MouseEvent,
+  type PointerEvent,
   type RefObject,
+  type WheelEvent,
   useCallback,
   useEffect,
   useRef,
@@ -12,6 +14,7 @@ import {
   containedMediaRect,
   displayedFrameIndex,
   type Point,
+  type Size,
   sourcePointFromCanvas,
 } from '../geometry'
 import type {
@@ -38,6 +41,67 @@ interface VideoStageProps {
   onFrameChange: (frameIdx: number) => void
 }
 
+export interface ViewTransform {
+  zoom: number
+  x: number
+  y: number
+}
+
+interface DragState {
+  pointerId: number
+  start: Point
+  origin: Point
+  moved: boolean
+}
+
+const MIN_VIEW_ZOOM = 1
+const MAX_VIEW_ZOOM = 8
+const DRAG_THRESHOLD_PX = 4
+
+export function clampPan(pan: Point, zoom: number, viewport: Size): Point {
+  if (
+    !Number.isFinite(zoom) ||
+    !Number.isFinite(viewport.width) ||
+    !Number.isFinite(viewport.height) ||
+    viewport.width <= 0 ||
+    viewport.height <= 0
+  ) {
+    return { x: 0, y: 0 }
+  }
+  const clampedZoom = clamp(zoom, MIN_VIEW_ZOOM, MAX_VIEW_ZOOM)
+  return {
+    x: clamp(pan.x, viewport.width * (1 - clampedZoom), 0),
+    y: clamp(pan.y, viewport.height * (1 - clampedZoom), 0),
+  }
+}
+
+export function zoomAtPoint(
+  view: ViewTransform,
+  requestedZoom: number,
+  point: Point,
+  viewport: Size,
+): ViewTransform {
+  const zoom = clamp(requestedZoom, MIN_VIEW_ZOOM, MAX_VIEW_ZOOM)
+  const ratio = zoom / view.zoom
+  const pan = clampPan(
+    {
+      x: point.x - (point.x - view.x) * ratio,
+      y: point.y - (point.y - view.y) * ratio,
+    },
+    zoom,
+    viewport,
+  )
+  return { zoom, ...pan }
+}
+
+export function pointerMovedPastThreshold(
+  start: Point,
+  current: Point,
+  threshold = DRAG_THRESHOLD_PX,
+): boolean {
+  return Math.hypot(current.x - start.x, current.y - start.y) > threshold
+}
+
 export function VideoStage({
   src,
   sourceWidth,
@@ -52,9 +116,14 @@ export function VideoStage({
   onCandidateConfirm,
   onFrameChange,
 }: VideoStageProps) {
+  const stageRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [lastPoint, setLastPoint] = useState<Point | null>(null)
+  const [view, setView] = useState<ViewTransform>({ zoom: 1, x: 0, y: 0 })
+  const dragRef = useRef<DragState | null>(null)
+  const suppressNextClickRef = useRef(false)
+  const viewRevision = `${view.zoom}:${view.x}:${view.y}`
 
   const drawOverlay = useCallback(() => {
     drawOverlayCanvas(
@@ -76,7 +145,37 @@ export function VideoStage({
     return () => observer.disconnect()
   }, [drawOverlay])
 
+  useEffect(() => {
+    drawOverlay()
+  }, [drawOverlay, viewRevision])
+
+  useEffect(() => {
+    setView({ zoom: 1, x: 0, y: 0 })
+    setLastPoint(null)
+    dragRef.current = null
+    suppressNextClickRef.current = false
+  }, [src])
+
+  useEffect(() => {
+    const stage = stageRef.current
+    if (!stage) return
+    const observer = new ResizeObserver(() => {
+      const bounds = stage.getBoundingClientRect()
+      setView((current) => {
+        const pan = clampPan(current, current.zoom, bounds)
+        if (pan.x === current.x && pan.y === current.y) return current
+        return { ...current, ...pan }
+      })
+    })
+    observer.observe(stage)
+    return () => observer.disconnect()
+  }, [])
+
   const handleClick = (event: MouseEvent<HTMLVideoElement>) => {
+    if (suppressNextClickRef.current) {
+      suppressNextClickRef.current = false
+      return
+    }
     const bounds = event.currentTarget.getBoundingClientRect()
     const point = sourcePointFromCanvas(
       { x: event.clientX - bounds.left, y: event.clientY - bounds.top },
@@ -100,6 +199,68 @@ export function VideoStage({
     onSourceClick(point, frameIdx)
   }
 
+  const handleWheel = (event: WheelEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const point = { x: event.clientX - bounds.left, y: event.clientY - bounds.top }
+    const scale = Math.exp(-event.deltaY * 0.0015)
+    setView((current) => zoomAtPoint(current, current.zoom * scale, point, bounds))
+  }
+
+  const changeZoom = (amount: number) => {
+    const bounds = stageRef.current?.getBoundingClientRect()
+    if (!bounds) return
+    setView((current) =>
+      zoomAtPoint(
+        current,
+        current.zoom + amount,
+        { x: bounds.width / 2, y: bounds.height / 2 },
+        bounds,
+      ),
+    )
+  }
+
+  const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (view.zoom <= 1 || event.button !== 0) return
+    dragRef.current = {
+      pointerId: event.pointerId,
+      start: { x: event.clientX, y: event.clientY },
+      origin: { x: view.x, y: view.y },
+      moved: false,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    const current = { x: event.clientX, y: event.clientY }
+    drag.moved ||= pointerMovedPastThreshold(drag.start, current)
+    if (!drag.moved) return
+    event.preventDefault()
+    const bounds = stageRef.current?.getBoundingClientRect()
+    if (!bounds) return
+    const pan = clampPan(
+      {
+        x: drag.origin.x + current.x - drag.start.x,
+        y: drag.origin.y + current.y - drag.start.y,
+      },
+      view.zoom,
+      bounds,
+    )
+    setView((currentView) => ({ ...currentView, ...pan }))
+  }
+
+  const finishPointer = (event: PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    suppressNextClickRef.current = event.type === 'pointerup' && drag.moved
+    dragRef.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }
+
   const reportFrame = () => {
     const video = videoRef.current
     if (video) {
@@ -108,45 +269,72 @@ export function VideoStage({
   }
 
   return (
-    <div className="video-stage">
-      <video
-        ref={videoRef}
-        src={src}
-        controls
-        playsInline
-        preload="metadata"
-        onClick={handleClick}
-        onLoadedMetadata={reportFrame}
-        onSeeked={reportFrame}
-        onTimeUpdate={reportFrame}
+    <div ref={stageRef} className="video-stage" onWheel={handleWheel}>
+      <div
+        className={`video-transform${view.zoom > 1 ? ' is-pannable' : ''}${dragRef.current?.moved ? ' is-dragging' : ''}`}
+        style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={finishPointer}
+        onPointerCancel={finishPointer}
       >
-        Your browser does not support HTML video.
-      </video>
-      {selection?.maskPng && (
-        <img
-          className="selection-mask"
-          src={`data:image/png;base64,${selection.maskPng}`}
-          alt=""
-          aria-hidden="true"
+        <video
+          ref={videoRef}
+          src={src}
+          controls
+          playsInline
+          preload="metadata"
+          onClick={handleClick}
+          onLoadedMetadata={reportFrame}
+          onSeeked={reportFrame}
+          onTimeUpdate={reportFrame}
+        >
+          Your browser does not support HTML video.
+        </video>
+        {selection?.maskPng && (
+          <img
+            className="selection-mask"
+            src={`data:image/png;base64,${selection.maskPng}`}
+            alt=""
+            aria-hidden="true"
+          />
+        )}
+        <canvas ref={canvasRef} className="video-overlay" aria-hidden="true" />
+        <TrackOverlay
+          videoRef={videoRef}
+          track={track}
+          sourceWidth={sourceWidth}
+          sourceHeight={sourceHeight}
+          fps={fps}
+          frameCount={frameCount}
+          viewRevision={viewRevision}
         />
-      )}
-      <canvas ref={canvasRef} className="video-overlay" aria-hidden="true" />
-      <TrackOverlay
-        videoRef={videoRef}
-        track={track}
-        sourceWidth={sourceWidth}
-        sourceHeight={sourceHeight}
-        fps={fps}
-        frameCount={frameCount}
-      />
-      <CropOverlay
-        videoRef={videoRef}
-        windows={cropWindows}
-        sourceWidth={sourceWidth}
-        sourceHeight={sourceHeight}
-        fps={fps}
-        frameCount={frameCount}
-      />
+        <CropOverlay
+          videoRef={videoRef}
+          windows={cropWindows}
+          sourceWidth={sourceWidth}
+          sourceHeight={sourceHeight}
+          fps={fps}
+          frameCount={frameCount}
+          viewRevision={viewRevision}
+        />
+      </div>
+      <div className="view-controls" role="group" aria-label="Video view zoom">
+        <button type="button" aria-label="Zoom out" onClick={() => changeZoom(-0.5)}>
+          −
+        </button>
+        <output aria-label="View zoom">{Math.round(view.zoom * 100)}%</output>
+        <button type="button" aria-label="Zoom in" onClick={() => changeZoom(0.5)}>
+          +
+        </button>
+        <button
+          type="button"
+          className="reset-view"
+          onClick={() => setView({ zoom: 1, x: 0, y: 0 })}
+        >
+          Reset
+        </button>
+      </div>
     </div>
   )
 }
@@ -236,4 +424,8 @@ export function candidateAtSourcePoint(
       return point.x >= x1 && point.x < x2 && point.y >= y1 && point.y < y2
     }) ?? null
   )
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(Math.max(value, minimum), maximum)
 }

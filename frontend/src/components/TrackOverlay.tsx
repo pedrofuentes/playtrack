@@ -16,6 +16,7 @@ interface TrackOverlayProps {
   sourceHeight: number
   fps: number
   frameCount: number
+  viewRevision?: string
 }
 
 export function trackFrameAtTime(
@@ -36,6 +37,7 @@ export function TrackOverlay({
   sourceHeight,
   fps,
   frameCount,
+  viewRevision = '',
 }: TrackOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const framesByIndex = useMemo(
@@ -83,6 +85,10 @@ export function TrackOverlay({
       projected.height,
     )
   }, [fps, frameCount, framesByIndex, sourceHeight, sourceWidth, videoRef])
+
+  useEffect(() => {
+    draw()
+  }, [draw, viewRevision])
 
   useEffect(() => {
     const video = videoRef.current

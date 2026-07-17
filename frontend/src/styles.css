@@ -82,9 +82,25 @@ h1 {
 
 .video-stage {
   position: relative;
+  overflow: hidden;
   min-width: 0;
   aspect-ratio: 16 / 9;
   background: #030506;
+}
+
+.video-transform {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.video-transform.is-pannable {
+  cursor: grab;
+}
+
+.video-transform.is-dragging {
+  cursor: grabbing;
 }
 
 .video-stage video,
@@ -120,6 +136,43 @@ h1 {
   pointer-events: none;
 }
 
+.view-controls {
+  position: absolute;
+  z-index: 5;
+  top: 0.7rem;
+  right: 0.7rem;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.3rem;
+  border: 1px solid rgba(244, 240, 231, 0.2);
+  border-radius: 999px;
+  background: rgba(8, 12, 16, 0.82);
+  backdrop-filter: blur(8px);
+}
+
+.view-controls button {
+  min-width: 2rem;
+  padding: 0.35rem 0.55rem;
+  border-color: #46504c;
+  color: #f4f0e7;
+  background: #202832;
+  line-height: 1;
+}
+
+.view-controls output {
+  min-width: 3.3rem;
+  color: #f4f0e7;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.view-controls .reset-view {
+  padding-inline: 0.7rem;
+  font-size: 0.72rem;
+}
+
 .details-panel {
   display: grid;
   align-content: start;
@@ -127,6 +180,126 @@ h1 {
   padding: 1.4rem;
   border-left: 1px solid #28302d;
   background: #151a22;
+}
+
+.open-video-panel {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 0.65rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid #343d39;
+}
+
+.open-video-panel .label,
+.open-video-panel .hint {
+  margin: 0;
+}
+
+.open-video-panel label,
+.open-video-panel form {
+  display: grid;
+  gap: 0.4rem;
+  color: #b9c1bc;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.open-video-panel input[type="text"],
+.open-video-panel input[type="file"] {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid #46504c;
+  border-radius: 0.55rem;
+  padding: 0.5rem;
+  color: #f4f0e7;
+  background: #0d1218;
+  font: inherit;
+}
+
+.open-video-panel input[type="file"]::file-selector-button {
+  margin-right: 0.5rem;
+  border: 0;
+  border-radius: 999px;
+  padding: 0.35rem 0.55rem;
+  color: #17120a;
+  background: #ffcb66;
+  font-weight: 750;
+}
+
+.open-video-panel button {
+  justify-self: start;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.78rem;
+}
+
+.panel-divider {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 0.5rem;
+  color: #67716c;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.panel-divider::before,
+.panel-divider::after {
+  height: 1px;
+  content: "";
+  background: #343d39;
+}
+
+.workflow-steps ol {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workflow-steps {
+  grid-column: 1 / -1;
+}
+
+.workflow-steps li {
+  display: grid;
+  justify-items: center;
+  gap: 0.25rem;
+  color: #67716c;
+  font-size: 0.65rem;
+  font-weight: 750;
+  text-align: center;
+}
+
+.workflow-steps li span {
+  display: grid;
+  width: 1.55rem;
+  height: 1.55rem;
+  place-items: center;
+  border: 1px solid #46504c;
+  border-radius: 50%;
+  font-variant-numeric: tabular-nums;
+}
+
+.workflow-steps li.is-complete {
+  color: #8ca99b;
+}
+
+.workflow-steps li.is-current {
+  color: #ffcb66;
+}
+
+.workflow-steps li.is-current span {
+  border-color: #ffcb66;
+  color: #17120a;
+  background: #ffcb66;
+}
+
+.video-name .value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .value {
@@ -214,6 +387,30 @@ h1 {
   gap: 0.75rem;
   padding-top: 1rem;
   border-top: 1px solid #343d39;
+}
+
+.export-panel fieldset {
+  display: grid;
+  min-width: 0;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.export-panel.is-disabled fieldset {
+  opacity: 0.42;
+}
+
+.export-panel.is-disabled :disabled {
+  cursor: not-allowed;
+}
+
+.export-locked-hint {
+  margin: 0;
+  color: #9ba49f;
+  font-size: 0.8rem;
+  line-height: 1.45;
 }
 
 .export-panel label {

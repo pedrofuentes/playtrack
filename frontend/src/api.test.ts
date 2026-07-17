@@ -9,7 +9,41 @@ import {
   startExport,
   startTracking,
   trackJobWebSocketUrl,
+  uploadVideo,
 } from './api'
+
+describe('uploadVideo', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('posts the selected file as multipart form data without overriding its content type', async () => {
+    const result = {
+      videoId: 'uploaded-video',
+      width: 1920,
+      height: 1080,
+      fps: 30,
+      nbFrames: 90,
+      duration: 3,
+    }
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue(result),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const file = new File(['video bytes'], 'match.mp4', { type: 'video/mp4' })
+
+    await expect(uploadVideo(file)).resolves.toEqual(result)
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+    const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/videos')
+    expect(options.method).toBe('POST')
+    expect(options.headers).toBeUndefined()
+    expect(options.body).toBeInstanceOf(FormData)
+    expect((options.body as FormData).get('file')).toBe(file)
+  })
+})
 
 describe('selectByClick', () => {
   afterEach(() => {

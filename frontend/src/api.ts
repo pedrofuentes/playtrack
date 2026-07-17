@@ -95,6 +95,19 @@ export async function registerVideo(path: string): Promise<VideoMetadata> {
   return (await response.json()) as VideoMetadata
 }
 
+export async function uploadVideo(file: File): Promise<VideoMetadata> {
+  const form = new FormData()
+  form.append('file', file)
+  const response = await fetch('/api/videos', {
+    method: 'POST',
+    body: form,
+  })
+  if (!response.ok) {
+    throw new Error(await responseError(response, 'Could not upload video'))
+  }
+  return (await response.json()) as VideoMetadata
+}
+
 export function videoFileUrl(videoId: string): string {
   return `/api/videos/${encodeURIComponent(videoId)}/file`
 }

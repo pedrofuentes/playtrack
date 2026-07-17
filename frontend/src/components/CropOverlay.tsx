@@ -16,6 +16,7 @@ interface CropOverlayProps {
   sourceHeight: number
   fps: number
   frameCount: number
+  viewRevision?: string
 }
 
 export function cropWindowAtTime(
@@ -35,6 +36,7 @@ export function CropOverlay({
   sourceHeight,
   fps,
   frameCount,
+  viewRevision = '',
 }: CropOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const windowsByIndex = useMemo(
@@ -81,6 +83,10 @@ export function CropOverlay({
       projected.height,
     )
   }, [fps, frameCount, sourceHeight, sourceWidth, videoRef, windowsByIndex])
+
+  useEffect(() => {
+    draw()
+  }, [draw, viewRevision])
 
   useEffect(() => {
     const video = videoRef.current
