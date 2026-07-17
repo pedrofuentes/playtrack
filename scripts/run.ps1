@@ -7,7 +7,10 @@ Set-StrictMode -Version Latest
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $BackendDir = Join-Path $RepoRoot 'backend'
 $FrontendDir = Join-Path $RepoRoot 'frontend'
-$AppUrl = 'http://127.0.0.1:8000'
+# FINDME_HOST=0.0.0.0 exposes the app to the local network (no auth — trusted networks only).
+$BindHost = if ($env:FINDME_HOST) { $env:FINDME_HOST } else { '127.0.0.1' }
+$BrowseHost = if ($BindHost -eq '0.0.0.0') { '127.0.0.1' } else { $BindHost }
+$AppUrl = "http://${BrowseHost}:8000"
 $backendProcess = $null
 
 function Get-RequiredCommand {
@@ -207,7 +210,7 @@ try {
     Write-Host "Starting FindMe at $AppUrl ..."
     $backendProcess = Start-Process `
         -FilePath $uv.Source `
-        -ArgumentList @('run', '--no-sync', '--extra', 'locate', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '8000') `
+        -ArgumentList @('run', '--no-sync', '--extra', 'locate', 'uvicorn', 'app.main:app', '--host', $BindHost, '--port', '8000') `
         -WorkingDirectory $BackendDir `
         -PassThru `
         -NoNewWindow
