@@ -96,6 +96,7 @@ export default function App() {
       selectionLoading={workspace.selectionLoading}
       selectionError={workspace.selectionError}
       candidates={workspace.candidates}
+      playerName={workspace.playerName}
       textSelectionEnabled={workspace.features.textSelection.enabled}
       trackJob={workspace.trackJob}
       trackMessage={workspace.trackMessage}
@@ -103,6 +104,7 @@ export default function App() {
       trackStartedAt={workspace.trackStartedAt}
       health={health}
       onTextSelect={workspace.selectByDescription}
+      onPlayerNameChange={workspace.setPlayerName}
       onTrack={() => void workspace.startTrack()}
       onRetryTrack={() => void workspace.retryTrack()}
       onResetSelection={workspace.resetSelection}
@@ -169,9 +171,13 @@ export default function App() {
               void workspace.openLibraryVideo(saved)
               setSurface('editor')
             }}
-            onReExport={(saved, jobId) => {
-              void workspace.reExportLibraryTrack(saved, jobId)
-              setSurface('editor')
+            onOpenPlayer={async (saved, player) => {
+              const opened = await workspace.openLibraryPlayer(saved, player)
+              if (opened) {
+                setSurface('editor')
+                window.requestAnimationFrame(() => seekToFrame(player.anchorFrameIdx))
+              }
+              return opened
             }}
             onRefresh={workspace.refreshLibrary}
           />

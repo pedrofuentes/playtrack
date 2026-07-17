@@ -25,8 +25,7 @@ import type {
   LocateCandidate,
   TrackFrame,
 } from '../api'
-import { CropOverlay } from './CropOverlay'
-import { TrackOverlay } from './TrackOverlay'
+import { PlaybackOverlay } from './PlaybackOverlay'
 
 interface VideoStageProps {
   src: string
@@ -334,17 +333,9 @@ export const VideoStage = forwardRef<VideoStageHandle, VideoStageProps>(function
         )}
         {selection && <span className="sr-only" role="status">Selected player</span>}
         <canvas ref={canvasRef} className="video-overlay" aria-hidden="true" />
-        <TrackOverlay
+        <PlaybackOverlay
           videoRef={videoRef}
           track={track}
-          sourceWidth={sourceWidth}
-          sourceHeight={sourceHeight}
-          fps={fps}
-          frameCount={frameCount}
-          viewRevision={viewRevision}
-        />
-        <CropOverlay
-          videoRef={videoRef}
           windows={cropWindows}
           sourceWidth={sourceWidth}
           sourceHeight={sourceHeight}

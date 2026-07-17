@@ -72,6 +72,7 @@ export interface CropPlanResponse {
 
 export interface LibraryTrack {
   jobId: string
+  name: string
   anchorFrameIdx: number
   box: SourceBox
   frameCount: number
@@ -206,16 +207,17 @@ export async function startTracking(
   videoId: string,
   frameIdx: number,
   box: SourceBox,
-): Promise<{ jobId: string }> {
+  playerName?: string,
+): Promise<{ jobId: string; playerName: string }> {
   const response = await fetch('/api/track', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ videoId, frameIdx, box }),
+    body: JSON.stringify({ videoId, frameIdx, box, playerName }),
   })
   if (!response.ok) {
     throw new Error(await responseError(response, 'Could not start tracking'))
   }
-  return (await response.json()) as { jobId: string }
+  return (await response.json()) as { jobId: string; playerName: string }
 }
 
 export async function getTrack(jobId: string): Promise<TrackJobUpdate> {
@@ -305,6 +307,19 @@ export async function deleteLibraryTrack(jobId: string): Promise<void> {
 
 export async function deleteLibraryExport(exportId: string): Promise<void> {
   await deleteLibraryItem(`/api/library/exports/${encodeURIComponent(exportId)}`)
+}
+
+export async function renameLibraryPlayer(
+  jobId: string,
+  name: string,
+): Promise<{ jobId: string; name: string }> {
+  const response = await fetch(`/api/library/tracks/${encodeURIComponent(jobId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  if (!response.ok) throw new Error(await responseError(response, 'Could not rename player'))
+  return (await response.json()) as { jobId: string; name: string }
 }
 
 export async function clearFrameCaches(): Promise<{ bytesFreed: number }> {

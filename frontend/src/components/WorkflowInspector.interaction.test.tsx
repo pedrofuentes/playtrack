@@ -26,6 +26,7 @@ it('switches between click and description selection methods', async () => {
       selectionLoading={false}
       selectionError={null}
       candidates={[]}
+      playerName=""
       textSelectionEnabled
       trackJob={null}
       trackMessage={null}
@@ -33,6 +34,7 @@ it('switches between click and description selection methods', async () => {
       trackStartedAt={null}
       health={null}
       onTextSelect={vi.fn()}
+      onPlayerNameChange={vi.fn()}
       onTrack={vi.fn()}
       onRetryTrack={vi.fn()}
       onResetSelection={vi.fn()}

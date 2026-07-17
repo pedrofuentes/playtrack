@@ -9,6 +9,7 @@ import {
   getLibrary,
   getTrack,
   type LibraryResponse,
+  type LibraryTrack,
   type LibraryVideo,
   type LocateCandidate,
   registerVideo,
@@ -34,6 +35,7 @@ export interface WorkspaceController {
   selectionLoading: boolean
   selectionError: string | null
   candidates: LocateCandidate[]
+  playerName: string
   features: FeatureFlags
   library: LibraryResponse
   trackJob: TrackJobUpdate | null
@@ -52,11 +54,12 @@ export interface WorkspaceController {
   openUpload(file: File): Promise<void>
   openPath(path: string): Promise<void>
   openLibraryVideo(video: LibraryVideo): Promise<void>
-  reExportLibraryTrack(video: LibraryVideo, jobId: string): Promise<void>
+  openLibraryPlayer(video: LibraryVideo, player: LibraryTrack): Promise<boolean>
   refreshLibrary(): void
   selectAt(point: Point, frameIdx: number): void
   selectByDescription(prompt: string): void
   confirmCandidate(candidate: LocateCandidate, frameIdx: number): void
+  setPlayerName(name: string): void
   setCurrentFrame(frameIdx: number): void
   startTrack(): Promise<void>
   retryTrack(): Promise<void>
@@ -77,6 +80,7 @@ export function useWorkspace(): WorkspaceController {
   const [selectionLoading, setSelectionLoading] = useState(false)
   const [selectionError, setSelectionError] = useState<string | null>(null)
   const [candidates, setCandidates] = useState<LocateCandidate[]>([])
+  const [playerName, setPlayerName] = useState('')
   const [candidateFrame, setCandidateFrame] = useState<number | null>(null)
   const [features, setFeatures] = useState<FeatureFlags>({
     textSelection: { enabled: false, reason: '' },
@@ -133,6 +137,7 @@ export function useWorkspace(): WorkspaceController {
     setSelectionLoading(false)
     setSelectionError(null)
     setCandidates([])
+    setPlayerName('')
     setCandidateFrame(null)
     try {
       setVideo(await register())
@@ -168,20 +173,42 @@ export function useWorkspace(): WorkspaceController {
     `Opening ${saved.name}…`,
   ), [openVideo])
 
-  const reExportLibraryTrack = useCallback(async (saved: LibraryVideo, jobId: string) => {
-    if (videoSwitchLocked) return
-    await openLibraryVideo(saved)
-    try {
-      const restored = await getTrack(jobId)
-      setTrackJob(restored)
-      setTrackMessage(restored.message)
-      setTrackError(restored.state === 'failed' ? restored.message : null)
-      setTrackStartedAt(null)
-      setFraming(restored.state === 'completed')
-    } catch (reason) {
-      setTrackError(reason instanceof Error ? reason.message : 'Could not restore saved track')
+  const openLibraryPlayer = useCallback(async (
+    saved: LibraryVideo,
+    player: LibraryTrack,
+  ): Promise<boolean> => {
+    if (videoSwitchLockedRef.current) return false
+    if (!saved.sourceExists) throw new Error('Source video is missing')
+    const restored = await getTrack(player.jobId)
+    if (restored.state !== 'completed') {
+      throw new Error('Saved player track is not complete')
     }
-  }, [openLibraryVideo, videoSwitchLocked])
+
+    selectionRequest.current?.abort()
+    selectionRequest.current = null
+    clearDownstreamState()
+    setLoading(false)
+    setOpenError(null)
+    setVideo(saved.metadata)
+    setVideoName(saved.name)
+    setCurrentFrameState(player.anchorFrameIdx)
+    setAnchorFrame(player.anchorFrameIdx)
+    setSelection(null)
+    setSelectionKind('click')
+    setSelectionLoading(false)
+    setSelectionError(null)
+    setCandidates([])
+    setCandidateFrame(null)
+    setPlayerName(player.name)
+    setTrackJob(restored)
+    setTrackMessage(restored.message)
+    setTrackError(null)
+    setTrackStartedAt(null)
+    setCropWindowsState([])
+    setFraming(false)
+    setExportJobState(null)
+    return true
+  }, [clearDownstreamState])
 
   useEffect(() => {
     void openPath(EXAMPLE_PATH)
@@ -205,6 +232,7 @@ export function useWorkspace(): WorkspaceController {
     setSelection(null)
     setSelectionKind(kind)
     setCandidates([])
+    setPlayerName('')
     setCandidateFrame(null)
     setSelectionError(null)
     clearDownstreamState()
@@ -289,7 +317,10 @@ export function useWorkspace(): WorkspaceController {
     setFraming(false)
     setExportJobState(null)
     try {
-      const { jobId } = await startTracking(video.videoId, anchorFrame, selection.box)
+      const { jobId, playerName: resolvedName } = await startTracking(
+        video.videoId, anchorFrame, selection.box, playerName,
+      )
+      setPlayerName(resolvedName)
       setTrackJob({
         jobId,
         state: 'queued',
@@ -322,7 +353,7 @@ export function useWorkspace(): WorkspaceController {
     } finally {
       setTrackStarting(false)
     }
-  }, [anchorFrame, refreshLibrary, selection, video])
+  }, [anchorFrame, playerName, refreshLibrary, selection, video])
 
   const resetSelection = useCallback(() => {
     selectionRequest.current?.abort()
@@ -333,6 +364,7 @@ export function useWorkspace(): WorkspaceController {
     setSelectionLoading(false)
     setSelectionError(null)
     setCandidates([])
+    setPlayerName('')
     setCandidateFrame(null)
     clearDownstreamState()
   }, [clearDownstreamState])
@@ -351,6 +383,7 @@ export function useWorkspace(): WorkspaceController {
     selectionLoading,
     selectionError,
     candidates,
+    playerName,
     features,
     library,
     trackJob,
@@ -369,11 +402,12 @@ export function useWorkspace(): WorkspaceController {
     openUpload,
     openPath,
     openLibraryVideo,
-    reExportLibraryTrack,
+    openLibraryPlayer,
     refreshLibrary,
     selectAt,
     selectByDescription,
     confirmCandidate,
+    setPlayerName,
     setCurrentFrame,
     startTrack,
     retryTrack: startTrack,
@@ -384,9 +418,9 @@ export function useWorkspace(): WorkspaceController {
     clearCaches,
   }), [
     candidates, clearCaches, confirmCandidate, cropWindows, currentFrame, exportJob,
-    features, framing, library, loading, loadingLabel, openError, openLibraryVideo,
-    openPath, openUpload, reExportLibraryTrack, refreshLibrary, resetSelection,
-    selectAt, selectByDescription, selection, selectionError, selectionKind,
+    features, framing, library, loading, loadingLabel, openError, openLibraryPlayer,
+    openLibraryVideo, openPath, openUpload, refreshLibrary, resetSelection,
+    playerName, selectAt, selectByDescription, selection, selectionError, selectionKind,
     selectionLoading, stage, startTrack, trackError, trackJob, trackMessage,
     trackStartedAt, trackStarting, video, videoName, videoSwitchLocked,
   ])

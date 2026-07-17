@@ -17,6 +17,7 @@ const common = {
   selectionLoading: false,
   selectionError: null,
   candidates: [],
+  playerName: '',
   textSelectionEnabled: false,
   trackJob: null,
   trackMessage: null,
@@ -24,6 +25,7 @@ const common = {
   trackStartedAt: null,
   health: null,
   onTextSelect: vi.fn(),
+  onPlayerNameChange: vi.fn(),
   onTrack: vi.fn(),
   onRetryTrack: vi.fn(),
   onResetSelection: vi.fn(),
@@ -52,6 +54,8 @@ describe('WorkflowInspector', () => {
     )
     expect(selected).toContain('Describe')
     expect(selected).toContain('92% confidence')
+    expect(selected).toContain('Name this player')
+    expect(selected).toContain('maxLength="80"')
     expect(selected).toContain('Track player')
   })
 

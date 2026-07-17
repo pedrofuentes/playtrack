@@ -7,6 +7,7 @@ import {
   getFeatures,
   selectByClick,
   selectByText,
+  renameLibraryPlayer,
   startExport,
   startTracking,
   trackJobWebSocketUrl,
@@ -131,13 +132,13 @@ describe('startTracking', () => {
   it('starts tracking with the anchor frame and source box', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: vi.fn().mockResolvedValue({ jobId: 'job-1' }),
+      json: vi.fn().mockResolvedValue({ jobId: 'job-1', playerName: 'White 19' }),
     })
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(
-      startTracking('video-1', 12, [100, 200, 140, 260]),
-    ).resolves.toEqual({ jobId: 'job-1' })
+      startTracking('video-1', 12, [100, 200, 140, 260], ' White 19 '),
+    ).resolves.toEqual({ jobId: 'job-1', playerName: 'White 19' })
     expect(fetchMock).toHaveBeenCalledWith('/api/track', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -145,6 +146,7 @@ describe('startTracking', () => {
         videoId: 'video-1',
         frameIdx: 12,
         box: [100, 200, 140, 260],
+        playerName: ' White 19 ',
       }),
     })
   })
@@ -228,5 +230,23 @@ describe('library API', () => {
     vi.stubGlobal('fetch', fetchMock)
     await expect(getLibrary()).resolves.toEqual(result)
     expect(fetchMock).toHaveBeenCalledWith('/api/library')
+  })
+
+  it('renames a saved player', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ jobId: 'track-1', name: 'Goalie' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(renameLibraryPlayer('track-1', 'Goalie')).resolves.toEqual({
+      jobId: 'track-1',
+      name: 'Goalie',
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/library/tracks/track-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Goalie' }),
+    })
   })
 })

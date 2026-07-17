@@ -7,6 +7,18 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { LibraryResponse, LibraryVideo } from '../api'
 import { LibraryPanel } from './LibraryPanel'
 
+const apiMocks = vi.hoisted(() => ({
+  deleteLibraryExport: vi.fn().mockResolvedValue(undefined),
+  deleteLibraryTrack: vi.fn().mockResolvedValue(undefined),
+  deleteLibraryVideo: vi.fn().mockResolvedValue(undefined),
+  renameLibraryPlayer: vi.fn().mockResolvedValue({ jobId: 'video-1-track', name: 'Goalie' }),
+}))
+
+vi.mock('../api', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../api')>(),
+  ...apiMocks,
+}))
+
 function savedVideo(videoId: string, name: string, sourceKind: 'path' | 'upload'): LibraryVideo {
   return {
     videoId,
@@ -17,8 +29,8 @@ function savedVideo(videoId: string, name: string, sourceKind: 'path' | 'upload'
     sourceKind,
     path: `/${name}`,
     metadata: { videoId, width: 320, height: 180, fps: 10, nbFrames: 4, duration: .4 },
-    tracks: [{ jobId: `${videoId}-track`, anchorFrameIdx: 2, box: [1, 2, 3, 4], frameCount: 4, lostCount: 1, createdAt: '2026-07-16T00:00:00Z' }],
-    exports: [{ exportId: `${videoId}-export`, videoId, trackJobId: `${videoId}-track`, params: { outWidth: 128, outHeight: 72 }, path: '/export.mp4', size: 512, createdAt: '2026-07-16T00:00:00Z', sourceExists: true }],
+    tracks: [{ name: 'White 19', jobId: `${videoId}-track`, anchorFrameIdx: 2, box: [1, 2, 3, 4], frameCount: 4, lostCount: 1, createdAt: '2026-07-16T00:00:00Z' }],
+    exports: [{ exportId: `${videoId}-export`, videoId, trackJobId: `${videoId}-track`, params: { outWidth: 128, outHeight: 72, zoom: 2 }, path: '/export.mp4', size: 512, createdAt: '2026-07-16T00:00:00Z', sourceExists: true }],
   }
 }
 
@@ -33,55 +45,83 @@ const library: LibraryResponse = {
 beforeEach(() => vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true))
 afterEach(() => {
   document.body.innerHTML = ''
-  vi.restoreAllMocks()
+  vi.clearAllMocks()
   vi.unstubAllGlobals()
 })
 
-it('filters saved videos and labels source ownership', async () => {
+async function renderLibrary(overrides: Partial<Parameters<typeof LibraryPanel>[0]> = {}) {
   const container = document.createElement('div')
   document.body.append(container)
   const root = createRoot(container)
-  await act(async () => root.render(
-    <LibraryPanel
-      library={library}
-      openingDisabled={false}
-      onOpenVideo={vi.fn()}
-      onReExport={vi.fn()}
-      onRefresh={vi.fn()}
-    />,
-  ))
+  const props = {
+    library,
+    openingDisabled: false,
+    onOpenVideo: vi.fn(),
+    onOpenPlayer: vi.fn().mockResolvedValue(true),
+    onRefresh: vi.fn(),
+    ...overrides,
+  }
+  await act(async () => root.render(<LibraryPanel {...props} />))
+  return { container, root, props }
+}
 
-  expect(container.textContent).toContain('Registered path')
-  expect(container.textContent).toContain('Uploaded copy')
+function button(container: HTMLElement, name: string) {
+  return [...container.querySelectorAll('button')].find((item) => item.textContent?.trim() === name)!
+}
+
+it('separates sources, named players, and exports into tabs', async () => {
+  const { container, root } = await renderLibrary()
+  expect(container.textContent).toContain('Championship Final.mp4')
+  expect(container.textContent).not.toContain('White 19')
+
+  await act(async () => button(container, 'Players').click())
+  expect(container.textContent).toContain('White 19')
+  expect(container.textContent).toContain('Championship Final.mp4')
+  expect(container.textContent).toContain('Open player')
+  expect(container.textContent).not.toContain('Re-export')
+
+  await act(async () => button(container, 'Exports').click())
+  expect(container.textContent).toContain('White 19')
+  expect(container.textContent).toContain('128 × 72')
+  expect(container.querySelector('a[download]')).not.toBeNull()
+  expect(container.textContent).not.toContain('Open player')
+  await act(async () => root.unmount())
+})
+
+it('searches only the active tab and opens a saved player', async () => {
+  const onOpenPlayer = vi.fn().mockResolvedValue(true)
+  const { container, root } = await renderLibrary({ onOpenPlayer })
+  await act(async () => button(container, 'Players').click())
   const search = container.querySelector<HTMLInputElement>('input[type="search"]')!
   await act(async () => {
-    const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
-    valueSetter?.call(search, 'practice')
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    setter?.call(search, 'practice')
     search.dispatchEvent(new Event('input', { bubbles: true }))
   })
   expect(container.textContent).not.toContain('Championship Final.mp4')
   expect(container.textContent).toContain('Practice Wide Angle.mp4')
+
+  await act(async () => button(container, 'Open player').click())
+  expect(onOpenPlayer).toHaveBeenCalledWith(library.videos[1], library.videos[1].tracks[0])
   await act(async () => root.unmount())
 })
 
-it('locks opening and re-export without hiding downloads', async () => {
-  const container = document.createElement('div')
-  document.body.append(container)
-  const root = createRoot(container)
-  await act(async () => root.render(
-    <LibraryPanel
-      library={{ ...library, videos: [library.videos[0]] }}
-      openingDisabled
-      onOpenVideo={vi.fn()}
-      onReExport={vi.fn()}
-      onRefresh={vi.fn()}
-    />,
-  ))
-
-  const buttons = [...container.querySelectorAll('button')]
-  expect(buttons.find((button) => button.textContent === 'Open')?.disabled).toBe(true)
-  expect(buttons.find((button) => button.textContent === 'Re-export')?.disabled).toBe(true)
-  expect(container.querySelector('a[download]')).not.toBeNull()
-  expect(container.textContent).not.toContain('Clear frame caches')
+it('renames a player inline and keeps missing sources deletable', async () => {
+  const missing = { ...library.videos[0], sourceExists: false }
+  const { container, root, props } = await renderLibrary({ library: { ...library, videos: [missing] } })
+  await act(async () => button(container, 'Players').click())
+  expect(button(container, 'Open player').disabled).toBe(true)
+  await act(async () => button(container, 'Rename').click())
+  const input = container.querySelector<HTMLInputElement>('input[aria-label="Player name"]')!
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    setter?.call(input, 'Goalie')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    button(container, 'Save').click()
+    await Promise.resolve()
+  })
+  expect(apiMocks.renameLibraryPlayer).toHaveBeenCalledWith('video-1-track', 'Goalie')
+  expect(props.onRefresh).toHaveBeenCalled()
+  expect(button(container, 'Delete').disabled).toBe(false)
   await act(async () => root.unmount())
 })

@@ -18,6 +18,7 @@ interface WorkflowInspectorProps {
   selectionLoading: boolean
   selectionError: string | null
   candidates: readonly LocateCandidate[]
+  playerName: string
   textSelectionEnabled: boolean
   trackJob: TrackJobUpdate | null
   trackMessage: string | null
@@ -25,6 +26,7 @@ interface WorkflowInspectorProps {
   trackStartedAt: number | null
   health: TrackHealthSummary | null
   onTextSelect: (prompt: string) => void
+  onPlayerNameChange: (name: string) => void
   onTrack: () => void
   onRetryTrack: () => void
   onResetSelection: () => void
@@ -65,6 +67,8 @@ function SelectionInspector({
   candidates,
   textSelectionEnabled,
   onTextSelect,
+  playerName,
+  onPlayerNameChange,
   onTrack,
   onResetSelection,
 }: WorkflowInspectorProps) {
@@ -135,6 +139,16 @@ function SelectionInspector({
       )}
       {selection && (
         <>
+          <label className="player-name-field">
+            Name this player <span>Optional</span>
+            <input
+              type="text"
+              maxLength={80}
+              value={playerName}
+              placeholder="Player 1"
+              onChange={(event) => onPlayerNameChange(event.target.value)}
+            />
+          </label>
           <button type="button" className="primary-action" onClick={onTrack}>Track player</button>
           <button type="button" className="secondary-action" onClick={onResetSelection}>Choose a different player</button>
         </>
@@ -177,13 +191,13 @@ function TrackingInspector({
   )
 }
 
-function ReviewInspector({ health, onBeginFraming, onSeek }: WorkflowInspectorProps) {
+function ReviewInspector({ health, playerName, onBeginFraming, onSeek }: WorkflowInspectorProps) {
   const coverage = Math.round((health?.coverage ?? 0) * 100)
   const lostCount = health?.lostCount ?? 0
   return (
     <div className="inspector-body">
       <p className="section-label">Track health</p>
-      <h3>Track ready</h3>
+      <h3>{playerName || 'Player'} is ready</h3>
       <div className="review-stats">
         <div><strong>{coverage}%</strong><span>Coverage</span></div>
         <div><strong>{lostCount}</strong><span>Lost frames</span></div>

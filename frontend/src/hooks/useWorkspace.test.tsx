@@ -4,7 +4,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { TrackJobUpdate, VideoMetadata } from '../api'
+import type { LibraryTrack, LibraryVideo, TrackJobUpdate, VideoMetadata } from '../api'
 import { type WorkspaceController, useWorkspace } from './useWorkspace'
 
 const apiMocks = vi.hoisted(() => ({
@@ -62,7 +62,7 @@ beforeEach(() => {
   apiMocks.uploadVideo.mockResolvedValue(video)
   apiMocks.selectByClick.mockResolvedValue({ box: [1, 2, 3, 4], maskPng: '', score: 0.9 })
   apiMocks.selectByText.mockResolvedValue([])
-  apiMocks.startTracking.mockResolvedValue({ jobId: 'track-1' })
+  apiMocks.startTracking.mockResolvedValue({ jobId: 'track-1', playerName: 'White 19' })
   apiMocks.clearFrameCaches.mockResolvedValue({ bytesFreed: 0 })
   apiMocks.watchTrackJob.mockReturnValue({ close: vi.fn() } as unknown as WebSocket)
 })
@@ -90,9 +90,14 @@ describe('useWorkspace', () => {
     expect(controller?.selection?.score).toBe(0.9)
     expect(controller?.stage).toBe('select')
 
+    act(() => controller?.setPlayerName(' White 19 '))
     await act(async () => {
       await controller?.startTrack()
     })
+    expect(apiMocks.startTracking).toHaveBeenCalledWith(
+      'video-1', 20, [1, 2, 3, 4], ' White 19 ',
+    )
+    expect(controller?.playerName).toBe('White 19')
     expect(controller?.videoSwitchLocked).toBe(true)
     expect(controller?.trackStartedAt).not.toBeNull()
 
@@ -139,6 +144,60 @@ describe('useWorkspace', () => {
     expect(controller?.selection).toBeNull()
     expect(controller?.trackJob).toBeNull()
     expect(controller?.framing).toBe(false)
+    await act(async () => root.unmount())
+  })
+
+  it('restores a saved player atomically at its anchor and preserves state on failure', async () => {
+    const savedPlayer: LibraryTrack = {
+      jobId: 'saved-track',
+      name: 'White 19',
+      anchorFrameIdx: 42,
+      box: [10, 20, 30, 60],
+      frameCount: 930,
+      lostCount: 0,
+      createdAt: '2026-07-17T00:00:00Z',
+    }
+    const savedVideo: LibraryVideo = {
+      videoId: video.videoId,
+      name: 'match.mp4',
+      sourceKind: 'path',
+      path: '/match.mp4',
+      metadata: video,
+      size: 100,
+      openedAt: '2026-07-17T00:00:00Z',
+      sourceExists: true,
+      tracks: [savedPlayer],
+      exports: [],
+    }
+    const restored: TrackJobUpdate = {
+      jobId: 'saved-track',
+      state: 'completed',
+      progress: 1,
+      message: 'Tracking complete',
+      track: [{ frameIdx: 42, box: [10, 20, 30, 60], center: [20, 40], lost: false }],
+    }
+    apiMocks.getTrack.mockResolvedValue(restored)
+    const root = await mountController()
+
+    await act(async () => {
+      await expect(controller?.openLibraryPlayer(savedVideo, savedPlayer)).resolves.toBe(true)
+    })
+    expect(controller?.videoName).toBe('match.mp4')
+    expect(controller?.playerName).toBe('White 19')
+    expect(controller?.currentFrame).toBe(42)
+    expect(controller?.trackJob).toEqual(restored)
+    expect(controller?.stage).toBe('review')
+
+    apiMocks.getTrack.mockRejectedValueOnce(new Error('Track missing'))
+    await act(async () => {
+      await expect(controller?.openLibraryPlayer(
+        { ...savedVideo, name: 'other.mp4' },
+        { ...savedPlayer, jobId: 'missing' },
+      )).rejects.toThrow('Track missing')
+    })
+    expect(controller?.videoName).toBe('match.mp4')
+    expect(controller?.playerName).toBe('White 19')
+    expect(controller?.trackJob).toEqual(restored)
     await act(async () => root.unmount())
   })
 })
