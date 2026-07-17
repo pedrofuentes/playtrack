@@ -99,9 +99,10 @@ is hidden, and `POST /api/select/text` returns 501 on non-CUDA hosts.
 
 ## User guide
 
-1. Put the source video at `examples/example.mp4` before launch. The current UI
-   opens that path automatically; the backend API also supports registering a
-   different local path or uploading a video.
+1. Put a source video at `examples/example.mp4` before launch (no example clip
+   ships with the repo — `examples/*.mp4` is gitignored). The UI opens that path
+   automatically when present, and you can also upload a video or open any
+   server path from the Open video panel.
 2. Scrub to a clear frame. Click the player for a SAM 2 mask. On CUDA, you can
    instead describe the player—for example, “the player in the white jersey”—
    and click one of the pink candidate boxes to confirm it.

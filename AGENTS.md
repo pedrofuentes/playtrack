@@ -12,7 +12,8 @@ at user-chosen dimensions. Single user, localhost by default.
 
 Test asset: `examples/example.mp4` — 4096×1024 panoramic hockey video, 30 fps, 930
 frames. Players are only ~60 px tall in it; several design decisions below follow from
-that.
+that. The file is **not committed** (third-party footage; `examples/*.mp4` is
+gitignored) — supply your own panoramic clip at that path for end-to-end verification.
 
 ## Architecture
 

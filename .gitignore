@@ -11,3 +11,4 @@ dist/
 checkpoints/
 data/
 exports/
+examples/*.mp4
