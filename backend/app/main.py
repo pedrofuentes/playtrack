@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import posixpath
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 from starlette.datastructures import UploadFile
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import settings
 from .crop_planner import (
@@ -40,6 +42,28 @@ from .videos import (
     VideoToolError,
     metadata_dict,
 )
+
+
+class SPAStaticFiles(StaticFiles):
+    """Serve static assets normally and route client-side paths to index.html."""
+
+    async def get_response(self, path: str, scope: dict[str, Any]) -> Any:
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404 or not self._is_spa_route(path, scope):
+                raise
+        return await super().get_response("index.html", scope)
+
+    @staticmethod
+    def _is_spa_route(path: str, scope: dict[str, Any]) -> bool:
+        if scope.get("method") not in ("GET", "HEAD"):
+            return False
+        normalized = path.lstrip("/")
+        first_segment = normalized.partition("/")[0]
+        if first_segment in {"api", "assets", "ws"}:
+            return False
+        return posixpath.splitext(normalized)[1] == ""
 
 
 class VideoPathRequest(BaseModel):
@@ -520,7 +544,7 @@ def create_app(
 
     static_dir = frontend_dist if frontend_dist is not None else settings.frontend_dist
     if static_dir.is_dir():
-        app.mount("/", StaticFiles(directory=static_dir, html=True), name="frontend")
+        app.mount("/", SPAStaticFiles(directory=static_dir, html=True), name="frontend")
     return app
 
 
