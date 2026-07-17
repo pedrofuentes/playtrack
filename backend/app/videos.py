@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -50,6 +51,7 @@ class VideoRecord:
     frame_cache_dir: Path
     source_kind: str = "path"
     display_name: str | None = None
+    source_key: str = ""
 
     @property
     def name(self) -> str:
@@ -110,32 +112,62 @@ class VideoStore:
         self._records: dict[str, VideoRecord] = {}
         self._lock = threading.RLock()
         self.library = LibraryStore(self.data_dir)
+        self.library.consolidate_sources(self.upload_dir)
         self._rehydrate()
 
-    def register_path(self, raw_path: str | Path) -> VideoRecord:
+    def register_path(
+        self, raw_path: str | Path, display_name: str | None = None
+    ) -> VideoRecord:
         requested_path = Path(raw_path).expanduser()
         path = requested_path if requested_path.is_absolute() else self.repo_root / requested_path
         path = path.resolve()
         if not path.is_file():
             raise VideoNotFoundError(f"Video file not found: {raw_path}")
-        return self._register(path, source_kind="path")
+        source_key = _path_source_key(path)
+        existing = self._record_for_source("path", source_key)
+        if existing is not None:
+            return existing
+        return self._register(
+            path,
+            source_kind="path",
+            display_name=sanitize_display_name(display_name),
+            source_key=source_key,
+        )
 
     def register_upload(
-        self, source: BinaryIO, filename: str | None = None
+        self,
+        source: BinaryIO,
+        filename: str | None = None,
+        display_name: str | None = None,
     ) -> VideoRecord:
         suffix = Path(filename or "upload.mp4").suffix.lower() or ".mp4"
         upload_id = uuid.uuid4().hex
         self.upload_dir.mkdir(parents=True, exist_ok=True)
+        temporary = self.upload_dir / f".{upload_id}.tmp"
         destination = self.upload_dir / f"{upload_id}{suffix}"
         try:
-            with destination.open("wb") as output:
-                shutil.copyfileobj(source, output, length=1024 * 1024)
+            digest = hashlib.sha256()
+            with temporary.open("wb") as output:
+                while chunk := source.read(1024 * 1024):
+                    digest.update(chunk)
+                    output.write(chunk)
+            source_key = _upload_source_key(digest.hexdigest())
+            existing = self._record_for_source("upload", source_key)
+            if existing is not None:
+                temporary.unlink()
+                return existing
+            temporary.replace(destination)
             return self._register(
                 destination,
                 source_kind="upload",
-                display_name=sanitize_display_name(filename),
+                display_name=(
+                    sanitize_display_name(display_name)
+                    or sanitize_display_name(filename)
+                ),
+                source_key=source_key,
             )
         except Exception:
+            temporary.unlink(missing_ok=True)
             destination.unlink(missing_ok=True)
             raise
 
@@ -274,6 +306,7 @@ class VideoStore:
         *,
         source_kind: str,
         display_name: str | None = None,
+        source_key: str = "",
     ) -> VideoRecord:
         metadata = self._probe_video(path)
         video_id = uuid.uuid4().hex
@@ -284,11 +317,26 @@ class VideoStore:
             frame_cache_dir=self.frame_cache_root / video_id,
             source_kind=source_kind,
             display_name=display_name,
+            source_key=source_key,
         )
         with self._lock:
             self._records[video_id] = record
         self.library.save_video(record, source_kind=source_kind)
         return record
+
+    def _record_for_source(
+        self, source_kind: str, source_key: str
+    ) -> VideoRecord | None:
+        with self._lock:
+            return next(
+                (
+                    record
+                    for record in self._records.values()
+                    if record.source_kind == source_kind
+                    and record.source_key == source_key
+                ),
+                None,
+            )
 
     def _rehydrate(self) -> None:
         for saved in self.library.videos():
@@ -308,6 +356,7 @@ class VideoStore:
                     frame_cache_dir=self.frame_cache_root / str(saved["videoId"]),
                     source_kind=str(saved.get("sourceKind", "path")),
                     display_name=sanitize_display_name(saved.get("name")),
+                    source_key=str(saved.get("sourceKey", "")),
                 )
                 self._records[record.video_id] = record
             except (KeyError, TypeError, ValueError):
@@ -597,6 +646,14 @@ class VideoStore:
         if not isinstance(payload, dict):
             raise InvalidVideoError("ffprobe returned an invalid response")
         return payload
+
+
+def _path_source_key(path: Path) -> str:
+    return f"path:{path.resolve()}"
+
+
+def _upload_source_key(digest: str) -> str:
+    return f"sha256:{digest.lower()}"
 
 
 def sanitize_display_name(value: object) -> str | None:

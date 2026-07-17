@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -46,6 +47,7 @@ class LibraryStore:
             {
                 "videoId": record.video_id,
                 "sourceKind": source_kind,
+                "sourceKey": record.source_key,
                 "path": str(record.path),
                 "name": record.name,
                 "metadata": {
@@ -59,6 +61,81 @@ class LibraryStore:
             }
         )
         self._write_list(self.videos_path, entries)
+
+    def consolidate_sources(self, upload_root: Path) -> None:
+        videos = self.videos()
+        if not videos:
+            return
+
+        keyed_entries: list[dict[str, Any]] = []
+        groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for original in videos:
+            entry = dict(original)
+            source_kind = str(entry.get("sourceKind", "path"))
+            raw_path = entry.get("path")
+            source_key: str | None = None
+            if isinstance(raw_path, str):
+                path = Path(raw_path)
+                if source_kind == "path":
+                    source_key = f"path:{path.resolve()}"
+                elif source_kind == "upload" and path.is_file():
+                    source_key = f"sha256:{_sha256_file(path)}"
+            if source_key is not None:
+                entry["sourceKey"] = source_key
+                video_id = entry.get("videoId")
+                if isinstance(video_id, str) and video_id:
+                    groups.setdefault((source_kind, source_key), []).append(entry)
+            keyed_entries.append(entry)
+
+        replacements: dict[str, str] = {}
+        redundant_uploads: list[tuple[Path, Path]] = []
+        redundant_ids: set[str] = set()
+        for (source_kind, _source_key), entries in groups.items():
+            if len(entries) < 2:
+                continue
+            survivor = min(
+                entries,
+                key=lambda item: (
+                    str(item.get("openedAt") or ""),
+                    str(item.get("videoId") or ""),
+                ),
+            )
+            survivor_id = str(survivor["videoId"])
+            survivor_path = Path(str(survivor.get("path", "")))
+            for duplicate in entries:
+                duplicate_id = str(duplicate["videoId"])
+                if duplicate_id == survivor_id:
+                    continue
+                replacements[duplicate_id] = survivor_id
+                redundant_ids.add(duplicate_id)
+                if source_kind == "upload":
+                    redundant_uploads.append(
+                        (Path(str(duplicate.get("path", ""))), survivor_path)
+                    )
+
+        consolidated_videos = [
+            entry
+            for entry in keyed_entries
+            if str(entry.get("videoId", "")) not in redundant_ids
+        ]
+        if replacements:
+            self._rewrite_track_video_ids(replacements)
+            exports = self.exports()
+            for entry in exports:
+                video_id = str(entry.get("videoId", ""))
+                if video_id in replacements:
+                    entry["videoId"] = replacements[video_id]
+            self._write_list(self.exports_path, exports)
+
+        if consolidated_videos != videos:
+            self._write_list(self.videos_path, consolidated_videos)
+
+        for redundant_path, survivor_path in redundant_uploads:
+            if (
+                _is_under(redundant_path, upload_root)
+                and redundant_path.resolve() != survivor_path.resolve()
+            ):
+                redundant_path.unlink(missing_ok=True)
 
     def remove_video(self, video_id: str) -> None:
         self._write_list(self.videos_path, [v for v in self.videos() if v.get("videoId") != video_id])
@@ -243,6 +320,22 @@ class LibraryStore:
     def _write_list(self, path: Path, entries: list[dict[str, Any]]) -> None:
         self._write_object(path, entries)
 
+    def _rewrite_track_video_ids(self, replacements: dict[str, str]) -> None:
+        if not self.tracks_dir.is_dir():
+            return
+        for path in sorted(self.tracks_dir.glob("*.json")):
+            try:
+                value = self._read_object(path)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                logger.warning("Ignoring corrupt library track %s: %s", path, exc)
+                continue
+            if not isinstance(value, dict):
+                continue
+            video_id = str(value.get("videoId", ""))
+            if video_id in replacements:
+                value["videoId"] = replacements[video_id]
+                self._write_object(path, value)
+
 
 def _track_frame(value: Any) -> "TrackFrame":
     from .tracking import TrackFrame
@@ -261,6 +354,22 @@ def _clean_name(value: Any) -> str | None:
         return None
     cleaned = value.strip()
     return cleaned or None
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _is_under(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
 
 
 def _directory_size(path: Path) -> int:

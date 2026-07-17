@@ -46,6 +46,33 @@ def test_registers_multipart_upload(
     assert video_store.library.videos()[0]["name"] == "Opening Match.mp4"
 
 
+def test_reuses_canonical_path_registration(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+
+    first = store.register_path(tiny_video.relative_to(tmp_path))
+    second = store.register_path(tiny_video.resolve())
+
+    assert second.video_id == first.video_id
+    assert len(store.library.videos()) == 1
+    assert len(store.records()) == 1
+
+
+def test_discards_duplicate_uploaded_content(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+
+    with tiny_video.open("rb") as source:
+        first = store.register_upload(source, "one.mp4")
+    with tiny_video.open("rb") as source:
+        second = store.register_upload(source, "two.mp4")
+
+    assert second.video_id == first.video_id
+    assert list(store.upload_dir.iterdir()) == [first.path]
+
+
 def test_rejects_missing_local_video(client: TestClient) -> None:
     response = client.post("/api/videos", json={"path": "missing.mp4"})
 

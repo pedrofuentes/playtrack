@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.jobs import JobRegistry
@@ -76,6 +77,158 @@ def test_library_tolerates_corrupt_catalog_and_skips_missing_video(tmp_path: Pat
     (library_dir / "videos.json").write_text("not-json", encoding="utf-8")
     store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
     assert list(store.records()) == []
+
+
+def test_consolidates_duplicate_sources_and_rewrites_references(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    data_dir = tmp_path / "data"
+    library = LibraryStore(data_dir)
+    upload_dir = data_dir / "uploads"
+    upload_dir.mkdir(parents=True)
+    first_upload = upload_dir / "first.mp4"
+    duplicate_upload = upload_dir / "duplicate.mp4"
+    unrelated_upload = upload_dir / "unrelated.mp4"
+    first_upload.write_bytes(tiny_video.read_bytes())
+    duplicate_upload.write_bytes(tiny_video.read_bytes())
+    unrelated_upload.write_bytes(b"unrelated")
+    metadata = {
+        "width": 320,
+        "height": 180,
+        "fps": 10.0,
+        "nbFrames": 4,
+        "duration": 0.4,
+    }
+    library._write_list(
+        library.videos_path,
+        [
+            {
+                "videoId": "path-newer",
+                "sourceKind": "path",
+                "path": str(tiny_video),
+                "name": "Newer path name",
+                "metadata": metadata,
+                "openedAt": "2026-01-02T00:00:00+00:00",
+            },
+            {
+                "videoId": "path-survivor",
+                "sourceKind": "path",
+                "path": str(tiny_video.resolve()),
+                "name": "Surviving path name",
+                "metadata": metadata,
+                "openedAt": "2026-01-01T00:00:00+00:00",
+            },
+            {
+                "videoId": "upload-newer",
+                "sourceKind": "upload",
+                "path": str(duplicate_upload),
+                "name": "Newer upload name",
+                "metadata": metadata,
+                "openedAt": "2026-01-02T00:00:00+00:00",
+            },
+            {
+                "videoId": "upload-survivor",
+                "sourceKind": "upload",
+                "path": str(first_upload),
+                "name": "Surviving upload name",
+                "metadata": metadata,
+                "openedAt": "2026-01-01T00:00:00+00:00",
+            },
+        ],
+    )
+    library.save_track(
+        "path-newer", "path-track", 0, (10, 10, 30, 30), _track()
+    )
+    library.save_track(
+        "upload-newer", "upload-track", 0, (10, 10, 30, 30), _track()
+    )
+    path_export = tmp_path / "exports" / "path.mp4"
+    upload_export = tmp_path / "exports" / "upload.mp4"
+    path_export.parent.mkdir()
+    path_export.write_bytes(b"path export")
+    upload_export.write_bytes(b"upload export")
+    library.save_export("path-export", "path-newer", "path-track", {}, path_export)
+    library.save_export(
+        "upload-export", "upload-newer", "upload-track", {}, upload_export
+    )
+
+    store = VideoStore(repo_root=tmp_path, data_dir=data_dir)
+
+    videos = {item["videoId"]: item for item in store.library.videos()}
+    assert set(videos) == {"path-survivor", "upload-survivor"}
+    assert videos["path-survivor"]["sourceKey"] == f"path:{tiny_video.resolve()}"
+    assert videos["upload-survivor"]["sourceKey"].startswith("sha256:")
+    assert {record.video_id for record in store.records()} == set(videos)
+    assert {track.job_id: track.video_id for track in store.library.iter_tracks()} == {
+        "path-track": "path-survivor",
+        "upload-track": "upload-survivor",
+    }
+    assert {
+        item["exportId"]: item["videoId"] for item in store.library.exports()
+    } == {
+        "path-export": "path-survivor",
+        "upload-export": "upload-survivor",
+    }
+    assert set(upload_dir.iterdir()) == {first_upload, unrelated_upload}
+    assert tiny_video.is_file()
+
+    restarted = VideoStore(repo_root=tmp_path, data_dir=data_dir)
+    assert {record.video_id for record in restarted.records()} == set(videos)
+    assert set(upload_dir.iterdir()) == {first_upload, unrelated_upload}
+
+
+def test_duplicate_source_consolidation_keeps_uploads_when_catalog_write_fails(
+    tmp_path: Path, tiny_video: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = tmp_path / "data"
+    library = LibraryStore(data_dir)
+    upload_dir = data_dir / "uploads"
+    upload_dir.mkdir(parents=True)
+    first_upload = upload_dir / "first.mp4"
+    duplicate_upload = upload_dir / "duplicate.mp4"
+    first_upload.write_bytes(tiny_video.read_bytes())
+    duplicate_upload.write_bytes(tiny_video.read_bytes())
+    metadata = {
+        "width": 320,
+        "height": 180,
+        "fps": 10.0,
+        "nbFrames": 4,
+        "duration": 0.4,
+    }
+    library._write_list(
+        library.videos_path,
+        [
+            {
+                "videoId": "upload-survivor",
+                "sourceKind": "upload",
+                "path": str(first_upload),
+                "metadata": metadata,
+                "openedAt": "2026-01-01T00:00:00+00:00",
+            },
+            {
+                "videoId": "upload-duplicate",
+                "sourceKind": "upload",
+                "path": str(duplicate_upload),
+                "metadata": metadata,
+                "openedAt": "2026-01-02T00:00:00+00:00",
+            },
+        ],
+    )
+    original_write_list = LibraryStore._write_list
+
+    def fail_video_catalog_write(
+        self: LibraryStore, path: Path, entries: list[dict[str, object]]
+    ) -> None:
+        if path == self.videos_path:
+            raise OSError("interrupted video catalog write")
+        original_write_list(self, path, entries)
+
+    monkeypatch.setattr(LibraryStore, "_write_list", fail_video_catalog_write)
+
+    with pytest.raises(OSError, match="interrupted video catalog write"):
+        VideoStore(repo_root=tmp_path, data_dir=data_dir)
+
+    assert set(upload_dir.iterdir()) == {first_upload, duplicate_upload}
 
 
 def test_library_uses_saved_upload_name_and_falls_back_for_legacy_catalogs(
