@@ -4,8 +4,10 @@ import asyncio
 import hashlib
 import posixpath
 import re
+import threading
 import unicodedata
 from datetime import UTC, datetime
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -311,6 +313,15 @@ def create_app(
     export_root = exports_dir if exports_dir is not None else settings.exports_dir
 
     app = FastAPI(title="FindMe", version="0.1.0")
+    lifecycle_lock = threading.RLock()
+
+    def lifecycle_serialized(function: Any) -> Any:
+        @wraps(function)
+        def wrapped(*args: Any, **kwargs: Any) -> Any:
+            with lifecycle_lock:
+                return function(*args, **kwargs)
+
+        return wrapped
     app.state.video_store = store
     app.state.click_selector = selector
     app.state.text_selector = text_grounder
@@ -484,6 +495,7 @@ def create_app(
         }
 
     @app.post("/api/track", response_model=TrackStartResponse, status_code=202)
+    @lifecycle_serialized
     def start_track(payload: TrackRequest) -> dict[str, str]:
         try:
             record = store.get(payload.videoId)
@@ -543,6 +555,7 @@ def create_app(
                 end_frame_exclusive=end_frame_exclusive,
                 name=player_name,
             ),
+            resources={f"video:{payload.videoId}", "cache"},
         )
         return {"jobId": job_id, "playerName": player_name}
 
@@ -666,6 +679,7 @@ def create_app(
         }
 
     @app.post("/api/export", response_model=TrackJobResponse, status_code=202)
+    @lifecycle_serialized
     def start_export(payload: ExportRequest) -> dict[str, str]:
         record, windows, source_start_frame = build_export_plan(
             video_id=payload.videoId,
@@ -705,6 +719,10 @@ def create_app(
                 },
                 export_root / f"{completed_id}.mp4",
             ),
+            resources={
+                f"video:{payload.videoId}",
+                f"track:{payload.trackJobId}",
+            },
         )
         return {"jobId": job_id}
 
@@ -864,7 +882,10 @@ def create_app(
         return {"videoId": renamed.video_id, "name": renamed.name}
 
     @app.delete("/api/library/tracks/{job_id}", status_code=204)
+    @lifecycle_serialized
     def delete_library_track(job_id: str) -> Response:
+        if jobs.is_resource_active(f"track:{job_id}"):
+            raise HTTPException(409, "Track is in use by an active export")
         saved = store.library.remove_track(job_id)
         if saved is None:
             raise HTTPException(404, "Track not found")
@@ -883,7 +904,10 @@ def create_app(
         return Response(status_code=204)
 
     @app.delete("/api/library/videos/{video_id}", status_code=204)
+    @lifecycle_serialized
     def delete_library_video(video_id: str) -> Response:
+        if jobs.is_resource_active(f"video:{video_id}"):
+            raise HTTPException(409, "Source is in use by an active job")
         try:
             store.remove(video_id)
         except VideoNotFoundError as exc:
@@ -897,7 +921,10 @@ def create_app(
         return Response(status_code=204)
 
     @app.post("/api/library/maintenance/clear-caches")
+    @lifecycle_serialized
     def clear_library_caches() -> dict[str, int]:
+        if jobs.is_resource_active("cache"):
+            raise HTTPException(409, "Caches are in use by active tracking")
         return {"bytesFreed": store.library.clear_caches()}
 
     @app.websocket("/ws/jobs/{job_id}")

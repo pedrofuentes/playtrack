@@ -53,6 +53,7 @@ class _Job:
     message: str = "Queued"
     track: dict[int, TrackFrame] = field(default_factory=dict)
     version: int = 0
+    resources: frozenset[str] = field(default_factory=frozenset)
 
 
 class JobRegistry:
@@ -62,8 +63,8 @@ class JobRegistry:
         self._jobs: dict[str, _Job] = {}
         self._condition = threading.Condition(threading.RLock())
 
-    def submit(self, worker: JobWorker, *, on_completed: TrackCompletion | None = None) -> str:
-        job_id = self._create_job()
+    def submit(self, worker: JobWorker, *, on_completed: TrackCompletion | None = None, resources: set[str] | frozenset[str] = frozenset()) -> str:
+        job_id = self._create_job(resources)
         thread = threading.Thread(
             target=self._run_worker,
             args=(job_id, worker, on_completed),
@@ -79,8 +80,9 @@ class JobRegistry:
         *,
         completion_message: str,
         on_completed: ProgressCompletion | None = None,
+        resources: set[str] | frozenset[str] = frozenset(),
     ) -> str:
-        job_id = self._create_job()
+        job_id = self._create_job(resources)
         thread = threading.Thread(
             target=self._run_progress_worker,
             args=(job_id, worker, completion_message, on_completed),
@@ -106,6 +108,18 @@ class JobRegistry:
         with self._condition:
             self._jobs.pop(job_id, None)
             self._condition.notify_all()
+
+    def active_resources(self) -> set[str]:
+        with self._condition:
+            return {
+                resource
+                for job in self._jobs.values()
+                if job.state in ("queued", "running")
+                for resource in job.resources
+            }
+
+    def is_resource_active(self, resource: str) -> bool:
+        return resource in self.active_resources()
 
     def get(self, job_id: str) -> JobSnapshot:
         with self._condition:
@@ -208,10 +222,10 @@ class JobRegistry:
                 return
         self._set_state(job_id, "completed", 1.0, completion_message)
 
-    def _create_job(self) -> str:
+    def _create_job(self, resources: set[str] | frozenset[str]) -> str:
         job_id = uuid.uuid4().hex
         with self._condition:
-            self._jobs[job_id] = _Job(job_id=job_id)
+            self._jobs[job_id] = _Job(job_id=job_id, resources=frozenset(resources))
         return job_id
 
     def _set_state(

@@ -113,3 +113,16 @@ def test_tracking_persistence_failure_makes_job_failed() -> None:
 
     assert snapshot.state == "failed"
     assert snapshot.message == "Could not save completed track: library is read-only"
+
+
+def test_registry_reports_resources_only_while_jobs_are_active() -> None:
+    registry = JobRegistry()
+    release = threading.Event()
+    job_id = registry.submit(
+        lambda _report: (release.wait(timeout=2), [frame(0)])[1],
+        resources={"video:v1", "cache"},
+    )
+    assert registry.active_resources() == {"video:v1", "cache"}
+    release.set()
+    assert registry.wait_until_terminal(job_id, timeout=2).state == "completed"
+    assert registry.active_resources() == set()

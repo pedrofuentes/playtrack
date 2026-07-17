@@ -734,3 +734,37 @@ def test_library_backfills_legacy_track_names_in_stable_order(tmp_path: Path) ->
     assert tracks == {"earlier": "Player 1", "later": "Player 2"}
     assert json.loads(earlier_path.read_text(encoding="utf-8"))["name"] == "Player 1"
     assert json.loads(later_path.read_text(encoding="utf-8"))["name"] == "Player 2"
+
+
+def test_active_jobs_block_source_track_and_cache_deletion(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    record = store.register_path(tiny_video)
+    track_id = "saved-track"
+    track = [TrackFrame(0, (10, 10, 30, 30), (20.0, 20.0), False)]
+    store.library.save_track(record.video_id, track_id, 0, track[0].box, track)
+    jobs = JobRegistry()
+    tracking_release = threading.Event()
+    tracking_id = jobs.submit(
+        lambda _report: (tracking_release.wait(timeout=2), track)[1],
+        resources={f"video:{record.video_id}", "cache"},
+    )
+
+    with TestClient(create_app(store, job_registry=jobs)) as client:
+        assert client.delete(f"/api/library/videos/{record.video_id}").status_code == 409
+        assert client.post("/api/library/maintenance/clear-caches").status_code == 409
+        tracking_release.set()
+        assert jobs.wait_until_terminal(tracking_id, timeout=2).state == "completed"
+        export_release = threading.Event()
+        export_id = jobs.submit_progress(
+            lambda _job_id, _report: export_release.wait(timeout=2),
+            completion_message="Export complete",
+            resources={f"video:{record.video_id}", f"track:{track_id}"},
+        )
+        assert client.delete(f"/api/library/videos/{record.video_id}").status_code == 409
+        assert client.delete(f"/api/library/tracks/{track_id}").status_code == 409
+        export_release.set()
+        assert jobs.wait_until_terminal(export_id, timeout=2).state == "completed"
+        assert client.delete(f"/api/library/tracks/{track_id}").status_code == 204
+        assert client.delete(f"/api/library/videos/{record.video_id}").status_code == 204
