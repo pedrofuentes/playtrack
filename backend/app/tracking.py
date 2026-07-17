@@ -63,11 +63,20 @@ def persist_completed_track(
     anchor_frame_idx: int,
     box: tuple[int, int, int, int],
     track: Sequence[TrackFrame],
+    start_frame_idx: int | None = None,
+    end_frame_exclusive: int | None = None,
     name: str | None = None,
 ) -> None:
     """Write a completed tracker result through to the durable library."""
     library.save_track(
-        video_id, job_id, anchor_frame_idx, box, track, name=name
+        video_id,
+        job_id,
+        anchor_frame_idx,
+        box,
+        track,
+        start_frame_idx=start_frame_idx,
+        end_frame_exclusive=end_frame_exclusive,
+        name=name,
     )
 
 
@@ -165,15 +174,28 @@ class VideoTracker:
         video_id: str,
         frame_idx: int,
         box: tuple[int, int, int, int],
+        *,
+        start_frame_idx: int = 0,
+        end_frame_exclusive: int | None = None,
         on_update: TrackUpdate | None = None,
     ) -> list[TrackFrame]:
         record = self.video_store.get(video_id)
-        frame_count = record.metadata.nb_frames
-        if self.frame_limit is not None:
-            frame_count = min(frame_count, self.frame_limit)
-        if frame_idx < 0 or frame_idx >= frame_count:
+        source_frame_count = record.metadata.nb_frames
+        requested_end = (
+            source_frame_count
+            if end_frame_exclusive is None
+            else end_frame_exclusive
+        )
+        if not 0 <= start_frame_idx < requested_end <= source_frame_count:
             raise InvalidFrameError(
-                f"Frame index must be between 0 and {frame_count - 1}"
+                "Tracking range must contain at least one source frame and stay inside the video"
+            )
+        effective_end = requested_end
+        if self.frame_limit is not None:
+            effective_end = min(effective_end, start_frame_idx + self.frame_limit)
+        if frame_idx < start_frame_idx or frame_idx >= effective_end:
+            raise InvalidFrameError(
+                f"Anchor frame must be between {start_frame_idx} and {effective_end - 1}"
             )
         _validate_source_box(
             box,
@@ -182,9 +204,13 @@ class VideoTracker:
         )
 
         sequence = self.video_store.prepare_tracking_frames(
-            video_id, frame_limit=self.frame_limit
+            video_id,
+            start_frame_idx=start_frame_idx,
+            end_frame_exclusive=requested_end,
+            frame_limit=self.frame_limit,
         )
-        if frame_idx >= sequence.frame_count:
+        local_anchor = frame_idx - sequence.start_frame_idx
+        if local_anchor < 0 or local_anchor >= sequence.frame_count:
             raise InvalidFrameError("Anchor frame is not present in tracking cache")
         tracking_box = _scale_box_to_tracking(box, sequence)
         rescue_engine, visual_prompt = self._prepare_rescue(
@@ -196,32 +222,37 @@ class VideoTracker:
         self._run_direction(
             engine,
             sequence,
-            frame_idx,
+            local_anchor,
             tracking_box,
             reverse=False,
             merged=merged,
-            total_frames=frame_count,
+            total_frames=sequence.frame_count,
             on_update=on_update,
             video_id=video_id,
+            source_anchor_frame_idx=frame_idx,
             rescue_engine=rescue_engine,
             visual_prompt=visual_prompt,
         )
-        if frame_idx > 0:
+        if local_anchor > 0:
             self._run_direction(
                 engine,
                 sequence,
-                frame_idx,
+                local_anchor,
                 tracking_box,
                 reverse=True,
                 merged=merged,
-                total_frames=frame_count,
+                total_frames=sequence.frame_count,
                 on_update=on_update,
                 video_id=video_id,
+                source_anchor_frame_idx=frame_idx,
                 rescue_engine=rescue_engine,
                 visual_prompt=visual_prompt,
             )
 
-        for missing_idx in range(frame_count):
+        for missing_idx in range(
+            sequence.start_frame_idx,
+            sequence.start_frame_idx + sequence.frame_count,
+        ):
             merged.setdefault(
                 missing_idx,
                 TrackFrame(missing_idx, box=None, center=None, lost=True),
@@ -232,7 +263,7 @@ class VideoTracker:
         self,
         engine: VideoPropagationEngine,
         sequence: TrackingFrameSequence,
-        frame_idx: int,
+        local_anchor_frame_idx: int,
         tracking_box: tuple[int, int, int, int],
         *,
         reverse: bool,
@@ -240,11 +271,12 @@ class VideoTracker:
         total_frames: int,
         on_update: TrackUpdate | None,
         video_id: str,
+        source_anchor_frame_idx: int,
         rescue_engine: RescueEngine | None,
         visual_prompt: object | None,
     ) -> None:
         direction = "backward" if reverse else "forward"
-        current_anchor = frame_idx
+        current_anchor = local_anchor_frame_idx
         current_box = tracking_box
         attempted_rescues: set[int] = set()
         while True:
@@ -263,16 +295,21 @@ class VideoTracker:
                 )
             )
             restart: tuple[int, tuple[int, int, int, int]] | None = None
-            for observed_idx, mask in observations:
-                if observed_idx < 0 or observed_idx >= total_frames:
+            for observed_local_idx, mask in observations:
+                if observed_local_idx < 0 or observed_local_idx >= total_frames:
                     continue
-                frame = _frame_from_mask(observed_idx, mask, sequence, detector)
+                observed_source_idx = (
+                    sequence.start_frame_idx + observed_local_idx
+                )
+                frame = _frame_from_mask(
+                    observed_source_idx, mask, sequence, detector
+                )
                 if not (
-                    observed_idx == frame_idx
-                    and observed_idx in merged
-                    and current_anchor == frame_idx
+                    observed_source_idx == source_anchor_frame_idx
+                    and observed_source_idx in merged
+                    and current_anchor == local_anchor_frame_idx
                 ):
-                    merged[observed_idx] = frame
+                    merged[observed_source_idx] = frame
                     if on_update is not None:
                         on_update(
                             len(merged) / total_frames,
@@ -281,10 +318,12 @@ class VideoTracker:
                         )
                 if not frame.lost and frame.box is not None:
                     last_good = (
-                        observed_idx,
+                        observed_local_idx,
                         _scale_box_to_tracking(frame.box, sequence),
                     )
-                first_lost = trigger.observe(observed_idx, lost=frame.lost)
+                first_lost = trigger.observe(
+                    observed_source_idx, lost=frame.lost
+                )
                 if (
                     first_lost is None
                     or first_lost in attempted_rescues
@@ -312,7 +351,7 @@ class VideoTracker:
                     rescue_engine.unload()
                 if candidate is not None:
                     restart = (
-                        first_lost,
+                        first_lost - sequence.start_frame_idx,
                         _scale_box_to_tracking(candidate.box, sequence),
                     )
                 else:

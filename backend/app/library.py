@@ -22,6 +22,8 @@ class SavedTrack:
     job_id: str
     video_id: str
     anchor_frame_idx: int
+    start_frame_idx: int
+    end_frame_exclusive: int
     box: tuple[int, int, int, int]
     track: tuple["TrackFrame", ...]
     created_at: str
@@ -162,14 +164,26 @@ class LibraryStore:
         box: tuple[int, int, int, int],
         track: Sequence["TrackFrame"],
         *,
+        start_frame_idx: int | None = None,
+        end_frame_exclusive: int | None = None,
         name: str | None = None,
     ) -> None:
+        if start_frame_idx is None:
+            start_frame_idx = min(
+                (frame.frame_idx for frame in track), default=anchor_frame_idx
+            )
+        if end_frame_exclusive is None:
+            end_frame_exclusive = max(
+                (frame.frame_idx for frame in track), default=anchor_frame_idx
+            ) + 1
         self._write_object(
             self.tracks_dir / f"{job_id}.json",
             {
                 "jobId": job_id,
                 "videoId": video_id,
                 "anchorFrameIdx": anchor_frame_idx,
+                "startFrameIdx": start_frame_idx,
+                "endFrameExclusive": end_frame_exclusive,
                 "box": list(box),
                 "track": [frame.to_dict() for frame in track],
                 "createdAt": _now(),
@@ -185,11 +199,23 @@ class LibraryStore:
             try:
                 raw = self._read_object(path)
                 frames = tuple(_track_frame(item) for item in raw["track"])
+                if frames:
+                    inferred_start = min(frame.frame_idx for frame in frames)
+                    inferred_end = max(frame.frame_idx for frame in frames) + 1
+                else:
+                    inferred_start = 0
+                    inferred_end = 0
                 saved.append(
                     SavedTrack(
                         job_id=str(raw["jobId"]),
                         video_id=str(raw["videoId"]),
                         anchor_frame_idx=int(raw["anchorFrameIdx"]),
+                        start_frame_idx=int(
+                            raw.get("startFrameIdx", inferred_start)
+                        ),
+                        end_frame_exclusive=int(
+                            raw.get("endFrameExclusive", inferred_end)
+                        ),
                         box=tuple(int(value) for value in raw["box"]),  # type: ignore[arg-type]
                         track=frames,
                         created_at=str(raw["createdAt"]),

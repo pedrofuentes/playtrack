@@ -84,6 +84,7 @@ class TrackingFrameSequence:
     frame_count: int
     scale_x: float
     scale_y: float
+    start_frame_idx: int = 0
 
 
 class VideoStore:
@@ -264,32 +265,52 @@ class VideoStore:
         )
 
     def prepare_tracking_frames(
-        self, video_id: str, *, frame_limit: int | None = None
+        self,
+        video_id: str,
+        *,
+        start_frame_idx: int = 0,
+        end_frame_exclusive: int | None = None,
+        frame_limit: int | None = None,
     ) -> TrackingFrameSequence:
         """Extract a dedicated sequential JPEG cache for SAM 2 propagation."""
         record = self.get(video_id)
         if frame_limit is not None and frame_limit <= 0:
             raise InvalidFrameError("Tracking frame limit must be positive")
-        requested_count = (
-            record.metadata.nb_frames
-            if frame_limit is None
-            else min(frame_limit, record.metadata.nb_frames)
+        source_frame_count = record.metadata.nb_frames
+        requested_end = (
+            source_frame_count
+            if end_frame_exclusive is None
+            else end_frame_exclusive
         )
-        cache_name = f"max-{self.tracking_max_dimension}"
+        if not 0 <= start_frame_idx < requested_end <= source_frame_count:
+            raise InvalidFrameError(
+                "Tracking range must contain at least one source frame and stay inside the video"
+            )
+        effective_end = requested_end
         if frame_limit is not None:
-            cache_name += f"-first-{requested_count}"
+            effective_end = min(effective_end, start_frame_idx + frame_limit)
+        requested_count = effective_end - start_frame_idx
+        cache_name = (
+            f"max-{self.tracking_max_dimension}"
+            f"-range-{start_frame_idx}-{effective_end}"
+        )
         destination = self.tracking_frame_root / video_id / cache_name
 
         with self._lock:
             cached = self._load_tracking_sequence(record, destination)
-            if cached is not None and cached.frame_count == requested_count:
+            if (
+                cached is not None
+                and cached.frame_count == requested_count
+                and cached.start_frame_idx == start_frame_idx
+            ):
                 return cached
             if destination.exists():
                 shutil.rmtree(destination)
             self._extract_tracking_frame_sequence(
                 record,
                 destination,
-                frame_limit=requested_count,
+                start_frame_idx=start_frame_idx,
+                end_frame_exclusive=effective_end,
             )
             cached = self._load_tracking_sequence(record, destination)
             if cached is None:
@@ -524,7 +545,8 @@ class VideoStore:
         record: VideoRecord,
         destination: Path,
         *,
-        frame_limit: int,
+        start_frame_idx: int,
+        end_frame_exclusive: int,
     ) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = destination.parent / f".{destination.name}-{uuid.uuid4().hex}.tmp"
@@ -539,6 +561,11 @@ class VideoStore:
             scale_filter = f"scale={maximum}:-2"
         else:
             scale_filter = f"scale=-2:{maximum}"
+        frame_count = end_frame_exclusive - start_frame_idx
+        video_filter = (
+            f"select=between(n\\,{start_frame_idx}\\,{end_frame_exclusive - 1}),"
+            f"{scale_filter}"
+        )
         command = [
             self.ffmpeg_binary,
             "-v",
@@ -546,9 +573,11 @@ class VideoStore:
             "-i",
             str(record.path),
             "-vf",
-            scale_filter,
+            video_filter,
             "-frames:v",
-            str(frame_limit),
+            str(frame_count),
+            "-fps_mode",
+            "passthrough",
             "-q:v",
             "2",
             "-start_number",
@@ -559,9 +588,9 @@ class VideoStore:
         try:
             subprocess.run(command, check=True, capture_output=True, text=True)
             frames = sorted(temporary.glob("*.jpg"))
-            if len(frames) != frame_limit:
+            if len(frames) != frame_count:
                 raise VideoToolError(
-                    f"Expected {frame_limit} tracking frames, got {len(frames)}"
+                    f"Expected {frame_count} tracking frames, got {len(frames)}"
                 )
             payload = self._run_ffprobe(frames[0], "stream=width,height")
             stream = payload["streams"][0]
@@ -569,6 +598,7 @@ class VideoStore:
                 "width": int(stream["width"]),
                 "height": int(stream["height"]),
                 "frame_count": len(frames),
+                "start_frame_idx": start_frame_idx,
             }
             (temporary / "sequence.json").write_text(
                 json.dumps(descriptor), encoding="utf-8"
@@ -601,6 +631,7 @@ class VideoStore:
             width = int(descriptor["width"])
             height = int(descriptor["height"])
             frame_count = int(descriptor["frame_count"])
+            start_frame_idx = int(descriptor.get("start_frame_idx", 0))
         except (json.JSONDecodeError, KeyError, TypeError, ValueError):
             return None
         if width <= 0 or height <= 0 or frame_count <= 0:
@@ -614,6 +645,7 @@ class VideoStore:
             frame_count=frame_count,
             scale_x=width / record.metadata.width,
             scale_y=height / record.metadata.height,
+            start_frame_idx=start_frame_idx,
         )
 
     def _load_or_probe_frame_metadata(

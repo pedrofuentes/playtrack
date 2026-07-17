@@ -566,6 +566,87 @@ def test_tracking_completion_helper_writes_the_completed_track(tmp_path: Path) -
     assert library.iter_tracks()[0].job_id == "track-1"
 
 
+def test_saved_track_range_round_trips_through_json_and_loader(tmp_path: Path) -> None:
+    library = LibraryStore(tmp_path / "data")
+    track = [
+        TrackFrame(100, (10, 10, 30, 30), (20.0, 20.0), False),
+        TrackFrame(139, None, None, True),
+    ]
+
+    library.save_track(
+        "video-1",
+        "range-track",
+        110,
+        (10, 10, 30, 30),
+        track,
+        start_frame_idx=100,
+        end_frame_exclusive=140,
+    )
+
+    raw = json.loads(
+        (library.tracks_dir / "range-track.json").read_text(encoding="utf-8")
+    )
+    saved = library.iter_tracks()[0]
+    assert raw["startFrameIdx"] == 100
+    assert raw["endFrameExclusive"] == 140
+    assert saved.start_frame_idx == 100
+    assert saved.end_frame_exclusive == 140
+
+
+def test_legacy_track_bounds_are_inferred_from_non_empty_frames(tmp_path: Path) -> None:
+    library = LibraryStore(tmp_path / "data")
+    library.save_track(
+        "video-1",
+        "legacy-range",
+        101,
+        (10, 10, 30, 30),
+        [
+            TrackFrame(100, (10, 10, 30, 30), (20.0, 20.0), False),
+            TrackFrame(139, None, None, True),
+        ],
+        start_frame_idx=100,
+        end_frame_exclusive=140,
+    )
+    path = library.tracks_dir / "legacy-range.json"
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw.pop("startFrameIdx")
+    raw.pop("endFrameExclusive")
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    saved = library.iter_tracks()[0]
+
+    assert saved.start_frame_idx == 100
+    assert saved.end_frame_exclusive == 140
+
+
+def test_library_api_uses_full_source_bounds_for_empty_legacy_track(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    record = store.register_path(tiny_video)
+    store.library.save_track(
+        record.video_id,
+        "empty-legacy",
+        0,
+        (10, 10, 30, 30),
+        [],
+        start_frame_idx=0,
+        end_frame_exclusive=record.metadata.nb_frames,
+    )
+    path = store.library.tracks_dir / "empty-legacy.json"
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw.pop("startFrameIdx")
+    raw.pop("endFrameExclusive")
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with TestClient(create_app(store, job_registry=JobRegistry())) as client:
+        response = client.get("/api/library")
+
+    track = response.json()["videos"][0]["tracks"][0]
+    assert track["startFrameIdx"] == 0
+    assert track["endFrameExclusive"] == record.metadata.nb_frames
+
+
 def test_library_allocates_persists_and_renames_player_names(tmp_path: Path) -> None:
     library = LibraryStore(tmp_path / "data")
     library.save_track(

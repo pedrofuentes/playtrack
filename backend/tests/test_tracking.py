@@ -87,9 +87,16 @@ class FakeStore:
         )
 
     def prepare_tracking_frames(
-        self, video_id: str, *, frame_limit: int | None = None
+        self,
+        video_id: str,
+        *,
+        start_frame_idx: int = 0,
+        end_frame_exclusive: int | None = None,
+        frame_limit: int | None = None,
     ) -> TrackingFrameSequence:
         assert video_id == "video-1"
+        assert start_frame_idx == 0
+        assert end_frame_exclusive == 5
         assert frame_limit is None
         return self.sequence
 
@@ -146,6 +153,185 @@ def test_tracker_runs_both_directions_and_merges_source_space_results() -> None:
     assert [update[2].frame_idx for update in updates] == [2, 3, 4, 1, 0]
     assert updates[-1][0] == 1.0
     assert "backward" in updates[-1][1].lower()
+
+
+@dataclass
+class RangeStore:
+    sequence: TrackingFrameSequence
+    extracted_frame_indices: list[int]
+
+    def get(self, video_id: str) -> object:
+        assert video_id == "video-1"
+        return SimpleNamespace(
+            metadata=VideoMetadata(
+                width=200,
+                height=100,
+                fps=30.0,
+                nb_frames=5,
+                duration=5 / 30,
+            )
+        )
+
+    def prepare_tracking_frames(
+        self,
+        video_id: str,
+        *,
+        start_frame_idx: int = 0,
+        end_frame_exclusive: int | None = None,
+        frame_limit: int | None = None,
+    ) -> TrackingFrameSequence:
+        assert video_id == "video-1"
+        assert (start_frame_idx, end_frame_exclusive, frame_limit) == (1, 4, None)
+        return self.sequence
+
+
+class RangeVideoEngine:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, tuple[int, int, int, int], bool]] = []
+
+    def propagate(
+        self,
+        frame_directory: Path,
+        anchor_frame_idx: int,
+        box: tuple[int, int, int, int],
+        *,
+        reverse: bool,
+    ) -> object:
+        self.calls.append((anchor_frame_idx, box, reverse))
+        frame_indices = (1, 0) if reverse else (1, 2)
+        for local_frame_idx in frame_indices:
+            yield local_frame_idx, rectangle_mask(x1=10, y1=10, x2=20, y2=20)
+
+
+def test_tracker_maps_local_range_frames_to_absolute_source_indices() -> None:
+    sequence = TrackingFrameSequence(
+        path=Path("/tmp/tracking-frames"),
+        width=100,
+        height=50,
+        frame_count=3,
+        scale_x=0.5,
+        scale_y=0.5,
+        start_frame_idx=1,
+    )
+    engine = RangeVideoEngine()
+    updates: list[tuple[float, str, TrackFrame]] = []
+    tracker = VideoTracker(
+        RangeStore(sequence, []), engine_provider=lambda: engine
+    )
+
+    result = tracker.track(
+        "video-1",
+        frame_idx=2,
+        box=(20, 20, 40, 40),
+        start_frame_idx=1,
+        end_frame_exclusive=4,
+        on_update=lambda progress, message, frame: updates.append(
+            (progress, message, frame)
+        ),
+    )
+
+    assert engine.calls == [
+        (1, (10, 10, 20, 20), False),
+        (1, (10, 10, 20, 20), True),
+    ]
+    assert [frame.frame_idx for frame in result] == [1, 2, 3]
+    assert [update[2].frame_idx for update in updates] == [2, 3, 1]
+    assert updates[-1][0] == 1.0
+
+
+@dataclass
+class RangeRescueStore(RangeStore):
+    def extract_source_crop(
+        self,
+        video_id: str,
+        *,
+        frame_idx: int,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+    ) -> ExtractedSourceCrop:
+        assert video_id == "video-1"
+        self.extracted_frame_indices.append(frame_idx)
+        return ExtractedSourceCrop(
+            path=Path(f"/tmp/source-{frame_idx}.png"),
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+        )
+
+
+class RangeRescueVideoEngine:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, tuple[int, int, int, int], bool]] = []
+
+    def propagate(
+        self,
+        frame_directory: Path,
+        anchor_frame_idx: int,
+        box: tuple[int, int, int, int],
+        *,
+        reverse: bool,
+    ) -> object:
+        self.calls.append((anchor_frame_idx, box, reverse))
+        if reverse:
+            yield 1, rectangle_mask(x1=10, y1=10, x2=20, y2=20)
+            yield 0, rectangle_mask(x1=10, y1=10, x2=20, y2=20)
+            return
+        yield 1, rectangle_mask(x1=10, y1=10, x2=20, y2=20)
+        yield 2, np.zeros((50, 100), dtype=bool)
+
+    def unload(self) -> None:
+        pass
+
+
+class EmptyRangeRescueEngine:
+    available = True
+
+    def detect_visual_prompt(
+        self, image: object, *, visual_prompt: object
+    ) -> list[LocateCandidate]:
+        return []
+
+    def unload(self) -> None:
+        pass
+
+
+def test_range_rescue_uses_absolute_source_frame_indices(
+    monkeypatch: object,
+) -> None:
+    sequence = TrackingFrameSequence(
+        path=Path("/tmp/tracking-frames"),
+        width=100,
+        height=50,
+        frame_count=3,
+        scale_x=0.5,
+        scale_y=0.5,
+        start_frame_idx=1,
+    )
+    store = RangeRescueStore(sequence, [])
+    sam = RangeRescueVideoEngine()
+    monkeypatch.setattr(
+        "app.tracking._load_rgb_image",
+        lambda path: SimpleNamespace(size=(200, 100)),
+    )
+    tracker = VideoTracker(
+        store,
+        engine_provider=lambda: sam,
+        rescue_engine_provider=EmptyRangeRescueEngine,
+        rescue_after=1,
+    )
+
+    tracker.track(
+        "video-1",
+        frame_idx=2,
+        box=(20, 20, 40, 40),
+        start_frame_idx=1,
+        end_frame_exclusive=4,
+    )
+
+    assert store.extracted_frame_indices == [2, 3]
 
 
 class TinyMaskEngine(FakeVideoEngine):

@@ -118,6 +118,8 @@ class TrackRequest(BaseModel):
     videoId: str
     frameIdx: int = Field(ge=0)
     box: tuple[int, int, int, int]
+    startFrameIdx: int = Field(default=0, ge=0)
+    endFrameExclusive: int | None = Field(default=None, gt=0)
     playerName: str | None = None
 
 
@@ -487,10 +489,22 @@ def create_app(
             record = store.get(payload.videoId)
         except VideoNotFoundError as exc:
             raise HTTPException(404, str(exc)) from exc
-        if payload.frameIdx >= record.metadata.nb_frames:
+        end_frame_exclusive = (
+            record.metadata.nb_frames
+            if payload.endFrameExclusive is None
+            else payload.endFrameExclusive
+        )
+        if not (
+            payload.startFrameIdx < end_frame_exclusive <= record.metadata.nb_frames
+        ):
             raise HTTPException(
                 422,
-                f"Frame index must be between 0 and {record.metadata.nb_frames - 1}",
+                "Track range must contain at least one source frame and stay inside the video",
+            )
+        if not payload.startFrameIdx <= payload.frameIdx < end_frame_exclusive:
+            raise HTTPException(
+                422,
+                "Anchor frame must be inside the track range",
             )
         x1, y1, x2, y2 = payload.box
         if not (
@@ -514,6 +528,8 @@ def create_app(
                 payload.videoId,
                 payload.frameIdx,
                 box,
+                start_frame_idx=payload.startFrameIdx,
+                end_frame_exclusive=end_frame_exclusive,
                 on_update=report,
             ),
             on_completed=lambda completed_id, track: persist_completed_track(
@@ -523,6 +539,8 @@ def create_app(
                 anchor_frame_idx=payload.frameIdx,
                 box=box,
                 track=track,
+                start_frame_idx=payload.startFrameIdx,
+                end_frame_exclusive=end_frame_exclusive,
                 name=player_name,
             ),
         )
@@ -726,10 +744,31 @@ def create_app(
         catalog = store.library.videos()
         by_video_tracks: dict[str, list[dict[str, object]]] = {}
         for track in tracks:
+            source = next(
+                (
+                    item
+                    for item in catalog
+                    if str(item.get("videoId", "")) == track.video_id
+                ),
+                {},
+            )
+            metadata = source.get("metadata", {})
+            source_frame_count = (
+                int(metadata.get("nbFrames", 0))
+                if isinstance(metadata, dict)
+                else 0
+            )
+            start_frame_idx = track.start_frame_idx
+            end_frame_exclusive = track.end_frame_exclusive
+            if not track.track and end_frame_exclusive <= start_frame_idx:
+                start_frame_idx = 0
+                end_frame_exclusive = source_frame_count
             by_video_tracks.setdefault(track.video_id, []).append(
                 {
                     "jobId": track.job_id,
                     "anchorFrameIdx": track.anchor_frame_idx,
+                    "startFrameIdx": start_frame_idx,
+                    "endFrameExclusive": end_frame_exclusive,
                     "box": list(track.box),
                     "frameCount": len(track.track),
                     "lostCount": sum(frame.lost for frame in track.track),
