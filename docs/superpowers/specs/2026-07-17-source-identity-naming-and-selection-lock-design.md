@@ -55,13 +55,13 @@ Only one contiguous range is supported. Multiple disjoint highlights would creat
 
 The server supplies a deterministic attachment filename for every completed export:
 
-`<source>-<player>-<width>x<height>-<YYYYMMDD-HHmmss>.mp4`
+`<source>-<player>-<width>x<height>-<YYYYMMDD-HHmmss>-<short-export-id>.mp4`
 
 Example:
 
-`championship-game-white-19-1920x1080-20260717-143022.mp4`
+`championship-game-white-19-1920x1080-20260717-143022-a1b2c3.mp4`
 
-The timestamp is the export creation time in UTC, so two exports with otherwise identical names and dimensions remain distinguishable. Source and player segments use their latest saved names at download time. Segments are trimmed, converted to filesystem-safe hyphenated text, stripped of leading/trailing punctuation, and fall back to `source` or `player` for legacy records. The complete attachment name is capped to a practical length while preserving the resolution, timestamp, and `.mp4` suffix.
+The timestamp is the export creation time in UTC, and the final six characters come from the already-unique export job ID, so two exports with otherwise identical names, dimensions, and completion seconds remain distinguishable. Source and player segments use their latest saved names at download time. Segments are trimmed, converted to filesystem-safe hyphenated text, stripped of leading/trailing punctuation, and fall back to `source` or `player` for legacy records. The complete attachment name is capped to a practical length while preserving the resolution, timestamp, unique suffix, and `.mp4` extension.
 
 ## Backend Design
 
@@ -117,7 +117,7 @@ Add `PATCH /api/library/videos/{video_id}` with `{ "name": string }`. It validat
 
 ### Export attachment lookup
 
-The export download route resolves the saved export record, its source, and its saved track. It constructs the `Content-Disposition` filename from current names, saved dimensions, and `createdAt`. Legacy or incomplete records use safe fallbacks. Export storage paths remain UUID/job-ID based, so renaming never moves encoded files or breaks links.
+The export download route resolves the saved export record, its source, and its saved track. It constructs the `Content-Disposition` filename from current names, saved dimensions, `createdAt`, and the export ID. Legacy or incomplete records use safe fallbacks. Export storage paths remain UUID/job-ID based, so renaming never moves encoded files or breaks links.
 
 ## Frontend Design
 
@@ -169,7 +169,7 @@ The existing editor timeline gains the approved Option A interaction during the 
 - Explicit names persist; blank names use filenames; reusing without a name preserves the current name.
 - Startup migration merges duplicate path/upload entries, rewrites track and export references, preserves all records, and removes only redundant uploaded files.
 - Source rename validates input and updates both API responses and in-memory records.
-- Download responses produce sanitized source/player/resolution/timestamp filenames and distinguish same-named exports by creation time.
+- Download responses produce sanitized source/player/resolution/timestamp/short-ID filenames and distinguish exports even when their names and completion second match.
 - Track requests validate range boundaries and reject anchors outside the selected interval.
 - Range-specific frame extraction produces only the requested source frames and maps local SAM observations back to absolute frame indexes.
 - Saved ranges round-trip through JSON and legacy tracks receive compatible inferred bounds.
