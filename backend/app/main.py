@@ -819,9 +819,8 @@ def create_app(
         try:
             store.remove(video_id)
         except VideoNotFoundError as exc:
-            if not any(item.get("videoId") == video_id for item in store.library.videos()):
+            if not store.remove_catalog_entry(video_id):
                 raise HTTPException(404, str(exc)) from exc
-            store.library.remove_video(video_id)
         for saved in [track for track in store.library.iter_tracks() if track.video_id == video_id]:
             store.library.remove_track(saved.job_id)
             jobs.remove(saved.job_id)

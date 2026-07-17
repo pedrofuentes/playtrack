@@ -316,6 +316,16 @@ class VideoStore:
             record.path.unlink(missing_ok=True)
         return record
 
+    def remove_catalog_entry(self, video_id: str) -> bool:
+        with self._lock:
+            if not any(
+                item.get("videoId") == video_id
+                for item in self.library.videos()
+            ):
+                return False
+            self.library.remove_video(video_id)
+            return True
+
     def _register(
         self,
         path: Path,

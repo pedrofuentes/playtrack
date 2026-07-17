@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import shutil
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -117,6 +120,164 @@ def test_library_tolerates_corrupt_catalog_and_skips_missing_video(tmp_path: Pat
     (library_dir / "videos.json").write_text("not-json", encoding="utf-8")
     store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
     assert list(store.records()) == []
+
+
+@pytest.mark.parametrize("mutation", ["rename", "register"])
+def test_missing_file_delete_serializes_with_video_catalog_mutations(
+    tmp_path: Path,
+    tiny_video: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    data_dir = tmp_path / "data"
+    initial = VideoStore(repo_root=tmp_path, data_dir=data_dir)
+    missing = initial.register_path(tiny_video, "Missing")
+    retained_path = tiny_video.with_name("retained.mp4")
+    shutil.copyfile(tiny_video, retained_path)
+    retained = initial.register_path(retained_path, "Original")
+    initial.library.save_track(
+        missing.video_id,
+        "missing-track",
+        0,
+        (10, 10, 30, 30),
+        _track(),
+    )
+    exported = tmp_path / "exports" / "missing-export.mp4"
+    exported.parent.mkdir()
+    exported.write_bytes(b"export")
+    initial.library.save_export(
+        "missing-export",
+        missing.video_id,
+        "missing-track",
+        {"outWidth": 128, "outHeight": 72},
+        exported,
+    )
+    tiny_video.unlink()
+    store = VideoStore(repo_root=tmp_path, data_dir=data_dir)
+    app = create_app(
+        store, job_registry=JobRegistry(), exports_dir=tmp_path / "exports"
+    )
+    original_write = store.library._write_list
+    rendezvous = threading.Barrier(2)
+    delete_write_reached = threading.Event()
+    mutation_written = threading.Event()
+
+    def synchronized_write(
+        path: Path, entries: list[dict[str, object]]
+    ) -> None:
+        if path != store.library.videos_path:
+            original_write(path, entries)
+            return
+        is_delete = not any(
+            item.get("videoId") == missing.video_id for item in entries
+        )
+        if is_delete:
+            delete_write_reached.set()
+        try:
+            rendezvous.wait(timeout=2)
+        except threading.BrokenBarrierError:
+            original_write(path, entries)
+            return
+        if is_delete:
+            assert mutation_written.wait(timeout=1)
+            original_write(path, entries)
+        else:
+            original_write(path, entries)
+            mutation_written.set()
+
+    monkeypatch.setattr(store.library, "_write_list", synchronized_write)
+    registered = None
+    with TestClient(app) as client, ThreadPoolExecutor(max_workers=2) as pool:
+        deleted_future = pool.submit(
+            client.delete, f"/api/library/videos/{missing.video_id}"
+        )
+        assert delete_write_reached.wait(timeout=1)
+        if mutation == "rename":
+            mutation_future = pool.submit(
+                store.rename, retained.video_id, "Renamed"
+            )
+        else:
+            third_path = retained_path.with_name("third.mp4")
+            shutil.copyfile(retained_path, third_path)
+            mutation_future = pool.submit(store.register_path, third_path, "Third")
+        deleted_response = deleted_future.result(timeout=8)
+        registered = mutation_future.result(timeout=8)
+
+    catalog = {item["videoId"]: item["name"] for item in store.library.videos()}
+    memory = {record.video_id: record.name for record in store.records()}
+    expected = {
+        retained.video_id: "Renamed" if mutation == "rename" else "Original"
+    }
+    if mutation == "register":
+        expected[registered.video_id] = "Third"
+    assert deleted_response.status_code == 204
+    assert catalog == memory == expected
+    assert store.library.iter_tracks() == []
+    assert store.library.exports() == []
+    assert not exported.exists()
+
+
+def test_missing_file_delete_catalog_failure_preserves_row_and_cascades(
+    tmp_path: Path,
+    tiny_video: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_dir = tmp_path / "data"
+    initial = VideoStore(repo_root=tmp_path, data_dir=data_dir)
+    missing = initial.register_path(tiny_video, "Missing")
+    initial.library.save_track(
+        missing.video_id,
+        "missing-track",
+        0,
+        (10, 10, 30, 30),
+        _track(),
+    )
+    exported = tmp_path / "exports" / "missing-export.mp4"
+    exported.parent.mkdir()
+    exported.write_bytes(b"export")
+    initial.library.save_export(
+        "missing-export",
+        missing.video_id,
+        "missing-track",
+        {"outWidth": 128, "outHeight": 72},
+        exported,
+    )
+    tiny_video.unlink()
+    store = VideoStore(repo_root=tmp_path, data_dir=data_dir)
+    app = create_app(
+        store, job_registry=JobRegistry(), exports_dir=tmp_path / "exports"
+    )
+    original_write = store.library._write_list
+
+    def fail_video_catalog_write(
+        path: Path, entries: list[dict[str, object]]
+    ) -> None:
+        if path == store.library.videos_path:
+            raise OSError("catalog write failed")
+        original_write(path, entries)
+
+    monkeypatch.setattr(store.library, "_write_list", fail_video_catalog_write)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        failed = client.delete(f"/api/library/videos/{missing.video_id}")
+        assert failed.status_code == 500
+        assert any(
+            item["videoId"] == missing.video_id for item in store.library.videos()
+        )
+        assert store.library.iter_tracks()[0].job_id == "missing-track"
+        assert store.library.exports()[0]["exportId"] == "missing-export"
+        assert exported.is_file()
+
+        monkeypatch.setattr(store.library, "_write_list", original_write)
+        deleted = client.delete(f"/api/library/videos/{missing.video_id}")
+
+    assert deleted.status_code == 204
+    remove_catalog_entry = getattr(store, "remove_catalog_entry", None)
+    assert callable(remove_catalog_entry)
+    assert remove_catalog_entry(missing.video_id) is False
+    assert store.library.iter_tracks() == []
+    assert store.library.exports() == []
+    assert not exported.exists()
 
 
 def test_consolidates_duplicate_sources_and_rewrites_references(
