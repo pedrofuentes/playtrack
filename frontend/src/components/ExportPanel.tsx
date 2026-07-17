@@ -76,7 +76,10 @@ export const ExportPanel = forwardRef<ExportPanelHandle, ExportPanelProps>(funct
     setError(null)
     const timer = window.setTimeout(() => {
       void fetchCropPlan(videoId, trackJobId, settings, controller.signal)
-        .then((preview) => onPlanChange(preview.windows))
+        .then((preview) => onPlanChange(preview.windows.map((window) => ({
+          ...window,
+          frameIdx: preview.sourceStartFrame + window.frameIdx,
+        }))))
         .catch((reason: unknown) => {
           if (controller.signal.aborted) return
           onPlanChange([])

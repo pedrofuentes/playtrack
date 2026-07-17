@@ -68,6 +68,7 @@ export interface CropWindow {
 export interface CropPlanResponse {
   videoId: string
   trackJobId: string
+  sourceStartFrame: number
   windows: CropWindow[]
 }
 

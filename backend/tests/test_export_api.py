@@ -223,6 +223,43 @@ def test_export_uses_saved_track_range_and_output_local_windows(
     assert saved_export["trackJobId"] == track_job_id
 
 
+def test_crop_plan_preview_reports_source_start_with_local_range_windows(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    record = store.register_path(tiny_video)
+    track_job_id = "preview-range-track"
+    frames = [
+        TrackFrame(index, (80, 50, 120, 110), (100.0, 80.0), False)
+        for index in range(1, 4)
+    ]
+    store.library.save_track(
+        record.video_id,
+        track_job_id,
+        2,
+        frames[1].box,
+        frames,
+        start_frame_idx=1,
+        end_frame_exclusive=4,
+    )
+
+    with TestClient(create_app(store, job_registry=JobRegistry())) as client:
+        response = client.get(
+            "/api/export/plan",
+            params={
+                "videoId": record.video_id,
+                "trackJobId": track_job_id,
+                "outWidth": 128,
+                "outHeight": 72,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sourceStartFrame"] == 1
+    assert [window["frameIdx"] for window in payload["windows"]] == [0, 1, 2]
+
+
 def test_export_rejects_saved_track_video_range_mismatch(
     tmp_path: Path, tiny_video: Path
 ) -> None:
@@ -260,6 +297,53 @@ def test_export_rejects_saved_track_video_range_mismatch(
 
     assert response.status_code == 409
     assert response.json()["detail"] == "Track does not belong to the selected video"
+
+
+def test_export_rejects_saved_track_job_content_mismatch(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    record = store.register_path(tiny_video)
+    track_job_id = "mismatched-job-track"
+    saved_frames = [
+        TrackFrame(index, (80, 50, 120, 110), (100.0, 80.0), False)
+        for index in range(1, 4)
+    ]
+    store.library.save_track(
+        record.video_id,
+        track_job_id,
+        2,
+        saved_frames[1].box,
+        saved_frames,
+        start_frame_idx=1,
+        end_frame_exclusive=4,
+    )
+    jobs = JobRegistry()
+    exporter = FakeExporter()
+    app = create_app(store, job_registry=jobs, video_exporter=exporter)
+    jobs.restore_completed(
+        track_job_id,
+        [
+            TrackFrame(index, (1, 1, 2, 2), (1.5, 1.5), False)
+            for index in range(1, 4)
+        ],
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/export",
+            json={
+                "videoId": record.video_id,
+                "trackJobId": track_job_id,
+                "outWidth": 128,
+                "outHeight": 72,
+                "smoothing": {},
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Tracking job does not match the saved track"
+    assert exporter.calls == []
 
 
 def test_export_download_disposition_uses_current_names_and_unique_suffixes(

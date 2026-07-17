@@ -661,6 +661,7 @@ def create_app(
         return {
             "videoId": videoId,
             "trackJobId": trackJobId,
+            "sourceStartFrame": _source_start_frame,
             "windows": [window.to_dict() for window in windows],
         }
 

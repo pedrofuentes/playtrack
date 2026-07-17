@@ -5,6 +5,7 @@ import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { ExportPanel } from './ExportPanel'
+import { playbackGeometryAtTime } from './PlaybackOverlay'
 
 const apiMocks = vi.hoisted(() => ({
   fetchCropPlan: vi.fn(),
@@ -18,7 +19,12 @@ vi.mock('../api', async (importOriginal) => ({
 beforeEach(() => {
   vi.useFakeTimers()
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
-  apiMocks.fetchCropPlan.mockResolvedValue({ videoId: 'video-1', trackJobId: 'track-1', windows: [] })
+  apiMocks.fetchCropPlan.mockResolvedValue({
+    videoId: 'video-1',
+    trackJobId: 'track-1',
+    sourceStartFrame: 0,
+    windows: [],
+  })
 })
 
 afterEach(() => {
@@ -45,5 +51,47 @@ it('debounces crop preview requests by 150 ms', async () => {
     await Promise.resolve()
   })
   expect(apiMocks.fetchCropPlan).toHaveBeenCalledOnce()
+  await act(async () => root.unmount())
+})
+
+it('maps output-local preview windows onto absolute source playback frames', async () => {
+  const localWindows = Array.from({ length: 16 }, (_, frameIdx) => ({
+    frameIdx,
+    x: frameIdx,
+    y: 0,
+    w: 100,
+    h: 60,
+  }))
+  apiMocks.fetchCropPlan.mockResolvedValue({
+    videoId: 'video-1',
+    trackJobId: 'track-1',
+    sourceStartFrame: 8,
+    windows: localWindows,
+  })
+  const onPlanChange = vi.fn()
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+  await act(async () => root.render(
+    <ExportPanel videoId="video-1" trackJobId="track-1" onPlanChange={onPlanChange} />,
+  ))
+
+  await act(async () => {
+    vi.advanceTimersByTime(150)
+    await Promise.resolve()
+  })
+
+  const previewWindows = onPlanChange.mock.calls.at(-1)?.[0]
+  expect(previewWindows.map((window: { frameIdx: number }) => window.frameIdx)).toEqual(
+    Array.from({ length: 16 }, (_, index) => index + 8),
+  )
+  expect(playbackGeometryAtTime([], previewWindows, 1, 8, 32).cropWindow).toEqual({
+    ...localWindows[0],
+    frameIdx: 8,
+  })
+  expect(playbackGeometryAtTime([], previewWindows, 23 / 8, 8, 32).cropWindow).toEqual({
+    ...localWindows[15],
+    frameIdx: 23,
+  })
   await act(async () => root.unmount())
 })

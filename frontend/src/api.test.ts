@@ -217,6 +217,7 @@ describe('export API', () => {
     const result = {
       videoId: 'video-1',
       trackJobId: 'track-1',
+      sourceStartFrame: 0,
       windows: [{ frameIdx: 0, x: 0, y: 0, w: 1280, h: 720 }],
     }
     const fetchMock = vi.fn().mockResolvedValue({
