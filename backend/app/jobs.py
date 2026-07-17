@@ -225,7 +225,10 @@ class JobRegistry:
     def _create_job(self, resources: set[str] | frozenset[str]) -> str:
         job_id = uuid.uuid4().hex
         with self._condition:
-            self._jobs[job_id] = _Job(job_id=job_id, resources=frozenset(resources))
+            self._jobs[job_id] = _Job(
+                job_id=job_id,
+                resources=frozenset(resources) | {f"job:{job_id}"},
+            )
         return job_id
 
     def _set_state(

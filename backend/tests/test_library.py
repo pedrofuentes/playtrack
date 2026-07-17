@@ -790,9 +790,9 @@ def test_track_route_serializes_submission_and_persistence_against_deletion(
         return real_submit(worker, **kwargs)
 
     def blocked_save_track(*args: object, **kwargs: object) -> None:
+        real_save_track(*args, **kwargs)
         persistence_entered.set()
         assert persistence_release.wait(timeout=2)
-        real_save_track(*args, **kwargs)
 
     class BlockingTracker:
         def track(self, *_args: object, **_kwargs: object) -> list[TrackFrame]:
@@ -829,7 +829,10 @@ def test_track_route_serializes_submission_and_persistence_against_deletion(
 
         worker_release.set()
         assert persistence_entered.wait(timeout=2)
+        assert store.library.iter_tracks()
+        assert client.delete(f"/api/library/tracks/{started.json()['jobId']}").status_code == 409
         assert client.delete(f"/api/library/videos/{record.video_id}").status_code == 409
         persistence_release.set()
         assert jobs.wait_until_terminal(started.json()["jobId"], timeout=2).state == "completed"
+        assert client.delete(f"/api/library/tracks/{started.json()['jobId']}").status_code == 204
         assert client.delete(f"/api/library/videos/{record.video_id}").status_code == 204

@@ -122,7 +122,12 @@ def test_registry_reports_resources_only_while_jobs_are_active() -> None:
         lambda _report: (release.wait(timeout=2), [frame(0)])[1],
         resources={"video:v1", "cache"},
     )
-    assert registry.active_resources() == {"video:v1", "cache"}
+    assert registry.active_resources() == {
+        "video:v1",
+        "cache",
+        f"job:{job_id}",
+    }
+    assert registry.is_resource_active(f"job:{job_id}")
     release.set()
     assert registry.wait_until_terminal(job_id, timeout=2).state == "completed"
     assert registry.active_resources() == set()

@@ -884,6 +884,8 @@ def create_app(
     @app.delete("/api/library/tracks/{job_id}", status_code=204)
     @lifecycle_serialized
     def delete_library_track(job_id: str) -> Response:
+        if jobs.is_resource_active(f"job:{job_id}"):
+            raise HTTPException(409, "Track is still being saved")
         if jobs.is_resource_active(f"track:{job_id}"):
             raise HTTPException(409, "Track is in use by an active export")
         saved = store.library.remove_track(job_id)
@@ -895,12 +897,16 @@ def create_app(
         return Response(status_code=204)
 
     @app.delete("/api/library/exports/{export_id}", status_code=204)
+    @lifecycle_serialized
     def delete_library_export(export_id: str) -> Response:
+        if jobs.is_resource_active(f"job:{export_id}"):
+            raise HTTPException(409, "Export is still being saved")
         removed = store.library.remove_exports(lambda item: item.get("exportId") == export_id)
         if not removed:
             raise HTTPException(404, "Export not found")
         for exported in removed:
             delete_export_file(exported)
+        jobs.remove(export_id)
         return Response(status_code=204)
 
     @app.delete("/api/library/videos/{video_id}", status_code=204)

@@ -555,9 +555,9 @@ def test_export_route_serializes_submission_and_persistence_against_deletion(
         return destination
 
     def blocked_save_export(*args: object, **kwargs: object) -> None:
+        real_save_export(*args, **kwargs)
         persistence_entered.set()
         assert persistence_release.wait(timeout=2)
-        real_save_export(*args, **kwargs)
 
     monkeypatch.setattr(jobs, "submit_progress", delayed_submit)
     monkeypatch.setattr(store.library, "save_export", blocked_save_export)
@@ -594,9 +594,13 @@ def test_export_route_serializes_submission_and_persistence_against_deletion(
 
         export_release.set()
         assert persistence_entered.wait(timeout=2)
+        export_id = started.json()["jobId"]
+        assert store.library.exports()[0]["exportId"] == export_id
+        assert client.delete(f"/api/library/exports/{export_id}").status_code == 409
         assert client.delete(f"/api/library/videos/{record.video_id}").status_code == 409
         assert client.delete(f"/api/library/tracks/{track_id}").status_code == 409
         persistence_release.set()
-        assert jobs.wait_until_terminal(started.json()["jobId"], timeout=2).state == "completed"
+        assert jobs.wait_until_terminal(export_id, timeout=2).state == "completed"
+        assert client.delete(f"/api/library/exports/{export_id}").status_code == 204
         assert client.delete(f"/api/library/tracks/{track_id}").status_code == 204
         assert client.delete(f"/api/library/videos/{record.video_id}").status_code == 204
