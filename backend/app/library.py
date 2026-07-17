@@ -120,7 +120,7 @@ class LibraryStore:
         ]
         if replacements:
             self._rewrite_track_video_ids(replacements)
-            exports = self.exports()
+            exports = self._read_list_strict(self.exports_path, missing_as_empty=True)
             for entry in exports:
                 video_id = str(entry.get("videoId", ""))
                 if video_id in replacements:
@@ -306,6 +306,21 @@ class LibraryStore:
                 logger.warning("Ignoring corrupt library catalog %s: %s", path, exc)
             return []
 
+    def _read_list_strict(
+        self, path: Path, *, missing_as_empty: bool = False
+    ) -> list[dict[str, Any]]:
+        try:
+            value = self._read_object(path)
+        except FileNotFoundError:
+            if missing_as_empty:
+                return []
+            raise
+        if not isinstance(value, list) or any(
+            not isinstance(entry, dict) for entry in value
+        ):
+            raise ValueError(f"Malformed library catalog: {path}")
+        return value
+
     @staticmethod
     def _read_object(path: Path) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -324,14 +339,12 @@ class LibraryStore:
         if not self.tracks_dir.is_dir():
             return
         for path in sorted(self.tracks_dir.glob("*.json")):
-            try:
-                value = self._read_object(path)
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                logger.warning("Ignoring corrupt library track %s: %s", path, exc)
-                continue
-            if not isinstance(value, dict):
-                continue
-            video_id = str(value.get("videoId", ""))
+            value = self._read_object(path)
+            if not isinstance(value, dict) or not isinstance(
+                value.get("videoId"), str
+            ):
+                raise ValueError(f"Malformed library track: {path}")
+            video_id = value["videoId"]
             if video_id in replacements:
                 value["videoId"] = replacements[video_id]
                 self._write_object(path, value)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.videos import VideoStore
@@ -71,6 +72,62 @@ def test_discards_duplicate_uploaded_content(
 
     assert second.video_id == first.video_id
     assert list(store.upload_dir.iterdir()) == [first.path]
+
+
+def test_path_registration_does_not_publish_after_catalog_write_failure(
+    tmp_path: Path, tiny_video: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    original_write_list = store.library._write_list
+
+    def fail_catalog_write(
+        path: Path, entries: list[dict[str, object]]
+    ) -> None:
+        raise OSError("catalog write failed")
+
+    monkeypatch.setattr(store.library, "_write_list", fail_catalog_write)
+
+    with pytest.raises(OSError, match="catalog write failed"):
+        store.register_path(tiny_video)
+    records_after_failure = store.records()
+
+    monkeypatch.setattr(store.library, "_write_list", original_write_list)
+    retried = store.register_path(tiny_video)
+
+    assert records_after_failure == ()
+    assert store.records() == (retried,)
+    assert store.library.videos()[0]["videoId"] == retried.video_id
+
+
+def test_upload_registration_cleans_up_and_retries_after_catalog_write_failure(
+    tmp_path: Path, tiny_video: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    original_write_list = store.library._write_list
+
+    def fail_catalog_write(
+        path: Path, entries: list[dict[str, object]]
+    ) -> None:
+        raise OSError("catalog write failed")
+
+    monkeypatch.setattr(store.library, "_write_list", fail_catalog_write)
+
+    with tiny_video.open("rb") as source:
+        with pytest.raises(OSError, match="catalog write failed"):
+            store.register_upload(source, "failed.mp4")
+    records_after_failure = store.records()
+    files_after_failure = tuple(store.upload_dir.iterdir())
+
+    monkeypatch.setattr(store.library, "_write_list", original_write_list)
+    with tiny_video.open("rb") as source:
+        retried = store.register_upload(source, "retried.mp4")
+
+    assert records_after_failure == ()
+    assert files_after_failure == ()
+    assert retried.path.is_file()
+    assert store.records() == (retried,)
+    assert list(store.upload_dir.iterdir()) == [retried.path]
+    assert store.library.videos()[0]["videoId"] == retried.video_id
 
 
 def test_rejects_missing_local_video(client: TestClient) -> None:

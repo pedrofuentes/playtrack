@@ -319,9 +319,9 @@ class VideoStore:
             display_name=display_name,
             source_key=source_key,
         )
+        self.library.save_video(record, source_kind=source_kind)
         with self._lock:
             self._records[video_id] = record
-        self.library.save_video(record, source_kind=source_kind)
         return record
 
     def _record_for_source(

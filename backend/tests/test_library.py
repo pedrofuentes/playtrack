@@ -20,6 +20,46 @@ def _track() -> list[TrackFrame]:
     ]
 
 
+def _duplicate_upload_library(
+    tmp_path: Path, tiny_video: Path
+) -> tuple[LibraryStore, Path, Path]:
+    data_dir = tmp_path / "data"
+    library = LibraryStore(data_dir)
+    upload_dir = data_dir / "uploads"
+    upload_dir.mkdir(parents=True)
+    first_upload = upload_dir / "first.mp4"
+    duplicate_upload = upload_dir / "duplicate.mp4"
+    first_upload.write_bytes(tiny_video.read_bytes())
+    duplicate_upload.write_bytes(tiny_video.read_bytes())
+    metadata = {
+        "width": 320,
+        "height": 180,
+        "fps": 10.0,
+        "nbFrames": 4,
+        "duration": 0.4,
+    }
+    library._write_list(
+        library.videos_path,
+        [
+            {
+                "videoId": "upload-survivor",
+                "sourceKind": "upload",
+                "path": str(first_upload),
+                "metadata": metadata,
+                "openedAt": "2026-01-01T00:00:00+00:00",
+            },
+            {
+                "videoId": "upload-duplicate",
+                "sourceKind": "upload",
+                "path": str(duplicate_upload),
+                "metadata": metadata,
+                "openedAt": "2026-01-02T00:00:00+00:00",
+            },
+        ],
+    )
+    return library, first_upload, duplicate_upload
+
+
 def test_library_persists_videos_tracks_and_restores_completed_jobs(
     tmp_path: Path, tiny_video: Path
 ) -> None:
@@ -229,6 +269,53 @@ def test_duplicate_source_consolidation_keeps_uploads_when_catalog_write_fails(
         VideoStore(repo_root=tmp_path, data_dir=data_dir)
 
     assert set(upload_dir.iterdir()) == {first_upload, duplicate_upload}
+
+
+def test_duplicate_source_consolidation_aborts_on_corrupt_track(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    library, first_upload, duplicate_upload = _duplicate_upload_library(
+        tmp_path, tiny_video
+    )
+    library.tracks_dir.mkdir(parents=True)
+    (library.tracks_dir / "corrupt.json").write_text("{", encoding="utf-8")
+
+    with pytest.raises(json.JSONDecodeError):
+        VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+
+    assert {
+        item["videoId"]
+        for item in json.loads(library.videos_path.read_text(encoding="utf-8"))
+    } == {"upload-survivor", "upload-duplicate"}
+    assert first_upload.is_file()
+    assert duplicate_upload.is_file()
+
+
+def test_duplicate_source_consolidation_aborts_on_unreadable_exports(
+    tmp_path: Path, tiny_video: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    library, first_upload, duplicate_upload = _duplicate_upload_library(
+        tmp_path, tiny_video
+    )
+    library._write_list(library.exports_path, [])
+    original_read_object = LibraryStore._read_object
+
+    def fail_export_read(path: Path) -> object:
+        if path.name == "exports.json":
+            raise PermissionError("unreadable exports catalog")
+        return original_read_object(path)
+
+    monkeypatch.setattr(LibraryStore, "_read_object", staticmethod(fail_export_read))
+
+    with pytest.raises(PermissionError, match="unreadable exports catalog"):
+        VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+
+    assert {
+        item["videoId"]
+        for item in json.loads(library.videos_path.read_text(encoding="utf-8"))
+    } == {"upload-survivor", "upload-duplicate"}
+    assert first_upload.is_file()
+    assert duplicate_upload.is_file()
 
 
 def test_library_uses_saved_upload_name_and_falls_back_for_legacy_catalogs(
