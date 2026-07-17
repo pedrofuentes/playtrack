@@ -34,12 +34,63 @@ describe('VideoStage pointer interactions', () => {
       value: vi.fn().mockReturnValue(true),
     })
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+    vi.spyOn(console, 'info').mockImplementation(() => {})
   })
 
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
     document.body.innerHTML = ''
+  })
+
+  it('selects on a motionless click while zoomed without taking pointer capture', async () => {
+    const onSourceClick = vi.fn()
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+
+    await act(async () => {
+      root.render(
+        <VideoStage
+          src="/video.mp4"
+          sourceWidth={400}
+          sourceHeight={200}
+          fps={30}
+          frameCount={90}
+          selection={null}
+          track={[]}
+          cropWindows={[]}
+          candidates={[]}
+          onSourceClick={onSourceClick}
+          onCandidateConfirm={vi.fn()}
+          onFrameChange={vi.fn()}
+        />,
+      )
+    })
+
+    const stage = container.querySelector<HTMLElement>('.video-stage')!
+    const transform = container.querySelector<HTMLElement>('.video-transform')!
+    const video = container.querySelector('video')!
+    const zoomIn = container.querySelector<HTMLButtonElement>('[aria-label="Zoom in"]')!
+    const setPointerCapture = vi.mocked(HTMLElement.prototype.setPointerCapture)
+    stage.getBoundingClientRect = () => DOMRect.fromRect({ width: 400, height: 200 })
+    video.getBoundingClientRect = () => DOMRect.fromRect({ width: 600, height: 300 })
+
+    await act(async () => zoomIn.click())
+    await act(async () => {
+      video.dispatchEvent(pointerEvent('pointerdown', 120, 60))
+      video.dispatchEvent(pointerEvent('pointerup', 120, 60))
+      const clickTarget = setPointerCapture.mock.calls.length > 0 ? transform : video
+      clickTarget.dispatchEvent(new MouseEvent('click', {
+        bubbles: true,
+        clientX: 120,
+        clientY: 60,
+      }))
+    })
+
+    expect(setPointerCapture).not.toHaveBeenCalled()
+    expect(onSourceClick).toHaveBeenCalledOnce()
+    await act(async () => root.unmount())
   })
 
   it('suppresses the video click emitted after a pan drag', async () => {
@@ -71,6 +122,7 @@ describe('VideoStage pointer interactions', () => {
     const transform = container.querySelector<HTMLElement>('.video-transform')!
     const video = container.querySelector('video')!
     const zoomIn = container.querySelector<HTMLButtonElement>('[aria-label="Zoom in"]')!
+    const setPointerCapture = vi.mocked(HTMLElement.prototype.setPointerCapture)
     stage.getBoundingClientRect = () => DOMRect.fromRect({ width: 400, height: 200 })
     video.getBoundingClientRect = () => DOMRect.fromRect({ width: 800, height: 400 })
 
@@ -86,6 +138,7 @@ describe('VideoStage pointer interactions', () => {
       }))
     })
 
+    expect(setPointerCapture).toHaveBeenCalledOnce()
     expect(onSourceClick).not.toHaveBeenCalled()
     await act(async () => root.unmount())
   })

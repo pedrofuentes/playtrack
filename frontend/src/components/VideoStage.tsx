@@ -228,14 +228,16 @@ export function VideoStage({
       origin: { x: view.x, y: view.y },
       moved: false,
     }
-    event.currentTarget.setPointerCapture(event.pointerId)
   }
 
   const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current
     if (!drag || drag.pointerId !== event.pointerId) return
     const current = { x: event.clientX, y: event.clientY }
-    drag.moved ||= pointerMovedPastThreshold(drag.start, current)
+    if (!drag.moved && pointerMovedPastThreshold(drag.start, current)) {
+      drag.moved = true
+      event.currentTarget.setPointerCapture(event.pointerId)
+    }
     if (!drag.moved) return
     event.preventDefault()
     const bounds = stageRef.current?.getBoundingClientRect()
