@@ -562,7 +562,7 @@ def create_app(
         zoom: float,
         responsiveness: float,
         max_acceleration: float,
-    ) -> tuple[Any, list[CropWindow]]:
+    ) -> tuple[Any, list[CropWindow], int]:
         try:
             record = store.get(video_id)
         except VideoNotFoundError as exc:
@@ -576,21 +576,47 @@ def create_app(
         if out_width % 2 or out_height % 2:
             raise HTTPException(422, "Output dimensions must be even")
 
+        saved_track = next(
+            (
+                track
+                for track in store.library.iter_tracks()
+                if track.job_id == track_job_id
+            ),
+            None,
+        )
+        if saved_track is None:
+            raise HTTPException(409, "Completed tracking job has no saved track")
+        if saved_track.video_id != video_id:
+            raise HTTPException(409, "Track does not belong to the selected video")
+        if not (
+            0
+            <= saved_track.start_frame_idx
+            < saved_track.end_frame_exclusive
+            <= record.metadata.nb_frames
+        ):
+            raise HTTPException(409, "Saved track range is invalid for the source video")
+        if track_snapshot.track != saved_track.track:
+            raise HTTPException(409, "Tracking job does not match the saved track")
+
+        range_length = (
+            saved_track.end_frame_exclusive - saved_track.start_frame_idx
+        )
         centers: list[tuple[float, float] | None] = [
             None
-        ] * record.metadata.nb_frames
+        ] * range_length
         boxes: list[tuple[float, float, float, float] | None] = [
             None
-        ] * record.metadata.nb_frames
-        for frame in track_snapshot.track:
+        ] * range_length
+        for frame in sorted(track_snapshot.track, key=lambda item: item.frame_idx):
+            local_index = frame.frame_idx - saved_track.start_frame_idx
             if (
-                0 <= frame.frame_idx < len(centers)
+                0 <= local_index < range_length
                 and not frame.lost
                 and frame.center is not None
             ):
-                centers[frame.frame_idx] = frame.center
+                centers[local_index] = frame.center
                 if frame.box is not None:
-                    boxes[frame.frame_idx] = tuple(float(value) for value in frame.box)
+                    boxes[local_index] = tuple(float(value) for value in frame.box)
         try:
             windows = plan_crop_windows(
                 centers,
@@ -608,7 +634,7 @@ def create_app(
             )
         except CropPlanningError as exc:
             raise HTTPException(422, str(exc)) from exc
-        return record, windows
+        return record, windows, saved_track.start_frame_idx
 
     @app.get("/api/export/plan")
     def export_plan(
@@ -623,7 +649,7 @@ def create_app(
         deadZonePx: float = 30.0,
         maxVelPxPerFrame: float | None = None,
     ) -> dict[str, object]:
-        _record, windows = build_export_plan(
+        _record, windows, _source_start_frame = build_export_plan(
             video_id=videoId,
             track_job_id=trackJobId,
             out_width=outWidth,
@@ -640,7 +666,7 @@ def create_app(
 
     @app.post("/api/export", response_model=TrackJobResponse, status_code=202)
     def start_export(payload: ExportRequest) -> dict[str, str]:
-        record, windows = build_export_plan(
+        record, windows, source_start_frame = build_export_plan(
             video_id=payload.videoId,
             track_job_id=payload.trackJobId,
             out_width=payload.outWidth,
@@ -658,6 +684,8 @@ def create_app(
                 output_width=payload.outWidth,
                 output_height=payload.outHeight,
                 fps=record.metadata.fps,
+                source_start_frame=source_start_frame,
+                source_total_frames=record.metadata.nb_frames,
                 on_progress=report,
             )
 

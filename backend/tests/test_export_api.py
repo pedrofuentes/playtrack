@@ -44,6 +44,8 @@ class FakeExporter:
         output_width: int,
         output_height: int,
         fps: float,
+        source_start_frame: int = 0,
+        source_total_frames: int | None = None,
         on_progress: object,
     ) -> Path:
         self.calls.append(
@@ -53,6 +55,8 @@ class FakeExporter:
                 "windows": windows,
                 "size": (output_width, output_height),
                 "fps": fps,
+                "source_start_frame": source_start_frame,
+                "source_total_frames": source_total_frames,
             }
         )
         on_progress(0.5, "Exporting frame 2 of 4")
@@ -69,6 +73,16 @@ def make_client(
     record = store.register_path(tiny_video)
     jobs = JobRegistry()
     track_job_id = completed_track(jobs)
+    track = jobs.get(track_job_id).track
+    store.library.save_track(
+        record.video_id,
+        track_job_id,
+        0,
+        track[0].box,
+        track,
+        start_frame_idx=0,
+        end_frame_exclusive=record.metadata.nb_frames,
+    )
     exporter = FakeExporter()
     exports_dir = tmp_path / "exports"
     app = create_app(
@@ -150,6 +164,102 @@ def test_export_job_reports_progress_and_serves_finished_file(
     assert downloaded.headers["content-type"] == "video/mp4"
     assert exporter.calls[0]["destination"] == exports_dir / f"{job_id}.mp4"
     assert exporter.calls[0]["size"] == (128, 72)
+
+
+def test_export_uses_saved_track_range_and_output_local_windows(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    record = store.register_path(tiny_video)
+    track_job_id = "saved-range-track"
+    frames = [
+        TrackFrame(
+            frame_idx=index,
+            box=(80 + index, 50, 120 + index, 110),
+            center=(100.0 + index, 80.0),
+            lost=False,
+        )
+        for index in range(1, 4)
+    ]
+    store.library.save_track(
+        record.video_id,
+        track_job_id,
+        2,
+        frames[1].box,
+        frames,
+        start_frame_idx=1,
+        end_frame_exclusive=4,
+    )
+    jobs = JobRegistry()
+    exporter = FakeExporter()
+    app = create_app(
+        store,
+        job_registry=jobs,
+        video_exporter=exporter,
+        exports_dir=tmp_path / "exports",
+    )
+
+    with TestClient(app) as client:
+        started = client.post(
+            "/api/export",
+            json={
+                "videoId": record.video_id,
+                "trackJobId": track_job_id,
+                "outWidth": 128,
+                "outHeight": 72,
+                "zoom": 1.5,
+                "smoothing": {},
+            },
+        )
+        assert started.status_code == 202
+        snapshot = jobs.wait_until_terminal(started.json()["jobId"], timeout=2)
+
+    assert snapshot.state == "completed"
+    assert exporter.calls[0]["source_start_frame"] == 1
+    assert exporter.calls[0]["source_total_frames"] == record.metadata.nb_frames
+    windows = exporter.calls[0]["windows"]
+    assert [window.frame_idx for window in windows] == [0, 1, 2]
+    saved_export = store.library.exports()[0]
+    assert saved_export["trackJobId"] == track_job_id
+
+
+def test_export_rejects_saved_track_video_range_mismatch(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    first = store.register_path(tiny_video)
+    second_path = tmp_path / "second.mp4"
+    second_path.write_bytes(tiny_video.read_bytes())
+    second = store.register_path(second_path)
+    track_job_id = "first-video-track"
+    frames = [
+        TrackFrame(index, (80, 50, 120, 110), (100.0, 80.0), False)
+        for index in range(1, 4)
+    ]
+    store.library.save_track(
+        first.video_id,
+        track_job_id,
+        2,
+        frames[1].box,
+        frames,
+        start_frame_idx=1,
+        end_frame_exclusive=4,
+    )
+
+    with TestClient(create_app(store, job_registry=JobRegistry())) as client:
+        response = client.post(
+            "/api/export",
+            json={
+                "videoId": second.video_id,
+                "trackJobId": track_job_id,
+                "outWidth": 128,
+                "outHeight": 72,
+                "smoothing": {},
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Track does not belong to the selected video"
 
 
 def test_export_download_disposition_uses_current_names_and_unique_suffixes(
