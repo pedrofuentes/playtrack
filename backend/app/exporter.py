@@ -89,14 +89,31 @@ def export_video(
 
             audio_start = Fraction(source_start_frame, 1) / rate
             audio_end = Fraction(source_start_frame + len(windows), 1) / rate
+            audio_codec_frame_samples = max(
+                1,
+                input_audio.codec_context.frame_size if input_audio is not None else 1,
+            )
             audio_fallback_time = Fraction(0, 1)
             audio_coverage_end = audio_start
             audio_output_end_pts: int | None = None
             decoded_audio_rate: int | None = None
+            audio_frame_template: object | None = None
 
             streams = [input_video]
             if input_audio is not None:
                 streams.append(input_audio)
+            if source_start_frame > 0:
+                video_time_base = Fraction(input_video.time_base)
+                stream_start = input_video.start_time or 0
+                seek_offset = stream_start + int(
+                    (Fraction(source_start_frame, 1) / rate) / video_time_base
+                )
+                source.seek(
+                    seek_offset,
+                    stream=input_video,
+                    backward=True,
+                    any_frame=False,
+                )
             for packet in source.demux(streams):
                 if input_audio is not None and packet.stream.index == input_audio.index:
                     if copy_audio and output_audio is not None and packet.dts is not None:
@@ -113,6 +130,7 @@ def export_video(
                             ):
                                 raise ExportError("Source audio sample rate changed")
                             decoded_audio_rate = sample_rate
+                            audio_frame_template = decoded
                             frame_time_base = decoded.time_base or Fraction(
                                 1, sample_rate
                             )
@@ -131,9 +149,29 @@ def export_video(
                                 continue
                             tolerance = Fraction(1, sample_rate)
                             if overlap_start > audio_coverage_end + tolerance:
-                                raise ExportError(
-                                    "Source audio does not cover selected interval"
-                                )
+                                boundary_gap = overlap_start - audio_coverage_end
+                                if (
+                                    boundary_gap
+                                    <= Fraction(audio_codec_frame_samples, sample_rate)
+                                ):
+                                    missing_samples = _round_fraction(
+                                        boundary_gap * sample_rate
+                                    )
+                                    silence = _silence_audio_frame_like(
+                                        decoded, missing_samples
+                                    )
+                                    silence.pts = audio_output_end_pts or 0
+                                    silence.time_base = Fraction(1, sample_rate)
+                                    for encoded in output_audio.encode(silence):
+                                        output.mux(encoded)
+                                    audio_output_end_pts = (
+                                        audio_output_end_pts or 0
+                                    ) + missing_samples
+                                    audio_coverage_end = overlap_start
+                                else:
+                                    raise ExportError(
+                                        "Source audio does not cover selected interval"
+                                    )
                             uncovered_start = max(
                                 overlap_start, audio_coverage_end
                             )
@@ -195,14 +233,30 @@ def export_video(
                             )
                             for encoded in output_audio.encode(trimmed):
                                 output.mux(encoded)
+                    if output_frame_index >= len(windows) and (
+                        copy_audio
+                        or audio_coverage_end
+                        >= audio_end
+                        - Fraction(audio_codec_frame_samples, decoded_audio_rate or 1)
+                    ):
+                        break
                     continue
                 for decoded in packet.decode():
-                    if source_frame_index < source_start_frame:
-                        source_frame_index += 1
+                    decoded_source_index = _decoded_video_frame_index(
+                        decoded, input_video, rate, source_frame_index
+                    )
+                    source_frame_index = decoded_source_index + 1
+                    expected_source_index = (
+                        source_start_frame + output_frame_index
+                    )
+                    if decoded_source_index < expected_source_index:
                         continue
                     if output_frame_index >= len(windows):
-                        source_frame_index += 1
                         continue
+                    if decoded_source_index > expected_source_index:
+                        raise ExportError(
+                            f"Source frame {expected_source_index} was not decoded"
+                        )
                     window = windows[output_frame_index]
                     if window.frame_idx != output_frame_index:
                         raise ExportError("Crop plan frame indices must be contiguous")
@@ -228,13 +282,14 @@ def export_video(
                     output_frame.time_base = Fraction(1, 1) / rate
                     for encoded in output_video.encode(output_frame):
                         output.mux(encoded)
-                    source_frame_index += 1
                     output_frame_index += 1
                     if on_progress is not None:
                         on_progress(
                             output_frame_index / len(windows),
                             f"Exporting frame {output_frame_index} of {len(windows)}",
                         )
+                if output_frame_index >= len(windows) and input_audio is None:
+                    break
 
             for encoded in output_video.encode():
                 output.mux(encoded)
@@ -242,7 +297,7 @@ def export_video(
                 audio_rate = decoded_audio_rate or output_audio.codec_context.sample_rate
                 if audio_rate is None or audio_rate <= 0:
                     raise ExportError("Source audio has no sample rate")
-                tolerance = Fraction(1, audio_rate)
+                tolerance = Fraction(audio_codec_frame_samples, audio_rate)
                 if audio_coverage_end < audio_end - tolerance:
                     raise ExportError(
                         "Source audio does not cover selected interval"
@@ -250,9 +305,26 @@ def export_video(
                 expected_end_pts = _round_fraction(
                     (audio_end - audio_start) * audio_rate
                 )
+                missing_end_samples = expected_end_pts - (
+                    audio_output_end_pts or 0
+                )
+                if (
+                    0 < missing_end_samples <= audio_codec_frame_samples
+                    and audio_frame_template is not None
+                ):
+                    silence = _silence_audio_frame_like(
+                        audio_frame_template, missing_end_samples
+                    )
+                    silence.pts = audio_output_end_pts
+                    silence.time_base = Fraction(1, audio_rate)
+                    for encoded in output_audio.encode(silence):
+                        output.mux(encoded)
+                    audio_output_end_pts = expected_end_pts
+                    audio_coverage_end = audio_end
                 if (
                     audio_output_end_pts is None
-                    or abs(audio_output_end_pts - expected_end_pts) > 1
+                    or abs(audio_output_end_pts - expected_end_pts)
+                    > audio_codec_frame_samples
                 ):
                     raise ExportError(
                         "Source audio does not cover selected interval"
@@ -308,6 +380,21 @@ def _slice_audio_frame(frame: object, start: int, end: int) -> object:
     return trimmed
 
 
+def _silence_audio_frame_like(frame: object, sample_count: int) -> object:
+    import av
+    import numpy as np
+
+    array = frame.to_ndarray()
+    channel_count = len(frame.layout.channels)
+    width = sample_count if frame.format.is_planar else sample_count * channel_count
+    silence = np.zeros_like(array[:, :width])
+    result = av.AudioFrame.from_ndarray(
+        silence, format=frame.format.name, layout=frame.layout.name
+    )
+    result.sample_rate = frame.sample_rate
+    return result
+
+
 def _ceil_fraction(value: Fraction) -> int:
     return -(-value.numerator // value.denominator)
 
@@ -315,3 +402,16 @@ def _ceil_fraction(value: Fraction) -> int:
 def _round_fraction(value: Fraction) -> int:
     quotient, remainder = divmod(value.numerator, value.denominator)
     return quotient + int(remainder * 2 >= value.denominator)
+
+
+def _decoded_video_frame_index(
+    frame: object,
+    stream: object,
+    rate: Fraction,
+    fallback_index: int,
+) -> int:
+    if frame.pts is None:
+        return fallback_index
+    stream_start = stream.start_time or 0
+    source_time = Fraction(frame.pts - stream_start) * Fraction(frame.time_base)
+    return _round_fraction(source_time * rate)

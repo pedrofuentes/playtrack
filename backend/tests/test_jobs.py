@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 from app.jobs import JobNotFoundError, JobRegistry
 from app.tracking import TrackFrame
 
@@ -74,3 +76,40 @@ def test_registry_runs_progress_only_export_worker() -> None:
     assert snapshot.progress == 1.0
     assert snapshot.message == "Export complete"
     assert snapshot.track == ()
+
+
+def test_tracking_job_does_not_complete_before_persistence_callback() -> None:
+    registry = JobRegistry()
+    persistence_started = threading.Event()
+    release_persistence = threading.Event()
+
+    def persist(_job_id: str, _track: object) -> None:
+        persistence_started.set()
+        assert release_persistence.wait(timeout=2)
+
+    job_id = registry.submit(lambda _report: [frame(0)], on_completed=persist)
+    assert persistence_started.wait(timeout=2)
+
+    pending = registry.get(job_id)
+    assert pending.state == "running"
+    assert pending.message != "Tracking complete"
+
+    release_persistence.set()
+    completed = registry.wait_until_terminal(job_id, timeout=2)
+    assert completed.state == "completed"
+    assert completed.message == "Tracking complete"
+
+
+def test_tracking_persistence_failure_makes_job_failed() -> None:
+    registry = JobRegistry()
+
+    def fail_persistence(_job_id: str, _track: object) -> None:
+        raise OSError("library is read-only")
+
+    job_id = registry.submit(
+        lambda _report: [frame(0)], on_completed=fail_persistence
+    )
+    snapshot = registry.wait_until_terminal(job_id, timeout=2)
+
+    assert snapshot.state == "failed"
+    assert snapshot.message == "Could not save completed track: library is read-only"

@@ -144,6 +144,8 @@ class JobRegistry:
                 job.progress = min(max(float(progress), job.progress), 1.0)
                 job.message = message
                 job.track[frame.frame_idx] = frame
+                if job.progress >= 1.0:
+                    return
                 job.version += 1
                 self._condition.notify_all()
 
@@ -156,17 +158,19 @@ class JobRegistry:
         with self._condition:
             job = self._get_job(job_id)
             job.track = {frame.frame_idx: frame for frame in result}
-            job.state = "completed"
-            job.progress = 1.0
-            job.message = "Tracking complete"
-            job.version += 1
-            self._condition.notify_all()
         if on_completed is not None:
             try:
                 on_completed(job_id, result)
-            except Exception:
-                # A damaged catalog must not make an otherwise complete tracker fail.
-                pass
+            except Exception as exc:
+                detail = str(exc) or type(exc).__name__
+                self._set_state(
+                    job_id,
+                    "failed",
+                    None,
+                    f"Could not save completed track: {detail}",
+                )
+                return
+        self._set_state(job_id, "completed", 1.0, "Tracking complete")
 
     def _run_progress_worker(
         self,
@@ -193,8 +197,15 @@ class JobRegistry:
         if on_completed is not None:
             try:
                 on_completed(job_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                detail = str(exc) or type(exc).__name__
+                self._set_state(
+                    job_id,
+                    "failed",
+                    None,
+                    f"Could not save completed job: {detail}",
+                )
+                return
         self._set_state(job_id, "completed", 1.0, completion_message)
 
     def _create_job(self) -> str:

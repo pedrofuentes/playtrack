@@ -46,6 +46,7 @@ def _write_synthetic_video_with_audio(
         video.width = 96
         video.height = 64
         video.pix_fmt = "yuv420p"
+        video.gop_size = 8
         audio = container.add_stream("aac", rate=sample_rate)
         audio.layout = "mono"
 
@@ -331,3 +332,101 @@ def test_full_range_export_stream_copies_audio_packets(tmp_path: Path) -> None:
     )
 
     assert _audio_packet_payloads(destination) == _audio_packet_payloads(source)
+
+
+def test_partial_export_seeks_near_start_and_stops_demux_after_interval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "bounded-source.mp4"
+    destination = tmp_path / "bounded-export.mp4"
+    _write_synthetic_video_with_audio(source)
+    real_open = av.open
+    seek_offsets: list[int] = []
+    demux_exhausted = False
+
+    class InstrumentedInput:
+        def __init__(self, container: object) -> None:
+            self.container = container
+
+        def __enter__(self) -> "InstrumentedInput":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self.container.close()
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self.container, name)
+
+        def seek(self, offset: int, *args: object, **kwargs: object) -> None:
+            seek_offsets.append(offset)
+            self.container.seek(offset, *args, **kwargs)
+
+        def demux(self, *streams: object) -> object:
+            nonlocal demux_exhausted
+            for packet in self.container.demux(*streams):
+                yield packet
+            demux_exhausted = True
+
+    def instrumented_open(file: str, *args: object, **kwargs: object) -> object:
+        container = real_open(file, *args, **kwargs)
+        if Path(file) == source and kwargs.get("mode") == "r":
+            return InstrumentedInput(container)
+        return container
+
+    monkeypatch.setattr(av, "open", instrumented_open)
+    windows = [
+        CropWindow(frame_idx=index, x=0, y=0, width=96, height=64)
+        for index in range(8)
+    ]
+
+    export_video(
+        source,
+        destination,
+        windows,
+        output_width=96,
+        output_height=64,
+        fps=8.0,
+        source_start_frame=16,
+        source_total_frames=32,
+    )
+
+    assert seek_offsets and seek_offsets[0] > 0
+    assert demux_exhausted is False
+    with real_open(str(destination)) as exported:
+        frames = list(exported.decode(exported.streams.video[0]))
+    assert len(frames) == 8
+    assert frames[0].pts == 0
+
+
+def test_accepts_codec_frame_audio_boundary_mismatch_with_zero_based_pts(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "codec-boundary-source.mp4"
+    destination = tmp_path / "codec-boundary-export.mp4"
+    _write_synthetic_video_with_audio(
+        source,
+        audio_gap_seconds=(1, 1 + 512 / 48_000),
+    )
+    windows = [
+        CropWindow(frame_idx=index, x=0, y=0, width=96, height=64)
+        for index in range(16)
+    ]
+
+    export_video(
+        source,
+        destination,
+        windows,
+        output_width=96,
+        output_height=64,
+        fps=8.0,
+        source_start_frame=8,
+        source_total_frames=32,
+    )
+
+    with av.open(str(destination)) as exported:
+        stream = exported.streams.audio[0]
+        frames = list(exported.decode(stream))
+    assert frames[0].pts == 0
+    assert sum(frame.samples for frame in frames) / stream.rate == pytest.approx(
+        2.0, abs=1_024 / 48_000
+    )
