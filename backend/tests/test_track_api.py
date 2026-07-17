@@ -75,6 +75,7 @@ def test_track_post_websocket_partial_updates_and_finished_get(
             },
         )
         assert response.status_code == 202
+        assert response.json()["playerName"] == "Player 1"
         job_id = response.json()["jobId"]
         assert tracker.published.wait(timeout=2)
 
@@ -105,6 +106,58 @@ def test_track_post_websocket_partial_updates_and_finished_get(
     assert fetched.status_code == 200
     assert fetched.json() == finished
     assert tracker.calls == [(video_id, 1, (100, 50, 140, 100))]
+
+
+def test_track_persists_trimmed_player_name_and_library_allows_rename(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    client, video_id, tracker = make_tracking_client(tmp_path, tiny_video)
+    with client:
+        started = client.post(
+            "/api/track",
+            json={
+                "videoId": video_id,
+                "frameIdx": 1,
+                "box": [100, 50, 140, 100],
+                "playerName": "  White 19  ",
+            },
+        )
+        assert started.status_code == 202
+        assert started.json()["playerName"] == "White 19"
+        tracker.release.set()
+        job_id = started.json()["jobId"]
+        assert client.get(f"/api/track/{job_id}").json()["state"] in {
+            "running", "completed"
+        }
+        snapshot = client.app.state.job_registry.wait_until_terminal(job_id, timeout=2)
+        assert snapshot.state == "completed"
+
+        listing = client.get("/api/library")
+        assert listing.json()["videos"][0]["tracks"][0]["name"] == "White 19"
+        renamed = client.patch(
+            f"/api/library/tracks/{job_id}", json={"name": "  Goalie  "}
+        )
+
+    assert renamed.status_code == 200
+    assert renamed.json() == {"jobId": job_id, "name": "Goalie"}
+
+
+def test_track_rejects_overlong_player_name(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    client, video_id, tracker = make_tracking_client(tmp_path, tiny_video)
+    with client:
+        response = client.post(
+            "/api/track",
+            json={
+                "videoId": video_id,
+                "frameIdx": 0,
+                "box": [100, 50, 140, 100],
+                "playerName": "x" * 81,
+            },
+        )
+    tracker.release.set()
+    assert response.status_code == 422
 
 
 def test_track_endpoints_validate_video_box_and_job(

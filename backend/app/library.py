@@ -24,6 +24,7 @@ class SavedTrack:
     box: tuple[int, int, int, int]
     track: tuple["TrackFrame", ...]
     created_at: str
+    name: str | None = None
 
 
 class LibraryStore:
@@ -69,6 +70,8 @@ class LibraryStore:
         anchor_frame_idx: int,
         box: tuple[int, int, int, int],
         track: Sequence["TrackFrame"],
+        *,
+        name: str | None = None,
     ) -> None:
         self._write_object(
             self.tracks_dir / f"{job_id}.json",
@@ -79,6 +82,7 @@ class LibraryStore:
                 "box": list(box),
                 "track": [frame.to_dict() for frame in track],
                 "createdAt": _now(),
+                "name": name,
             },
         )
 
@@ -98,11 +102,70 @@ class LibraryStore:
                         box=tuple(int(value) for value in raw["box"]),  # type: ignore[arg-type]
                         track=frames,
                         created_at=str(raw["createdAt"]),
+                        name=_clean_name(raw.get("name")),
                     )
                 )
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
                 logger.warning("Ignoring corrupt library track %s: %s", path, exc)
         return saved
+
+    def resolve_player_name(self, video_id: str, requested: str | None) -> str:
+        cleaned = _clean_name(requested)
+        if requested is not None and len(requested.strip()) > 80:
+            raise ValueError("Player name must be 80 characters or fewer")
+        if cleaned is not None:
+            return cleaned
+        used = {
+            track.name.casefold()
+            for track in self.iter_tracks()
+            if track.video_id == video_id and track.name is not None
+        }
+        index = 1
+        while f"player {index}" in used:
+            index += 1
+        return f"Player {index}"
+
+    def rename_track(self, job_id: str, raw_name: str) -> SavedTrack | None:
+        name = _clean_name(raw_name)
+        if name is None:
+            raise ValueError("Player name cannot be blank")
+        if len(name) > 80:
+            raise ValueError("Player name must be 80 characters or fewer")
+        path = self.tracks_dir / f"{job_id}.json"
+        if not path.is_file():
+            return None
+        raw = self._read_object(path)
+        raw["name"] = name
+        self._write_object(path, raw)
+        return next(
+            (track for track in self.iter_tracks() if track.job_id == job_id), None
+        )
+
+    def backfill_track_names(self) -> None:
+        tracks = self.iter_tracks()
+        by_video: dict[str, list[SavedTrack]] = {}
+        for track in tracks:
+            by_video.setdefault(track.video_id, []).append(track)
+        for video_tracks in by_video.values():
+            ordered = sorted(video_tracks, key=lambda item: (item.created_at, item.job_id))
+            used = {
+                track.name.casefold()
+                for track in ordered
+                if track.name is not None
+            }
+            next_index = 1
+            for track in ordered:
+                if track.name is not None:
+                    continue
+                while f"player {next_index}" in used:
+                    next_index += 1
+                name = f"Player {next_index}"
+                path = self.tracks_dir / f"{track.job_id}.json"
+                raw = self._read_object(path)
+                raw["name"] = name
+                self._write_object(path, raw)
+                used.add(name.casefold())
+                next_index += 1
 
     def remove_track(self, job_id: str) -> SavedTrack | None:
         found = next((track for track in self.iter_tracks() if track.job_id == job_id), None)
@@ -191,6 +254,13 @@ def _track_frame(value: Any) -> "TrackFrame":
         center=tuple(float(item) for item in center) if center is not None else None,
         lost=bool(value["lost"]),
     )
+
+
+def _clean_name(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
 
 
 def _directory_size(path: Path) -> int:

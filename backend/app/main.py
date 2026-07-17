@@ -112,10 +112,20 @@ class TrackRequest(BaseModel):
     videoId: str
     frameIdx: int = Field(ge=0)
     box: tuple[int, int, int, int]
+    playerName: str | None = Field(default=None, max_length=80)
 
 
 class TrackJobResponse(BaseModel):
     jobId: str
+
+
+class TrackStartResponse(BaseModel):
+    jobId: str
+    playerName: str
+
+
+class PlayerNameRequest(BaseModel):
+    name: str = Field(max_length=80)
 
 
 class SmoothingRequest(BaseModel):
@@ -199,6 +209,7 @@ def create_app(
             rescue_max_input_dimension=settings.locate_max_input_dimension,
         )
     jobs = job_registry or JobRegistry()
+    store.library.backfill_track_names()
     for saved_track in store.library.iter_tracks():
         try:
             store.get(saved_track.video_id)
@@ -371,7 +382,7 @@ def create_app(
             ]
         }
 
-    @app.post("/api/track", response_model=TrackJobResponse, status_code=202)
+    @app.post("/api/track", response_model=TrackStartResponse, status_code=202)
     def start_track(payload: TrackRequest) -> dict[str, str]:
         try:
             record = store.get(payload.videoId)
@@ -393,6 +404,9 @@ def create_app(
         if sam_image_engine.is_loaded:
             sam_image_engine.unload()
         box = tuple(payload.box)
+        player_name = store.library.resolve_player_name(
+            payload.videoId, payload.playerName
+        )
         job_id = jobs.submit(
             lambda report: tracker.track(
                 payload.videoId,
@@ -407,9 +421,10 @@ def create_app(
                 anchor_frame_idx=payload.frameIdx,
                 box=box,
                 track=track,
+                name=player_name,
             ),
         )
-        return {"jobId": job_id}
+        return {"jobId": job_id, "playerName": player_name}
 
     @app.get("/api/track/{job_id}")
     def get_track(job_id: str) -> dict[str, object]:
@@ -570,6 +585,7 @@ def create_app(
                     "frameCount": len(track.track),
                     "lostCount": sum(frame.lost for frame in track.track),
                     "createdAt": track.created_at,
+                    "name": track.name,
                 }
             )
         by_video_exports: dict[str, list[dict[str, object]]] = {}
@@ -601,6 +617,18 @@ def create_app(
         path = Path(str(entry.get("path", "")))
         if path.is_file():
             path.unlink()
+
+    @app.patch("/api/library/tracks/{job_id}")
+    def rename_library_track(
+        job_id: str, payload: PlayerNameRequest
+    ) -> dict[str, str]:
+        try:
+            renamed = store.library.rename_track(job_id, payload.name)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        if renamed is None or renamed.name is None:
+            raise HTTPException(404, "Track not found")
+        return {"jobId": renamed.job_id, "name": renamed.name}
 
     @app.delete("/api/library/tracks/{job_id}", status_code=204)
     def delete_library_track(job_id: str) -> Response:

@@ -63,9 +63,12 @@ def persist_completed_track(
     anchor_frame_idx: int,
     box: tuple[int, int, int, int],
     track: Sequence[TrackFrame],
+    name: str | None = None,
 ) -> None:
     """Write a completed tracker result through to the durable library."""
-    library.save_track(video_id, job_id, anchor_frame_idx, box, track)
+    library.save_track(
+        video_id, job_id, anchor_frame_idx, box, track, name=name
+    )
 
 
 class LossDetector:

@@ -113,3 +113,47 @@ def test_tracking_completion_helper_writes_the_completed_track(tmp_path: Path) -
         track=_track(),
     )
     assert library.iter_tracks()[0].job_id == "track-1"
+
+
+def test_library_allocates_persists_and_renames_player_names(tmp_path: Path) -> None:
+    library = LibraryStore(tmp_path / "data")
+    library.save_track(
+        "video-1", "track-1", 0, (10, 10, 30, 30), _track(), name="Skater"
+    )
+
+    assert library.resolve_player_name("video-1", None) == "Player 1"
+    library.save_track(
+        "video-1", "track-2", 0, (10, 10, 30, 30), _track(), name="Player 1"
+    )
+    assert library.resolve_player_name("video-1", "  Skater  ") == "Skater"
+    assert library.resolve_player_name("video-1", "") == "Player 2"
+
+    renamed = library.rename_track("track-2", "  Goalie  ")
+
+    assert renamed is not None
+    assert renamed.name == "Goalie"
+    assert {track.job_id: track.name for track in library.iter_tracks()} == {
+        "track-1": "Skater",
+        "track-2": "Goalie",
+    }
+
+
+def test_library_backfills_legacy_track_names_in_stable_order(tmp_path: Path) -> None:
+    library = LibraryStore(tmp_path / "data")
+    library.save_track("video-1", "later", 0, (10, 10, 30, 30), _track())
+    library.save_track("video-1", "earlier", 0, (10, 10, 30, 30), _track())
+    later_path = library.tracks_dir / "later.json"
+    earlier_path = library.tracks_dir / "earlier.json"
+    later = json.loads(later_path.read_text(encoding="utf-8"))
+    earlier = json.loads(earlier_path.read_text(encoding="utf-8"))
+    later["createdAt"] = "2026-01-02T00:00:00+00:00"
+    earlier["createdAt"] = "2026-01-01T00:00:00+00:00"
+    later_path.write_text(json.dumps(later), encoding="utf-8")
+    earlier_path.write_text(json.dumps(earlier), encoding="utf-8")
+
+    library.backfill_track_names()
+
+    tracks = {track.job_id: track.name for track in library.iter_tracks()}
+    assert tracks == {"earlier": "Player 1", "later": "Player 2"}
+    assert json.loads(earlier_path.read_text(encoding="utf-8"))["name"] == "Player 1"
+    assert json.loads(later_path.read_text(encoding="utf-8"))["name"] == "Player 2"
