@@ -768,3 +768,68 @@ def test_active_jobs_block_source_track_and_cache_deletion(
         assert jobs.wait_until_terminal(export_id, timeout=2).state == "completed"
         assert client.delete(f"/api/library/tracks/{track_id}").status_code == 204
         assert client.delete(f"/api/library/videos/{record.video_id}").status_code == 204
+
+
+def test_track_route_serializes_submission_and_persistence_against_deletion(
+    tmp_path: Path, tiny_video: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    record = store.register_path(tiny_video)
+    jobs = JobRegistry()
+    submit_entered = threading.Event()
+    allow_submit = threading.Event()
+    worker_release = threading.Event()
+    persistence_entered = threading.Event()
+    persistence_release = threading.Event()
+    real_submit = jobs.submit
+    real_save_track = store.library.save_track
+
+    def delayed_submit(worker: object, **kwargs: object) -> str:
+        submit_entered.set()
+        assert allow_submit.wait(timeout=2)
+        return real_submit(worker, **kwargs)
+
+    def blocked_save_track(*args: object, **kwargs: object) -> None:
+        persistence_entered.set()
+        assert persistence_release.wait(timeout=2)
+        real_save_track(*args, **kwargs)
+
+    class BlockingTracker:
+        def track(self, *_args: object, **_kwargs: object) -> list[TrackFrame]:
+            assert worker_release.wait(timeout=2)
+            return [TrackFrame(0, (10, 10, 30, 30), (20.0, 20.0), False)]
+
+    monkeypatch.setattr(jobs, "submit", delayed_submit)
+    monkeypatch.setattr(store.library, "save_track", blocked_save_track)
+    app = create_app(store, job_registry=jobs, track_runner=BlockingTracker())
+    with TestClient(app) as client, ThreadPoolExecutor(max_workers=3) as pool:
+        started_future = pool.submit(
+            client.post,
+            "/api/track",
+            json={
+                "videoId": record.video_id,
+                "frameIdx": 0,
+                "box": [10, 10, 30, 30],
+            },
+        )
+        assert submit_entered.wait(timeout=2)
+        delete_future = pool.submit(
+            client.delete, f"/api/library/videos/{record.video_id}"
+        )
+        clear_future = pool.submit(
+            client.post, "/api/library/maintenance/clear-caches"
+        )
+        assert not delete_future.done()
+        assert not clear_future.done()
+        allow_submit.set()
+        started = started_future.result(timeout=2)
+        assert started.status_code == 202
+        assert delete_future.result(timeout=2).status_code == 409
+        assert clear_future.result(timeout=2).status_code == 409
+
+        worker_release.set()
+        assert persistence_entered.wait(timeout=2)
+        assert client.delete(f"/api/library/videos/{record.video_id}").status_code == 409
+        persistence_release.set()
+        assert jobs.wait_until_terminal(started.json()["jobId"], timeout=2).state == "completed"
+        assert client.delete(f"/api/library/videos/{record.video_id}").status_code == 204
