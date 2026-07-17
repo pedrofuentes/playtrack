@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { currentWorkflowStep } from './App'
+import { currentWorkflowStep, libraryVideoName } from './App'
 
 describe('currentWorkflowStep', () => {
   it('advances from selection to tracking to export', () => {
@@ -21,4 +21,10 @@ describe('currentWorkflowStep', () => {
       }),
     ).toBe(3)
   })
+})
+
+it('uses the library display name when opening a saved upload', () => {
+  expect(libraryVideoName({ name: 'Championship Final.mp4' } as never)).toBe(
+    'Championship Final.mp4',
+  )
 })

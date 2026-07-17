@@ -143,13 +143,13 @@ export default function App() {
   const openLibraryVideo = useCallback((saved: LibraryVideo) => {
     void openVideo(
       () => Promise.resolve(saved.metadata),
-      saved.name,
-      `Opening ${saved.name}…`,
+      libraryVideoName(saved),
+      `Opening ${libraryVideoName(saved)}…`,
     )
   }, [openVideo])
 
   const reExportLibraryTrack = useCallback(async (saved: LibraryVideo, jobId: string) => {
-    await openVideo(() => Promise.resolve(saved.metadata), saved.name, `Opening ${saved.name}…`)
+    await openVideo(() => Promise.resolve(saved.metadata), libraryVideoName(saved), `Opening ${libraryVideoName(saved)}…`)
     try {
       const restored = await getTrack(jobId)
       setTrackJob(restored)
@@ -521,6 +521,10 @@ export function currentWorkflowStep(
   if (trackJob?.state === 'completed') return 3
   if (selection) return 2
   return 1
+}
+
+export function libraryVideoName(video: Pick<LibraryVideo, 'name'>): string {
+  return video.name
 }
 
 function filenameFromPath(path: string): string {

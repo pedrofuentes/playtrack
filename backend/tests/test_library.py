@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -76,6 +76,30 @@ def test_library_tolerates_corrupt_catalog_and_skips_missing_video(tmp_path: Pat
     (library_dir / "videos.json").write_text("not-json", encoding="utf-8")
     store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
     assert list(store.records()) == []
+
+
+def test_library_uses_saved_upload_name_and_falls_back_for_legacy_catalogs(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    data_dir = tmp_path / "data"
+    store = VideoStore(repo_root=tmp_path, data_dir=data_dir)
+    with tiny_video.open("rb") as source:
+        uploaded = store.register_upload(source, r"C:\incoming\Championship Final.mp4")
+    legacy = store.register_path(tiny_video)
+    catalog = store.library.videos()
+    for item in catalog:
+        if item["videoId"] == legacy.video_id:
+            item.pop("name", None)
+    (data_dir / "library" / "videos.json").write_text(json.dumps(catalog), encoding="utf-8")
+
+    restarted = VideoStore(repo_root=tmp_path, data_dir=data_dir)
+    with TestClient(create_app(restarted, job_registry=JobRegistry())) as client:
+        response = client.get("/api/library")
+
+    assert response.status_code == 200
+    by_id = {item["videoId"]: item for item in response.json()["videos"]}
+    assert by_id[uploaded.video_id]["name"] == "Championship Final.mp4"
+    assert by_id[legacy.video_id]["name"] == tiny_video.name
 
 
 def test_tracking_completion_helper_writes_the_completed_track(tmp_path: Path) -> None:

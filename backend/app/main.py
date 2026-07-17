@@ -41,6 +41,7 @@ from .videos import (
     VideoStore,
     VideoToolError,
     metadata_dict,
+    sanitize_display_name,
 )
 
 
@@ -581,7 +582,8 @@ def create_app(
             "videos": [
                 {
                     "videoId": str(item["videoId"]),
-                    "name": Path(str(item.get("path", ""))).name,
+                    "name": sanitize_display_name(item.get("name"))
+                    or Path(str(item.get("path", ""))).name,
                     "sourceKind": item.get("sourceKind", "path"),
                     "path": str(item.get("path", "")),
                     "metadata": {"videoId": str(item["videoId"]), **dict(item.get("metadata", {}))},

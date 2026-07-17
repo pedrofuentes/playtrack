@@ -46,6 +46,7 @@ class LibraryStore:
                 "videoId": record.video_id,
                 "sourceKind": source_kind,
                 "path": str(record.path),
+                "name": record.name,
                 "metadata": {
                     "width": record.metadata.width,
                     "height": record.metadata.height,

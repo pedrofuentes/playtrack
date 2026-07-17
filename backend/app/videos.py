@@ -49,6 +49,11 @@ class VideoRecord:
     metadata: VideoMetadata
     frame_cache_dir: Path
     source_kind: str = "path"
+    display_name: str | None = None
+
+    @property
+    def name(self) -> str:
+        return self.display_name or self.path.name
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +130,11 @@ class VideoStore:
         try:
             with destination.open("wb") as output:
                 shutil.copyfileobj(source, output, length=1024 * 1024)
-            return self._register(destination, source_kind="upload")
+            return self._register(
+                destination,
+                source_kind="upload",
+                display_name=sanitize_display_name(filename),
+            )
         except Exception:
             destination.unlink(missing_ok=True)
             raise
@@ -259,7 +268,13 @@ class VideoStore:
             record.path.unlink(missing_ok=True)
         return record
 
-    def _register(self, path: Path, *, source_kind: str) -> VideoRecord:
+    def _register(
+        self,
+        path: Path,
+        *,
+        source_kind: str,
+        display_name: str | None = None,
+    ) -> VideoRecord:
         metadata = self._probe_video(path)
         video_id = uuid.uuid4().hex
         record = VideoRecord(
@@ -268,6 +283,7 @@ class VideoStore:
             metadata=metadata,
             frame_cache_dir=self.frame_cache_root / video_id,
             source_kind=source_kind,
+            display_name=display_name,
         )
         with self._lock:
             self._records[video_id] = record
@@ -291,6 +307,7 @@ class VideoStore:
                     ),
                     frame_cache_dir=self.frame_cache_root / str(saved["videoId"]),
                     source_kind=str(saved.get("sourceKind", "path")),
+                    display_name=sanitize_display_name(saved.get("name")),
                 )
                 self._records[record.video_id] = record
             except (KeyError, TypeError, ValueError):
@@ -580,6 +597,14 @@ class VideoStore:
         if not isinstance(payload, dict):
             raise InvalidVideoError("ffprobe returned an invalid response")
         return payload
+
+
+def sanitize_display_name(value: object) -> str | None:
+    """Keep only a client filename, never a client-supplied path."""
+    if not isinstance(value, str):
+        return None
+    name = Path(value.replace("\\", "/")).name
+    return name or None
 
 
 def _parse_rate(value: object) -> float:

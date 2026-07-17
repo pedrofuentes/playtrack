@@ -30,16 +30,20 @@ def test_registers_local_video_and_returns_metadata(
 
 
 def test_registers_multipart_upload(
-    client: TestClient, tiny_video: Path
+    client: TestClient, video_store: VideoStore, tiny_video: Path
 ) -> None:
     with tiny_video.open("rb") as source:
         response = client.post(
             "/api/videos",
-            files={"file": ("uploaded.mp4", source, "video/mp4")},
+            files={"file": (r"C:\matches\Opening Match.mp4", source, "video/mp4")},
         )
 
     assert response.status_code == 201
     assert response.json()["width"] == 320
+    record = video_store.get(response.json()["videoId"])
+    assert record.display_name == "Opening Match.mp4"
+    assert record.path.name != record.display_name
+    assert video_store.library.videos()[0]["name"] == "Opening Match.mp4"
 
 
 def test_rejects_missing_local_video(client: TestClient) -> None:
