@@ -29,5 +29,7 @@ describe('disabled export panel', () => {
     expect(markup).toContain(
       'Select a player and track them first — then export a video that follows them.',
     )
+    expect(markup).toContain('Camera smoothness')
+    expect(markup).toContain('Max acceleration')
   })
 })

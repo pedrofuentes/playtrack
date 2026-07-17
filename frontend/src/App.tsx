@@ -5,6 +5,10 @@ import {
   type CropWindow,
   type FeatureFlags,
   getFeatures,
+  getLibrary,
+  getTrack,
+  type LibraryResponse,
+  type LibraryVideo,
   type LocateCandidate,
   registerVideo,
   selectByClick,
@@ -19,6 +23,7 @@ import {
 import { VideoStage } from './components/VideoStage'
 import { ExportPanel } from './components/ExportPanel'
 import { OpenVideoPanel } from './components/OpenVideoPanel'
+import { LibraryPanel } from './components/LibraryPanel'
 import type { Point } from './geometry'
 
 const EXAMPLE_PATH = 'examples/example.mp4'
@@ -39,6 +44,7 @@ export default function App() {
   const [features, setFeatures] = useState<FeatureFlags>({
     textSelection: { enabled: false, reason: '' },
   })
+  const [library, setLibrary] = useState<LibraryResponse>({ videos: [], cacheBytes: 0 })
   const [trackMessage, setTrackMessage] = useState<string | null>(null)
   const [trackJob, setTrackJob] = useState<TrackJobUpdate | null>(null)
   const [trackStarting, setTrackStarting] = useState(false)
@@ -97,6 +103,10 @@ export default function App() {
     [openVideo],
   )
 
+  const refreshLibrary = useCallback(() => {
+    void getLibrary().then(setLibrary).catch(() => {})
+  }, [])
+
   const openPath = useCallback(
     (path: string) => openVideo(
       () => registerVideo(path),
@@ -117,6 +127,7 @@ export default function App() {
 
   useEffect(() => {
     void openExample()
+    refreshLibrary()
     void getFeatures()
       .then(setFeatures)
       .catch(() => {
@@ -127,7 +138,27 @@ export default function App() {
           },
         })
       })
-  }, [openExample])
+  }, [openExample, refreshLibrary])
+
+  const openLibraryVideo = useCallback((saved: LibraryVideo) => {
+    void openVideo(
+      () => Promise.resolve(saved.metadata),
+      saved.name,
+      `Opening ${saved.name}…`,
+    )
+  }, [openVideo])
+
+  const reExportLibraryTrack = useCallback(async (saved: LibraryVideo, jobId: string) => {
+    await openVideo(() => Promise.resolve(saved.metadata), saved.name, `Opening ${saved.name}…`)
+    try {
+      const restored = await getTrack(jobId)
+      setTrackJob(restored)
+      setTrackMessage(restored.message)
+      setTrackError(restored.state === 'failed' ? restored.message : null)
+    } catch (reason) {
+      setTrackError(reason instanceof Error ? reason.message : 'Could not restore saved track')
+    }
+  }, [openVideo])
 
   useEffect(
     () => () => {
@@ -339,6 +370,12 @@ export default function App() {
             disabled={loading}
             onUpload={openUpload}
             onOpenPath={openPath}
+          />
+          <LibraryPanel
+            library={library}
+            onOpenVideo={openLibraryVideo}
+            onReExport={(saved, jobId) => { void reExportLibraryTrack(saved, jobId) }}
+            onRefresh={refreshLibrary}
           />
           <nav className="workflow-steps" aria-label="FindMe workflow">
             <ol>

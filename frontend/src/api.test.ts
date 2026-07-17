@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   exportDownloadUrl,
+  getLibrary,
   fetchCropPlan,
   getFeatures,
   selectByClick,
@@ -170,9 +171,8 @@ describe('export API', () => {
     outHeight: 720,
     zoom: 1.5,
     smoothing: {
-      windowSec: 0.8,
-      deadZonePx: 30,
-      maxVelPxPerFrame: 28,
+      responsiveness: 0.5,
+      maxAccelPxPerFrame2: 3,
     },
   }
 
@@ -192,7 +192,7 @@ describe('export API', () => {
       result,
     )
     expect(fetchMock.mock.calls[0][0]).toBe(
-      '/api/export/plan?videoId=video-1&trackJobId=track-1&outWidth=1280&outHeight=720&zoom=1.5&windowSec=0.8&deadZonePx=30&maxVelPxPerFrame=28',
+      '/api/export/plan?videoId=video-1&trackJobId=track-1&outWidth=1280&outHeight=720&zoom=1.5&responsiveness=0.5&maxAccelPxPerFrame2=3',
     )
   })
 
@@ -216,5 +216,17 @@ describe('export API', () => {
       }),
     })
     expect(exportDownloadUrl('export/1')).toBe('/api/exports/export%2F1.mp4')
+  })
+})
+
+describe('library API', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('loads the persisted library catalog', async () => {
+    const result = { videos: [], cacheBytes: 0 }
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue(result) })
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(getLibrary()).resolves.toEqual(result)
+    expect(fetchMock).toHaveBeenCalledWith('/api/library')
   })
 })

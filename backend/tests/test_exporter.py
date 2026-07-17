@@ -60,3 +60,38 @@ def test_exports_planned_crops_with_expected_dimensions_and_frame_count(
     assert (stream.width, stream.height) == (48, 32)
     assert len(frames) == 32
     assert progress[-1] == 1.0
+
+
+def test_exports_subpixel_crop_windows_without_changing_output_shape(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.mp4"
+    destination = tmp_path / "subpixel.mp4"
+    _write_synthetic_video(source, frame_count=8)
+    windows = [
+        CropWindow(
+            frame_idx=index,
+            x=16,
+            y=0,
+            width=64,
+            height=64,
+            cx=48.25 + index * 0.2,
+            cy=32.0,
+        )
+        for index in range(8)
+    ]
+
+    export_video(
+        source,
+        destination,
+        windows,
+        output_width=48,
+        output_height=32,
+        fps=8.0,
+    )
+
+    with av.open(str(destination)) as exported:
+        stream = exported.streams.video[0]
+        frames = list(exported.decode(stream))
+    assert (stream.width, stream.height) == (48, 32)
+    assert len(frames) == 8

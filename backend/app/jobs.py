@@ -12,8 +12,10 @@ from .tracking import TrackFrame
 JobState = Literal["queued", "running", "completed", "failed"]
 JobReporter = Callable[[float, str, TrackFrame], None]
 JobWorker = Callable[[JobReporter], Sequence[TrackFrame]]
+TrackCompletion = Callable[[str, Sequence[TrackFrame]], None]
 ProgressReporter = Callable[[float, str], None]
 ProgressWorker = Callable[[str, ProgressReporter], None]
+ProgressCompletion = Callable[[str], None]
 
 
 class JobNotFoundError(KeyError):
@@ -60,11 +62,11 @@ class JobRegistry:
         self._jobs: dict[str, _Job] = {}
         self._condition = threading.Condition(threading.RLock())
 
-    def submit(self, worker: JobWorker) -> str:
+    def submit(self, worker: JobWorker, *, on_completed: TrackCompletion | None = None) -> str:
         job_id = self._create_job()
         thread = threading.Thread(
             target=self._run_worker,
-            args=(job_id, worker),
+            args=(job_id, worker, on_completed),
             name=f"findme-track-{job_id[:8]}",
             daemon=True,
         )
@@ -76,16 +78,34 @@ class JobRegistry:
         worker: ProgressWorker,
         *,
         completion_message: str,
+        on_completed: ProgressCompletion | None = None,
     ) -> str:
         job_id = self._create_job()
         thread = threading.Thread(
             target=self._run_progress_worker,
-            args=(job_id, worker, completion_message),
+            args=(job_id, worker, completion_message, on_completed),
             name=f"findme-job-{job_id[:8]}",
             daemon=True,
         )
         thread.start()
         return job_id
+
+    def restore_completed(self, job_id: str, track: Sequence[TrackFrame]) -> None:
+        with self._condition:
+            self._jobs[job_id] = _Job(
+                job_id=job_id,
+                state="completed",
+                progress=1.0,
+                message="Tracking complete",
+                track={frame.frame_idx: frame for frame in track},
+                version=1,
+            )
+            self._condition.notify_all()
+
+    def remove(self, job_id: str) -> None:
+        with self._condition:
+            self._jobs.pop(job_id, None)
+            self._condition.notify_all()
 
     def get(self, job_id: str) -> JobSnapshot:
         with self._condition:
@@ -115,7 +135,7 @@ class JobRegistry:
             )
         return snapshot
 
-    def _run_worker(self, job_id: str, worker: JobWorker) -> None:
+    def _run_worker(self, job_id: str, worker: JobWorker, on_completed: TrackCompletion | None) -> None:
         self._set_state(job_id, "running", 0.0, "Starting tracker")
 
         def report(progress: float, message: str, frame: TrackFrame) -> None:
@@ -141,12 +161,19 @@ class JobRegistry:
             job.message = "Tracking complete"
             job.version += 1
             self._condition.notify_all()
+        if on_completed is not None:
+            try:
+                on_completed(job_id, result)
+            except Exception:
+                # A damaged catalog must not make an otherwise complete tracker fail.
+                pass
 
     def _run_progress_worker(
         self,
         job_id: str,
         worker: ProgressWorker,
         completion_message: str,
+        on_completed: ProgressCompletion | None,
     ) -> None:
         self._set_state(job_id, "running", 0.0, "Starting export")
 
@@ -163,6 +190,11 @@ class JobRegistry:
         except Exception as exc:
             self._set_state(job_id, "failed", None, str(exc) or type(exc).__name__)
             return
+        if on_completed is not None:
+            try:
+                on_completed(job_id)
+            except Exception:
+                pass
         self._set_state(job_id, "completed", 1.0, completion_message)
 
     def _create_job(self) -> str:

@@ -10,6 +10,8 @@ from fractions import Fraction
 from pathlib import Path
 from typing import BinaryIO
 
+from .library import LibraryStore
+
 
 class VideoStoreError(Exception):
     """Base error for video registration and frame extraction."""
@@ -46,6 +48,7 @@ class VideoRecord:
     path: Path
     metadata: VideoMetadata
     frame_cache_dir: Path
+    source_kind: str = "path"
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +104,8 @@ class VideoStore:
         self.tracking_max_dimension = tracking_max_dimension
         self._records: dict[str, VideoRecord] = {}
         self._lock = threading.RLock()
+        self.library = LibraryStore(self.data_dir)
+        self._rehydrate()
 
     def register_path(self, raw_path: str | Path) -> VideoRecord:
         requested_path = Path(raw_path).expanduser()
@@ -108,7 +113,7 @@ class VideoStore:
         path = path.resolve()
         if not path.is_file():
             raise VideoNotFoundError(f"Video file not found: {raw_path}")
-        return self._register(path)
+        return self._register(path, source_kind="path")
 
     def register_upload(
         self, source: BinaryIO, filename: str | None = None
@@ -120,7 +125,7 @@ class VideoStore:
         try:
             with destination.open("wb") as output:
                 shutil.copyfileobj(source, output, length=1024 * 1024)
-            return self._register(destination)
+            return self._register(destination, source_kind="upload")
         except Exception:
             destination.unlink(missing_ok=True)
             raise
@@ -234,7 +239,27 @@ class VideoStore:
                 raise VideoToolError("Could not read tracking frame cache")
             return cached
 
-    def _register(self, path: Path) -> VideoRecord:
+    def records(self) -> tuple[VideoRecord, ...]:
+        with self._lock:
+            return tuple(self._records.values())
+
+    def remove(self, video_id: str) -> VideoRecord:
+        with self._lock:
+            record = self.get(video_id)
+            self._records.pop(video_id)
+        self.library.remove_video(video_id)
+        for cache in (
+            record.frame_cache_dir,
+            self.tracking_frame_root / video_id,
+            self.selection_crop_root / video_id,
+        ):
+            if cache.exists():
+                shutil.rmtree(cache)
+        if record.source_kind == "upload" and self._is_under(record.path, self.upload_dir):
+            record.path.unlink(missing_ok=True)
+        return record
+
+    def _register(self, path: Path, *, source_kind: str) -> VideoRecord:
         metadata = self._probe_video(path)
         video_id = uuid.uuid4().hex
         record = VideoRecord(
@@ -242,10 +267,42 @@ class VideoStore:
             path=path,
             metadata=metadata,
             frame_cache_dir=self.frame_cache_root / video_id,
+            source_kind=source_kind,
         )
         with self._lock:
             self._records[video_id] = record
+        self.library.save_video(record, source_kind=source_kind)
         return record
+
+    def _rehydrate(self) -> None:
+        for saved in self.library.videos():
+            try:
+                path = Path(str(saved["path"])).resolve()
+                metadata = saved["metadata"]
+                if not path.is_file():
+                    continue
+                record = VideoRecord(
+                    video_id=str(saved["videoId"]),
+                    path=path,
+                    metadata=VideoMetadata(
+                        width=int(metadata["width"]), height=int(metadata["height"]),
+                        fps=float(metadata["fps"]), nb_frames=int(metadata["nbFrames"]),
+                        duration=float(metadata["duration"]),
+                    ),
+                    frame_cache_dir=self.frame_cache_root / str(saved["videoId"]),
+                    source_kind=str(saved.get("sourceKind", "path")),
+                )
+                self._records[record.video_id] = record
+            except (KeyError, TypeError, ValueError):
+                continue
+
+    @staticmethod
+    def _is_under(path: Path, root: Path) -> bool:
+        try:
+            path.resolve().relative_to(root.resolve())
+            return True
+        except ValueError:
+            return False
 
     def _probe_video(self, path: Path) -> VideoMetadata:
         payload = self._run_ffprobe(

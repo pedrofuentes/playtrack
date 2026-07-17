@@ -55,6 +55,19 @@ class RescueEngine(Protocol):
 TrackUpdate = Callable[[float, str, TrackFrame], None]
 
 
+def persist_completed_track(
+    library: Any,
+    *,
+    video_id: str,
+    job_id: str,
+    anchor_frame_idx: int,
+    box: tuple[int, int, int, int],
+    track: Sequence[TrackFrame],
+) -> None:
+    """Write a completed tracker result through to the durable library."""
+    library.save_track(video_id, job_id, anchor_frame_idx, box, track)
+
+
 class LossDetector:
     """Detect masks that are empty or below a rolling accepted-area baseline."""
 

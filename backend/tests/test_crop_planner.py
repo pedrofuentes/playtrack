@@ -44,7 +44,7 @@ def test_plan_sizes_window_to_output_aspect_and_clamps_frame_edges() -> None:
         output_width=1920,
         output_height=1080,
         fps=30.0,
-        smoothing=SmoothingOptions(window_sec=0, dead_zone_px=0, max_velocity=9999),
+        smoothing=SmoothingOptions(responsiveness=0, max_acceleration=9999),
     )
 
     assert (windows[0].width, windows[0].height) == (1820, 1024)
@@ -95,11 +95,7 @@ def test_zoom_is_clamped_to_supported_one_through_four_range() -> None:
 
 def test_smoothing_is_deterministic_and_velocity_limited() -> None:
     centers = [(100.0, 100.0), (110.0, 100.0), (300.0, 100.0)] * 4
-    options = SmoothingOptions(
-        window_sec=0.2,
-        dead_zone_px=30,
-        max_velocity=28,
-    )
+    options = SmoothingOptions(responsiveness=0.35, max_acceleration=3)
     arguments = dict(
         centers=centers,
         source_width=1000,
@@ -115,5 +111,46 @@ def test_smoothing_is_deterministic_and_velocity_limited() -> None:
     second = plan_crop_windows(**arguments)
 
     assert first == second
-    xs = np.asarray([window.x + window.width / 2 for window in first])
-    assert np.max(np.abs(np.diff(xs))) <= 28
+    xs = np.asarray([window.cx for window in first])
+    velocities = np.diff(xs)
+    assert np.max(np.abs(np.diff(velocities))) <= 3.000001
+
+
+def test_spring_filter_converges_deterministically_to_a_step_target() -> None:
+    options = SmoothingOptions(responsiveness=0.5, max_acceleration=1000)
+    arguments = dict(
+        centers=[(100.0, 100.0)] + [(500.0, 100.0)] * 180,
+        source_width=1000,
+        source_height=600,
+        output_width=320,
+        output_height=180,
+        fps=30.0,
+        zoom=4.0,
+        smoothing=options,
+    )
+
+    first = plan_crop_windows(**arguments)
+    second = plan_crop_windows(**arguments)
+
+    assert first == second
+    assert first[-1].cx is not None
+    assert abs(first[-1].cx - 500.0) < 1.0
+
+
+def test_float_centers_are_edge_clamped_while_preview_windows_stay_even() -> None:
+    windows = plan_crop_windows(
+        [(0.1, 0.1), (999.9, 599.9)],
+        source_width=1000,
+        source_height=600,
+        output_width=320,
+        output_height=180,
+        fps=30,
+        zoom=4,
+        smoothing=SmoothingOptions(responsiveness=0, max_acceleration=9999),
+    )
+
+    assert windows[0].cx == windows[0].width / 2
+    assert windows[0].cy == windows[0].height / 2
+    assert windows[-1].cx == 1000 - windows[-1].width / 2
+    assert windows[-1].cy == 600 - windows[-1].height / 2
+    assert all(window.x % 2 == window.y % 2 == 0 for window in windows)

@@ -5,7 +5,7 @@ import posixpath
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -33,7 +33,7 @@ from .selection import (
     TextSelectionUnavailableError,
     TextSelector,
 )
-from .tracking import VideoTracker
+from .tracking import VideoTracker, persist_completed_track
 from .videos import (
     InvalidFrameError,
     InvalidVideoError,
@@ -118,9 +118,19 @@ class TrackJobResponse(BaseModel):
 
 
 class SmoothingRequest(BaseModel):
-    windowSec: float = Field(default=0.8, ge=0)
-    deadZonePx: float = Field(default=30.0, ge=0)
-    maxVelPxPerFrame: float = Field(default=28.0, gt=0)
+    responsiveness: float | None = Field(default=None, ge=0)
+    maxAccelPxPerFrame2: float | None = Field(default=None, gt=0)
+    windowSec: float | None = Field(default=None, ge=0)
+    deadZonePx: float | None = Field(default=None, ge=0)
+    maxVelPxPerFrame: float | None = Field(default=None, gt=0)
+
+    @property
+    def tau(self) -> float:
+        return self.responsiveness if self.responsiveness is not None else (self.windowSec if self.windowSec is not None else 0.5)
+
+    @property
+    def max_accel(self) -> float:
+        return self.maxAccelPxPerFrame2 if self.maxAccelPxPerFrame2 is not None else 3.0
 
 
 class ExportRequest(BaseModel):
@@ -188,6 +198,12 @@ def create_app(
             rescue_max_input_dimension=settings.locate_max_input_dimension,
         )
     jobs = job_registry or JobRegistry()
+    for saved_track in store.library.iter_tracks():
+        try:
+            store.get(saved_track.video_id)
+        except VideoNotFoundError:
+            continue
+        jobs.restore_completed(saved_track.job_id, saved_track.track)
     exporter = video_exporter or export_video
     export_root = exports_dir if exports_dir is not None else settings.exports_dir
 
@@ -382,7 +398,15 @@ def create_app(
                 payload.frameIdx,
                 box,
                 on_update=report,
-            )
+            ),
+            on_completed=lambda completed_id, track: persist_completed_track(
+                store.library,
+                video_id=payload.videoId,
+                job_id=completed_id,
+                anchor_frame_idx=payload.frameIdx,
+                box=box,
+                track=track,
+            ),
         )
         return {"jobId": job_id}
 
@@ -400,9 +424,8 @@ def create_app(
         out_width: int,
         out_height: int,
         zoom: float,
-        window_sec: float,
-        dead_zone_px: float,
-        max_velocity: float,
+        responsiveness: float,
+        max_acceleration: float,
     ) -> tuple[Any, list[CropWindow]]:
         try:
             record = store.get(video_id)
@@ -437,9 +460,8 @@ def create_app(
                 fps=record.metadata.fps,
                 zoom=zoom,
                 smoothing=SmoothingOptions(
-                    window_sec=window_sec,
-                    dead_zone_px=dead_zone_px,
-                    max_velocity=max_velocity,
+                    responsiveness=responsiveness,
+                    max_acceleration=max_acceleration,
                 ),
             )
         except CropPlanningError as exc:
@@ -453,9 +475,11 @@ def create_app(
         outWidth: int,
         outHeight: int,
         zoom: float = 1.0,
-        windowSec: float = 0.8,
+        responsiveness: float | None = None,
+        maxAccelPxPerFrame2: float | None = None,
+        windowSec: float | None = None,
         deadZonePx: float = 30.0,
-        maxVelPxPerFrame: float = 28.0,
+        maxVelPxPerFrame: float | None = None,
     ) -> dict[str, object]:
         _record, windows = build_export_plan(
             video_id=videoId,
@@ -463,9 +487,8 @@ def create_app(
             out_width=outWidth,
             out_height=outHeight,
             zoom=zoom,
-            window_sec=windowSec,
-            dead_zone_px=deadZonePx,
-            max_velocity=maxVelPxPerFrame,
+            responsiveness=responsiveness if responsiveness is not None else (windowSec if windowSec is not None else 0.5),
+            max_acceleration=maxAccelPxPerFrame2 if maxAccelPxPerFrame2 is not None else 3.0,
         )
         return {
             "videoId": videoId,
@@ -481,9 +504,8 @@ def create_app(
             out_width=payload.outWidth,
             out_height=payload.outHeight,
             zoom=payload.zoom,
-            window_sec=payload.smoothing.windowSec,
-            dead_zone_px=payload.smoothing.deadZonePx,
-            max_velocity=payload.smoothing.maxVelPxPerFrame,
+            responsiveness=payload.smoothing.tau,
+            max_acceleration=payload.smoothing.max_accel,
         )
 
         def run_export(job_id: str, report: Any) -> None:
@@ -500,6 +522,18 @@ def create_app(
         job_id = jobs.submit_progress(
             run_export,
             completion_message="Export complete",
+            on_completed=lambda completed_id: store.library.save_export(
+                completed_id,
+                payload.videoId,
+                payload.trackJobId,
+                {
+                    "outWidth": payload.outWidth,
+                    "outHeight": payload.outHeight,
+                    "zoom": payload.zoom,
+                    "smoothing": payload.smoothing.model_dump(exclude_none=True),
+                },
+                export_root / f"{completed_id}.mp4",
+            ),
         )
         return {"jobId": job_id}
 
@@ -519,6 +553,90 @@ def create_app(
             media_type="video/mp4",
             filename=f"findme-{job_id}.mp4",
         )
+
+    @app.get("/api/library")
+    def get_library() -> dict[str, object]:
+        tracks = store.library.iter_tracks()
+        exports = store.library.exports()
+        catalog = store.library.videos()
+        by_video_tracks: dict[str, list[dict[str, object]]] = {}
+        for track in tracks:
+            by_video_tracks.setdefault(track.video_id, []).append(
+                {
+                    "jobId": track.job_id,
+                    "anchorFrameIdx": track.anchor_frame_idx,
+                    "box": list(track.box),
+                    "frameCount": len(track.track),
+                    "lostCount": sum(frame.lost for frame in track.track),
+                    "createdAt": track.created_at,
+                }
+            )
+        by_video_exports: dict[str, list[dict[str, object]]] = {}
+        for item in exports:
+            by_video_exports.setdefault(str(item.get("videoId", "")), []).append(
+                {**item, "sourceExists": Path(str(item.get("path", ""))).is_file()}
+            )
+        return {
+            "cacheBytes": store.library.cache_bytes(),
+            "videos": [
+                {
+                    "videoId": str(item["videoId"]),
+                    "name": Path(str(item.get("path", ""))).name,
+                    "sourceKind": item.get("sourceKind", "path"),
+                    "path": str(item.get("path", "")),
+                    "metadata": {"videoId": str(item["videoId"]), **dict(item.get("metadata", {}))},
+                    "size": Path(str(item.get("path", ""))).stat().st_size if Path(str(item.get("path", ""))).is_file() else 0,
+                    "openedAt": item.get("openedAt"),
+                    "sourceExists": Path(str(item.get("path", ""))).is_file(),
+                    "tracks": by_video_tracks.get(str(item["videoId"]), []),
+                    "exports": by_video_exports.get(str(item["videoId"]), []),
+                }
+                for item in catalog
+            ]
+        }
+
+    def delete_export_file(entry: dict[str, object]) -> None:
+        path = Path(str(entry.get("path", "")))
+        if path.is_file():
+            path.unlink()
+
+    @app.delete("/api/library/tracks/{job_id}", status_code=204)
+    def delete_library_track(job_id: str) -> Response:
+        saved = store.library.remove_track(job_id)
+        if saved is None:
+            raise HTTPException(404, "Track not found")
+        jobs.remove(job_id)
+        for exported in store.library.remove_exports(lambda item: item.get("trackJobId") == job_id):
+            delete_export_file(exported)
+        return Response(status_code=204)
+
+    @app.delete("/api/library/exports/{export_id}", status_code=204)
+    def delete_library_export(export_id: str) -> Response:
+        removed = store.library.remove_exports(lambda item: item.get("exportId") == export_id)
+        if not removed:
+            raise HTTPException(404, "Export not found")
+        for exported in removed:
+            delete_export_file(exported)
+        return Response(status_code=204)
+
+    @app.delete("/api/library/videos/{video_id}", status_code=204)
+    def delete_library_video(video_id: str) -> Response:
+        try:
+            store.remove(video_id)
+        except VideoNotFoundError as exc:
+            if not any(item.get("videoId") == video_id for item in store.library.videos()):
+                raise HTTPException(404, str(exc)) from exc
+            store.library.remove_video(video_id)
+        for saved in [track for track in store.library.iter_tracks() if track.video_id == video_id]:
+            store.library.remove_track(saved.job_id)
+            jobs.remove(saved.job_id)
+        for exported in store.library.remove_exports(lambda item: item.get("videoId") == video_id):
+            delete_export_file(exported)
+        return Response(status_code=204)
+
+    @app.post("/api/library/maintenance/clear-caches")
+    def clear_library_caches() -> dict[str, int]:
+        return {"bytesFreed": store.library.clear_caches()}
 
     @app.websocket("/ws/jobs/{job_id}")
     async def track_updates(websocket: WebSocket, job_id: str) -> None:

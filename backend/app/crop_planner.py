@@ -12,9 +12,16 @@ class CropPlanningError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class SmoothingOptions:
-    window_sec: float = 0.8
+    responsiveness: float | None = None
+    max_acceleration: float = 3.0
+    # Legacy request fields remain accepted. They no longer affect planning.
+    window_sec: float | None = None
     dead_zone_px: float = 30.0
     max_velocity: float = 28.0
+
+    @property
+    def tau(self) -> float:
+        return self.responsiveness if self.responsiveness is not None else (self.window_sec if self.window_sec is not None else 0.5)
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +31,14 @@ class CropWindow:
     y: int
     width: int
     height: int
+    cx: float | None = None
+    cy: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.cx is None:
+            object.__setattr__(self, "cx", self.x + self.width / 2)
+        if self.cy is None:
+            object.__setattr__(self, "cy", self.y + self.height / 2)
 
     def to_dict(self) -> dict[str, int]:
         return {
@@ -78,10 +93,8 @@ def plan_crop_windows(
     if not np.isfinite(fps) or fps <= 0:
         raise CropPlanningError("Frame rate must be positive")
     options = smoothing or SmoothingOptions()
-    if options.window_sec < 0 or options.dead_zone_px < 0:
-        raise CropPlanningError("Smoothing window and dead zone cannot be negative")
-    if options.max_velocity <= 0:
-        raise CropPlanningError("Maximum velocity must be positive")
+    if options.tau < 0 or options.max_acceleration <= 0:
+        raise CropPlanningError("Smoothing responsiveness and acceleration must be positive")
 
     effective_zoom = float(np.clip(zoom, 1.0, 4.0))
     scale = min(source_width / output_width, source_height / output_height)
@@ -93,9 +106,8 @@ def plan_crop_windows(
         raise CropPlanningError("Requested zoom produces an empty crop window")
 
     trajectory = fill_missing_centers(centers)
-    trajectory = _apply_dead_zone(trajectory, options.dead_zone_px)
-    trajectory = _centered_moving_average(trajectory, options.window_sec, fps)
-    trajectory = _clamp_velocity(trajectory, options.max_velocity)
+    trajectory = _critically_damped_spring(trajectory, options.tau, fps)
+    trajectory = _clamp_acceleration(trajectory, options.max_acceleration)
 
     return [
         _window_for_center(
@@ -110,47 +122,35 @@ def plan_crop_windows(
     ]
 
 
-def _apply_dead_zone(trajectory: np.ndarray, threshold: float) -> np.ndarray:
-    if threshold <= 0 or len(trajectory) <= 1:
+def _critically_damped_spring(trajectory: np.ndarray, tau: float, fps: float) -> np.ndarray:
+    if tau <= 0 or len(trajectory) <= 1:
         return trajectory.copy()
-    filtered = trajectory.copy()
-    accepted = filtered[0].copy()
-    for index in range(1, len(filtered)):
-        candidate = trajectory[index]
-        if float(np.linalg.norm(candidate - accepted)) < threshold:
-            filtered[index] = accepted
-        else:
-            accepted = candidate.copy()
-            filtered[index] = accepted
+    dt = 1.0 / fps
+    omega = 2.0 / tau
+    filtered = np.empty_like(trajectory)
+    filtered[0] = trajectory[0]
+    velocity = np.zeros(2, dtype=np.float64)
+    for index in range(1, len(trajectory)):
+        acceleration = omega * omega * (trajectory[index] - filtered[index - 1]) - 2 * omega * velocity
+        velocity = velocity + acceleration * dt
+        filtered[index] = filtered[index - 1] + velocity * dt
     return filtered
 
 
-def _centered_moving_average(
-    trajectory: np.ndarray, window_sec: float, fps: float
-) -> np.ndarray:
-    frame_window = max(1, int(round(window_sec * fps)))
-    if frame_window <= 1 or len(trajectory) <= 1:
-        return trajectory.copy()
-    if frame_window % 2 == 0:
-        frame_window += 1
-    radius = frame_window // 2
-    padded = np.pad(trajectory, ((radius, radius), (0, 0)), mode="edge")
-    kernel = np.full(frame_window, 1.0 / frame_window, dtype=np.float64)
-    return np.column_stack(
-        [np.convolve(padded[:, axis], kernel, mode="valid") for axis in range(2)]
-    )
-
-
-def _clamp_velocity(trajectory: np.ndarray, maximum: float) -> np.ndarray:
+def _clamp_acceleration(trajectory: np.ndarray, maximum: float) -> np.ndarray:
     if len(trajectory) <= 1:
         return trajectory.copy()
-    clamped = trajectory.copy()
+    clamped = np.empty_like(trajectory)
+    clamped[0] = trajectory[0]
+    velocity = np.zeros(2, dtype=np.float64)
     for index in range(1, len(clamped)):
         delta = trajectory[index] - clamped[index - 1]
-        distance = float(np.linalg.norm(delta))
+        acceleration = delta - velocity
+        distance = float(np.linalg.norm(acceleration))
         if distance > maximum:
-            delta *= maximum / distance
-        clamped[index] = clamped[index - 1] + delta
+            acceleration *= maximum / distance
+        velocity = velocity + acceleration
+        clamped[index] = clamped[index - 1] + velocity
     return clamped
 
 
@@ -165,9 +165,11 @@ def _window_for_center(
 ) -> CropWindow:
     max_x = source_width - crop_width
     max_y = source_height - crop_height
-    x = _clamped_even(float(center[0]) - crop_width / 2, max_x)
-    y = _clamped_even(float(center[1]) - crop_height / 2, max_y)
-    return CropWindow(frame_idx, x, y, crop_width, crop_height)
+    cx = float(np.clip(center[0], crop_width / 2, source_width - crop_width / 2))
+    cy = float(np.clip(center[1], crop_height / 2, source_height - crop_height / 2))
+    x = _clamped_even(cx - crop_width / 2, max_x)
+    y = _clamped_even(cy - crop_height / 2, max_y)
+    return CropWindow(frame_idx, x, y, crop_width, crop_height, cx, cy)
 
 
 def _even_floor(value: float) -> int:

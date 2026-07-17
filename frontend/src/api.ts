@@ -45,9 +45,8 @@ export interface TrackJobUpdate {
 }
 
 export interface SmoothingSettings {
-  windowSec: number
-  deadZonePx: number
-  maxVelPxPerFrame: number
+  responsiveness: number
+  maxAccelPxPerFrame2: number
 }
 
 export interface ExportSettings {
@@ -69,6 +68,44 @@ export interface CropPlanResponse {
   videoId: string
   trackJobId: string
   windows: CropWindow[]
+}
+
+export interface LibraryTrack {
+  jobId: string
+  anchorFrameIdx: number
+  box: SourceBox
+  frameCount: number
+  lostCount: number
+  createdAt: string
+}
+
+export interface LibraryExport {
+  exportId: string
+  videoId: string
+  trackJobId: string
+  params: { outWidth?: number; outHeight?: number; [key: string]: unknown }
+  path: string
+  size: number
+  createdAt: string
+  sourceExists: boolean
+}
+
+export interface LibraryVideo {
+  videoId: string
+  name: string
+  sourceKind: 'path' | 'upload'
+  path: string
+  metadata: VideoMetadata
+  size: number
+  openedAt: string | null
+  sourceExists: boolean
+  tracks: LibraryTrack[]
+  exports: LibraryExport[]
+}
+
+export interface LibraryResponse {
+  videos: LibraryVideo[]
+  cacheBytes: number
 }
 
 interface WebSocketLocation {
@@ -222,9 +259,8 @@ export async function fetchCropPlan(
     outWidth: String(settings.outWidth),
     outHeight: String(settings.outHeight),
     zoom: String(settings.zoom),
-    windowSec: String(settings.smoothing.windowSec),
-    deadZonePx: String(settings.smoothing.deadZonePx),
-    maxVelPxPerFrame: String(settings.smoothing.maxVelPxPerFrame),
+    responsiveness: String(settings.smoothing.responsiveness),
+    maxAccelPxPerFrame2: String(settings.smoothing.maxAccelPxPerFrame2),
   })
   const response = await fetch(`/api/export/plan?${query}`, { signal })
   if (!response.ok) {
@@ -251,6 +287,35 @@ export async function startExport(
 
 export function exportDownloadUrl(jobId: string): string {
   return `/api/exports/${encodeURIComponent(jobId)}.mp4`
+}
+
+export async function getLibrary(): Promise<LibraryResponse> {
+  const response = await fetch('/api/library')
+  if (!response.ok) throw new Error(await responseError(response, 'Could not load library'))
+  return (await response.json()) as LibraryResponse
+}
+
+export async function deleteLibraryVideo(videoId: string): Promise<void> {
+  await deleteLibraryItem(`/api/library/videos/${encodeURIComponent(videoId)}`)
+}
+
+export async function deleteLibraryTrack(jobId: string): Promise<void> {
+  await deleteLibraryItem(`/api/library/tracks/${encodeURIComponent(jobId)}`)
+}
+
+export async function deleteLibraryExport(exportId: string): Promise<void> {
+  await deleteLibraryItem(`/api/library/exports/${encodeURIComponent(exportId)}`)
+}
+
+export async function clearFrameCaches(): Promise<{ bytesFreed: number }> {
+  const response = await fetch('/api/library/maintenance/clear-caches', { method: 'POST' })
+  if (!response.ok) throw new Error(await responseError(response, 'Could not clear caches'))
+  return (await response.json()) as { bytesFreed: number }
+}
+
+async function deleteLibraryItem(url: string): Promise<void> {
+  const response = await fetch(url, { method: 'DELETE' })
+  if (!response.ok) throw new Error(await responseError(response, 'Could not delete library item'))
 }
 
 async function responseError(response: Response, fallback: string): Promise<string> {

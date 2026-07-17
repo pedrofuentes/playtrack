@@ -85,10 +85,11 @@ def export_video(
                     if window.frame_idx != frame_index:
                         raise ExportError("Crop plan frame indices must be contiguous")
                     image = decoded.to_ndarray(format="bgr24")
-                    crop = image[
-                        window.y : window.y + window.height,
-                        window.x : window.x + window.width,
-                    ]
+                    crop = cv2.getRectSubPix(
+                        image,
+                        (window.width, window.height),
+                        (float(window.cx), float(window.cy)),
+                    )
                     if crop.shape[:2] != (window.height, window.width):
                         raise ExportError(
                             f"Crop window for frame {frame_index} is outside the source"

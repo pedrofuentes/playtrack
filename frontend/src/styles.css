@@ -232,6 +232,17 @@ h1 {
   font-size: 0.78rem;
 }
 
+.library-panel { display: grid; gap: 0.6rem; padding-bottom: 1rem; border-bottom: 1px solid #343d39; }
+.library-toggle { justify-self: start; padding: 0.45rem 0.75rem; font-size: 0.78rem; }
+.library-content, .library-video, .library-item { display: grid; gap: 0.45rem; }
+.library-video { padding: 0.6rem 0; border-top: 1px solid #28302d; }
+.library-video strong { display: block; font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-video span { color: #8b9a91; font-size: 0.72rem; }
+.library-item { grid-template-columns: minmax(0, 1fr) auto; align-items: center; padding-left: 0.5rem; font-size: 0.72rem; }
+.library-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0.35rem; }
+.library-actions button, .library-content > button { padding: 0.3rem 0.55rem; font-size: 0.68rem; }
+.library-actions a { color: #ffcb66; font-size: 0.7rem; }
+
 .panel-divider {
   display: grid;
   grid-template-columns: 1fr auto 1fr;

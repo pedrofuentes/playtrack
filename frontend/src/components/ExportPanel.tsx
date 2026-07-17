@@ -33,9 +33,8 @@ export function ExportPanel({
   const [outWidth, setOutWidth] = useState(1280)
   const [outHeight, setOutHeight] = useState(720)
   const [zoom, setZoom] = useState(1)
-  const [windowSec, setWindowSec] = useState(0.8)
-  const [deadZonePx, setDeadZonePx] = useState(30)
-  const [maxVelPxPerFrame, setMaxVelPxPerFrame] = useState(28)
+  const [responsiveness, setResponsiveness] = useState(0.5)
+  const [maxAccelPxPerFrame2, setMaxAccelPxPerFrame2] = useState(3)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [exportStarting, setExportStarting] = useState(false)
   const [job, setJob] = useState<TrackJobUpdate | null>(null)
@@ -47,9 +46,9 @@ export function ExportPanel({
       outWidth,
       outHeight,
       zoom,
-      smoothing: { windowSec, deadZonePx, maxVelPxPerFrame },
+      smoothing: { responsiveness, maxAccelPxPerFrame2 },
     }),
-    [deadZonePx, maxVelPxPerFrame, outHeight, outWidth, windowSec, zoom],
+    [maxAccelPxPerFrame2, outHeight, outWidth, responsiveness, zoom],
   )
   const validDimensions =
     outWidth >= 2 && outHeight >= 2 && outWidth % 2 === 0 && outHeight % 2 === 0
@@ -178,33 +177,24 @@ export function ExportPanel({
         </label>
         <div className="smoothing-grid">
           <label>
-            Window (sec)
+            Camera smoothness <output>{responsiveness.toFixed(1)} s</output>
             <input
-              type="number"
-              min={0}
+              type="range"
+              min={0.2}
+              max={1.5}
               step={0.1}
-              value={windowSec}
-              onChange={(event) => setWindowSec(Number(event.target.value))}
+              value={responsiveness}
+              onChange={(event) => setResponsiveness(Number(event.target.value))}
             />
           </label>
           <label>
-            Dead zone (px)
+            Max acceleration (px/frame²)
             <input
               type="number"
-              min={0}
+              min={0.1}
               step={1}
-              value={deadZonePx}
-              onChange={(event) => setDeadZonePx(Number(event.target.value))}
-            />
-          </label>
-          <label>
-            Max speed (px/frame)
-            <input
-              type="number"
-              min={1}
-              step={1}
-              value={maxVelPxPerFrame}
-              onChange={(event) => setMaxVelPxPerFrame(Number(event.target.value))}
+              value={maxAccelPxPerFrame2}
+              onChange={(event) => setMaxAccelPxPerFrame2(Number(event.target.value))}
             />
           </label>
         </div>
