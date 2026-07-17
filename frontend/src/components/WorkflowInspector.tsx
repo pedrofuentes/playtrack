@@ -23,7 +23,9 @@ interface WorkflowInspectorProps {
   trackJob: TrackJobUpdate | null
   trackMessage: string | null
   trackError: string | null
+  trackStarting: boolean
   trackStartedAt: number | null
+  trackFrameCount: number
   health: TrackHealthSummary | null
   onTextSelect: (prompt: string) => void
   onPlayerNameChange: (name: string) => void
@@ -71,6 +73,7 @@ function SelectionInspector({
   onPlayerNameChange,
   onTrack,
   onResetSelection,
+  trackStarting,
 }: WorkflowInspectorProps) {
   const [prompt, setPrompt] = useState('')
   const [method, setMethod] = useState<'click' | 'describe'>('click')
@@ -145,12 +148,13 @@ function SelectionInspector({
               type="text"
               maxLength={80}
               value={playerName}
+              disabled={trackStarting}
               placeholder="Player 1"
               onChange={(event) => onPlayerNameChange(event.target.value)}
             />
           </label>
-          <button type="button" className="primary-action" onClick={onTrack}>Track player</button>
-          <button type="button" className="secondary-action" onClick={onResetSelection}>Choose a different player</button>
+          <button type="button" className="primary-action" disabled={trackStarting} onClick={onTrack}>Track player</button>
+          <button type="button" className="secondary-action" disabled={trackStarting} onClick={onResetSelection}>Choose a different player</button>
         </>
       )}
     </div>
@@ -158,7 +162,7 @@ function SelectionInspector({
 }
 
 function TrackingInspector({
-  video,
+  trackFrameCount,
   trackJob,
   trackMessage,
   trackError,
@@ -168,12 +172,12 @@ function TrackingInspector({
   const active = trackJob?.state === 'queued' || trackJob?.state === 'running'
   const elapsed = useElapsedSeconds(trackStartedAt, active)
   const progress = trackJob?.progress ?? 0
-  const processed = Math.min(video.nbFrames, Math.round(progress * video.nbFrames))
+  const processed = Math.min(trackFrameCount, Math.round(progress * trackFrameCount))
 
   return (
     <div className="inspector-body">
       <p className="section-label">SAM 2 propagation</p>
-      <h3>{trackJob?.state === 'failed' ? 'Tracking stopped' : `${processed} of ${video.nbFrames} frames`}</h3>
+      <h3>{trackJob?.state === 'failed' ? 'Tracking stopped' : `${processed} of ${trackFrameCount} frames`}</h3>
       <div className="job-progress-copy">
         <strong>{Math.round(progress * 100)}%</strong>
         {elapsed !== null && <span>{formatElapsed(elapsed)} elapsed</span>}

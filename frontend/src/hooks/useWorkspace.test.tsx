@@ -37,6 +37,50 @@ const video: VideoMetadata = {
 
 let controller: WorkspaceController | null = null
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((onResolve, onReject) => {
+    resolve = onResolve
+    reject = onReject
+  })
+  return { promise, resolve, reject }
+}
+
+function savedPlayerFixture() {
+  const player: LibraryTrack = {
+    jobId: 'saved-track',
+    name: 'White 19',
+    anchorFrameIdx: 42,
+    box: [10, 20, 30, 60],
+    startFrameIdx: 30,
+    endFrameExclusive: 90,
+    frameCount: 60,
+    lostCount: 0,
+    createdAt: '2026-07-17T00:00:00Z',
+  }
+  const saved: LibraryVideo = {
+    videoId: 'saved-video',
+    name: 'saved.mp4',
+    sourceKind: 'path',
+    path: '/saved.mp4',
+    metadata: { ...video, videoId: 'saved-video', name: 'saved.mp4' },
+    size: 100,
+    openedAt: '2026-07-17T00:00:00Z',
+    sourceExists: true,
+    tracks: [player],
+    exports: [],
+  }
+  const track: TrackJobUpdate = {
+    jobId: player.jobId,
+    state: 'completed',
+    progress: 1,
+    message: 'Tracking complete',
+    track: [{ frameIdx: 42, box: player.box, center: [20, 40], lost: false }],
+  }
+  return { player, saved, track }
+}
+
 function Harness() {
   controller = useWorkspace()
   return null
@@ -232,6 +276,142 @@ describe('useWorkspace', () => {
       resolveStart?.({ jobId: 'track-1', playerName: 'White 19' })
       await starting
     })
+    await act(async () => root.unmount())
+  })
+
+  it('submits one tracking job and blocks destructive workspace actions while starting', async () => {
+    const pending = deferred<{ jobId: string; playerName: string }>()
+    apiMocks.startTracking.mockReturnValue(pending.promise)
+    const root = await mountController()
+    await act(async () => {
+      controller?.selectAt({ x: 10, y: 20 }, 20)
+      await Promise.resolve()
+    })
+    apiMocks.registerVideo.mockClear()
+
+    let first: Promise<void> | undefined
+    let second: Promise<void> | undefined
+    act(() => {
+      first = controller?.startTrack()
+      second = controller?.startTrack()
+      controller?.resetSelection()
+      controller?.setRange({ startFrameIdx: 10, endFrameExclusive: 100 })
+      void controller?.openPath('/other.mp4')
+    })
+
+    expect(apiMocks.startTracking).toHaveBeenCalledOnce()
+    expect(apiMocks.registerVideo).not.toHaveBeenCalled()
+    expect(controller?.selection).not.toBeNull()
+    expect(controller?.range).toEqual({ startFrameIdx: 0, endFrameExclusive: 930 })
+
+    await act(async () => {
+      pending.resolve({ jobId: 'track-1', playerName: 'White 19' })
+      await Promise.all([first, second])
+    })
+    expect(controller?.trackJob?.jobId).toBe('track-1')
+    await act(async () => root.unmount())
+  })
+
+  it('unlocks cleanly after tracking submission fails', async () => {
+    const pending = deferred<{ jobId: string; playerName: string }>()
+    apiMocks.startTracking.mockReturnValueOnce(pending.promise)
+    const root = await mountController()
+    await act(async () => {
+      controller?.selectAt({ x: 10, y: 20 }, 20)
+      await Promise.resolve()
+    })
+
+    let starting: Promise<void> | undefined
+    act(() => { starting = controller?.startTrack() })
+    await act(async () => {
+      pending.reject(new Error('Queue unavailable'))
+      await starting
+    })
+    expect(controller?.trackStarting).toBe(false)
+    expect(controller?.videoSwitchLocked).toBe(false)
+    expect(controller?.selection).not.toBeNull()
+    expect(controller?.trackError).toBe('Queue unavailable')
+
+    await act(async () => { await controller?.startTrack() })
+    expect(apiMocks.startTracking).toHaveBeenCalledTimes(2)
+    await act(async () => root.unmount())
+  })
+
+  it('ignores a stale saved-player completion after a newer path open commits', async () => {
+    const restore = deferred<TrackJobUpdate>()
+    const registration = deferred<VideoMetadata>()
+    const { player, saved, track } = savedPlayerFixture()
+    const root = await mountController()
+    apiMocks.getTrack.mockClear()
+    apiMocks.registerVideo.mockClear()
+    apiMocks.getTrack.mockReturnValueOnce(restore.promise)
+    apiMocks.registerVideo.mockReturnValueOnce(registration.promise)
+
+    let playerOpen: Promise<boolean> | undefined
+    let pathOpen: Promise<void> | undefined
+    act(() => {
+      playerOpen = controller?.openLibraryPlayer(saved, player)
+      pathOpen = controller?.openPath('/new.mp4')
+    })
+    expect(apiMocks.getTrack).toHaveBeenCalledOnce()
+    expect(apiMocks.registerVideo).toHaveBeenCalledOnce()
+    expect(playerOpen).toBeDefined()
+    expect(pathOpen).toBeDefined()
+    expect(controller?.loading).toBe(true)
+
+    const newerVideo = { ...video, videoId: 'new-video', name: 'new.mp4' }
+    await act(async () => {
+      registration.resolve(newerVideo)
+      await pathOpen
+    })
+    expect(controller?.video?.videoId).toBe('new-video')
+
+    await act(async () => {
+      restore.resolve(track)
+      await expect(playerOpen).resolves.toBe(false)
+    })
+    expect(controller?.video?.videoId).toBe('new-video')
+    expect(controller?.trackJob).toBeNull()
+    expect(controller?.loading).toBe(false)
+    await act(async () => root.unmount())
+  })
+
+  it('ignores a stale path completion while a newer saved-player restore is pending', async () => {
+    const registration = deferred<VideoMetadata>()
+    const restore = deferred<TrackJobUpdate>()
+    const { player, saved, track } = savedPlayerFixture()
+    const root = await mountController()
+    apiMocks.registerVideo.mockClear()
+    apiMocks.getTrack.mockClear()
+    apiMocks.registerVideo.mockReturnValueOnce(registration.promise)
+    apiMocks.getTrack.mockReturnValueOnce(restore.promise)
+
+    let pathOpen: Promise<void> | undefined
+    let playerOpen: Promise<boolean> | undefined
+    act(() => {
+      pathOpen = controller?.openPath('/old.mp4')
+      playerOpen = controller?.openLibraryPlayer(saved, player)
+    })
+    expect(apiMocks.registerVideo).toHaveBeenCalledOnce()
+    expect(apiMocks.getTrack).toHaveBeenCalledOnce()
+    expect(pathOpen).toBeDefined()
+    expect(playerOpen).toBeDefined()
+    expect(controller?.loading).toBe(true)
+
+    await act(async () => {
+      registration.resolve({ ...video, videoId: 'stale-video', name: 'old.mp4' })
+      await pathOpen
+    })
+    expect(controller?.video?.videoId).toBe(video.videoId)
+    expect(controller?.loading).toBe(true)
+
+    await act(async () => {
+      restore.resolve(track)
+      await expect(playerOpen).resolves.toBe(true)
+    })
+    expect(controller?.video?.videoId).toBe(saved.videoId)
+    expect(controller?.trackJob).toEqual(track)
+    expect(controller?.loading).toBe(false)
     await act(async () => root.unmount())
   })
 

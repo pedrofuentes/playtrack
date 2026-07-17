@@ -330,3 +330,56 @@ it('calculates track coverage over the selected range', async () => {
   const markup = renderToStaticMarkup(createElement(App))
   expect(markup).toContain('50% coverage')
 })
+
+it('reports tracking progress over the selected range', () => {
+  appMocks.workspace = openedWorkspace({
+    video: {
+      videoId: 'video-1', name: 'game.mp4', width: 400, height: 200,
+      fps: 30, nbFrames: 930, duration: 31,
+    },
+    range: { startFrameIdx: 100, endFrameExclusive: 200 },
+    stage: 'track',
+    trackJob: {
+      jobId: 'track-1',
+      state: 'running',
+      progress: 0.5,
+      message: 'tracking',
+      track: [],
+    },
+  })
+
+  const markup = renderToStaticMarkup(createElement(App))
+  expect(markup).toContain('50 of 100 frames')
+})
+
+it('disables Library opens while any workspace open is loading', async () => {
+  const saved = {
+    videoId: 'saved-video',
+    name: 'saved.mp4',
+    sourceKind: 'path',
+    path: '/saved.mp4',
+    metadata: {
+      videoId: 'saved-video', name: 'saved.mp4', width: 400, height: 200,
+      fps: 30, nbFrames: 90, duration: 3,
+    },
+    size: 100,
+    openedAt: null,
+    sourceExists: true,
+    tracks: [],
+    exports: [],
+  }
+  appMocks.workspace = openedWorkspace({
+    loading: true,
+    library: { videos: [saved], cacheBytes: 0 },
+  })
+  const container = document.createElement('div')
+  const root = createRoot(container)
+
+  await act(async () => root.render(createElement(App)))
+  await act(async () => container.querySelector<HTMLButtonElement>('button[title="Library"]')?.click())
+
+  const openSource = [...container.querySelectorAll('button')]
+    .find((item) => item.textContent === 'Open')
+  expect(openSource?.disabled).toBe(true)
+  await act(async () => root.unmount())
+})

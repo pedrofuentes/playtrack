@@ -22,7 +22,9 @@ const common = {
   trackJob: null,
   trackMessage: null,
   trackError: null,
+  trackStarting: false,
   trackStartedAt: null,
+  trackFrameCount: 930,
   health: null,
   onTextSelect: vi.fn(),
   onPlayerNameChange: vi.fn(),
@@ -78,6 +80,34 @@ describe('WorkflowInspector', () => {
     )
     expect(failed).toContain('Out of memory')
     expect(failed).toContain('Retry tracking')
+  })
+
+  it('uses the selected range count for tracking progress', () => {
+    const running = renderToStaticMarkup(
+      <WorkflowInspector
+        {...common}
+        stage="track"
+        selection={selection}
+        trackFrameCount={100}
+        trackJob={job('running', 0.5)}
+      />,
+    )
+    expect(running).toContain('50 of 100 frames')
+    expect(running).not.toContain('465 of 930 frames')
+  })
+
+  it('disables selection mutation controls while tracking is starting', () => {
+    const starting = renderToStaticMarkup(
+      <WorkflowInspector
+        {...common}
+        stage="select"
+        selection={selection}
+        trackStarting
+      />,
+    )
+    expect(starting).toMatch(/<input[^>]*type="text"[^>]*disabled=""/)
+    expect(starting).toMatch(/<button[^>]*disabled=""[^>]*>Track player<\/button>/)
+    expect(starting).toMatch(/<button[^>]*disabled=""[^>]*>Choose a different player<\/button>/)
   })
 
   it('summarizes review ranges and renders export alone in export state', () => {

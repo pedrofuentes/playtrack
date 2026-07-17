@@ -111,7 +111,9 @@ export default function App() {
       trackJob={workspace.trackJob}
       trackMessage={workspace.trackMessage}
       trackError={workspace.trackError}
+      trackStarting={workspace.trackStarting}
       trackStartedAt={workspace.trackStartedAt}
+      trackFrameCount={frameRangeCount(workspace.range)}
       health={health}
       onTextSelect={(prompt) => {
         videoStageRef.current?.pause()
@@ -182,7 +184,7 @@ export default function App() {
           />
           <LibraryPanel
             library={workspace.library}
-            openingDisabled={workspace.videoSwitchLocked}
+            openingDisabled={workspace.loading || workspace.videoSwitchLocked}
             onOpenVideo={(saved) => {
               void workspace.openLibraryVideo(saved)
               setSurface('editor')

@@ -113,6 +113,7 @@ export function useWorkspace(): WorkspaceController {
   const [exportJob, setExportJobState] = useState<TrackJobUpdate | null>(null)
   const selectionRequest = useRef<AbortController | null>(null)
   const trackSocket = useRef<WebSocket | null>(null)
+  const openGeneration = useRef(0)
   const rangeRef = useRef(range)
   rangeRef.current = range
   const trackStartingRef = useRef(trackStarting)
@@ -157,7 +158,8 @@ export function useWorkspace(): WorkspaceController {
     activity: string,
     savedName?: string,
   ) => {
-    if (videoSwitchLockedRef.current) return
+    if (trackStartingRef.current || videoSwitchLockedRef.current) return
+    const generation = ++openGeneration.current
     selectionRequest.current?.abort()
     selectionRequest.current = null
     clearDownstreamState()
@@ -175,15 +177,17 @@ export function useWorkspace(): WorkspaceController {
     setCandidateFrame(null)
     try {
       const registered = await register()
+      if (generation !== openGeneration.current) return
       setVideo(registered)
       setVideoName(savedName ?? registered.name)
       setRangeState({ startFrameIdx: 0, endFrameExclusive: registered.nbFrames })
     } catch (reason) {
+      if (generation !== openGeneration.current) return
       setVideo(null)
       setVideoName(null)
       setOpenError(reason instanceof Error ? reason.message : `Could not open ${fallbackName}`)
     } finally {
-      setLoading(false)
+      if (generation === openGeneration.current) setLoading(false)
     }
   }, [clearDownstreamState])
 
@@ -214,45 +218,55 @@ export function useWorkspace(): WorkspaceController {
     saved: LibraryVideo,
     player: LibraryTrack,
   ): Promise<boolean> => {
-    if (videoSwitchLockedRef.current) return false
+    if (trackStartingRef.current || videoSwitchLockedRef.current) return false
     if (!saved.sourceExists) throw new Error('Source video is missing')
-    const restored = await getTrack(player.jobId)
-    if (restored.state !== 'completed') {
-      throw new Error('Saved player track is not complete')
-    }
-    const restoredRange = normalizeFrameRange({
-      startFrameIdx: player.startFrameIdx ?? 0,
-      endFrameExclusive: player.endFrameExclusive ?? saved.metadata.nbFrames,
-    }, saved.metadata.nbFrames)
-    if (!containsFrame(restoredRange, player.anchorFrameIdx)) {
-      throw new Error('Saved player anchor is outside its tracked range')
-    }
-
-    selectionRequest.current?.abort()
-    selectionRequest.current = null
-    clearDownstreamState()
-    setLoading(false)
+    const generation = ++openGeneration.current
+    setLoading(true)
+    setLoadingLabel(`Opening ${player.name}…`)
     setOpenError(null)
-    setVideo(saved.metadata)
-    setVideoName(saved.name)
-    setCurrentFrameState(player.anchorFrameIdx)
-    setRangeState(restoredRange)
-    setAnchorFrame(player.anchorFrameIdx)
-    setSelection(null)
-    setSelectionKind('click')
-    setSelectionLoading(false)
-    setSelectionError(null)
-    setCandidates([])
-    setCandidateFrame(null)
-    setPlayerName(player.name)
-    setTrackJob(restored)
-    setTrackMessage(restored.message)
-    setTrackError(null)
-    setTrackStartedAt(null)
-    setCropWindowsState([])
-    setFraming(false)
-    setExportJobState(null)
-    return true
+    try {
+      const restored = await getTrack(player.jobId)
+      if (generation !== openGeneration.current) return false
+      if (restored.state !== 'completed') {
+        throw new Error('Saved player track is not complete')
+      }
+      const restoredRange = normalizeFrameRange({
+        startFrameIdx: player.startFrameIdx ?? 0,
+        endFrameExclusive: player.endFrameExclusive ?? saved.metadata.nbFrames,
+      }, saved.metadata.nbFrames)
+      if (!containsFrame(restoredRange, player.anchorFrameIdx)) {
+        throw new Error('Saved player anchor is outside its tracked range')
+      }
+
+      selectionRequest.current?.abort()
+      selectionRequest.current = null
+      clearDownstreamState()
+      setVideo(saved.metadata)
+      setVideoName(saved.name)
+      setCurrentFrameState(player.anchorFrameIdx)
+      setRangeState(restoredRange)
+      setAnchorFrame(player.anchorFrameIdx)
+      setSelection(null)
+      setSelectionKind('click')
+      setSelectionLoading(false)
+      setSelectionError(null)
+      setCandidates([])
+      setCandidateFrame(null)
+      setPlayerName(player.name)
+      setTrackJob(restored)
+      setTrackMessage(restored.message)
+      setTrackError(null)
+      setTrackStartedAt(null)
+      setCropWindowsState([])
+      setFraming(false)
+      setExportJobState(null)
+      return true
+    } catch (reason) {
+      if (generation !== openGeneration.current) return false
+      throw reason
+    } finally {
+      if (generation === openGeneration.current) setLoading(false)
+    }
   }, [clearDownstreamState])
 
   useEffect(() => {
@@ -266,6 +280,7 @@ export function useWorkspace(): WorkspaceController {
   }, [openPath, refreshLibrary])
 
   useEffect(() => () => {
+    openGeneration.current += 1
     selectionRequest.current?.abort()
     trackSocket.current?.close()
   }, [])
@@ -389,7 +404,7 @@ export function useWorkspace(): WorkspaceController {
 
   const startTrack = useCallback(async () => {
     if (
-      !video || !selection || anchorFrame === null
+      trackStartingRef.current || !video || !selection || anchorFrame === null
       || !containsFrame(rangeRef.current, anchorFrame)
     ) return
     trackSocket.current?.close()
@@ -444,6 +459,7 @@ export function useWorkspace(): WorkspaceController {
   }, [anchorFrame, playerName, refreshLibrary, selection, video])
 
   const resetSelection = useCallback(() => {
+    if (trackStartingRef.current) return
     clearSelectionState()
     clearDownstreamState()
   }, [clearDownstreamState, clearSelectionState])
