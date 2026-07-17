@@ -173,9 +173,16 @@ def download_filename(
     timestamp = _download_timestamp(created_at)
     short_id = _download_short_id(export_id)
     suffix = f"-{resolution}-{timestamp}-{short_id}.mp4"
-    prefix = f"{source}-{player}"
-    prefix = prefix[: 180 - len(suffix)].rstrip("-")
-    return f"{prefix}{suffix}"
+    segment_budget = 180 - len(suffix) - 1
+    source_length = min(len(source), (segment_budget + 1) // 2)
+    player_length = min(len(player), segment_budget - source_length)
+    remaining = segment_budget - source_length - player_length
+    source_length += min(remaining, len(source) - source_length)
+    remaining = segment_budget - source_length - player_length
+    player_length += min(remaining, len(player) - player_length)
+    source_segment = source[:source_length].rstrip("-")
+    player_segment = player[:player_length].rstrip("-")
+    return f"{source_segment}-{player_segment}{suffix}"
 
 
 def _filename_segment(value: object, fallback: str) -> str:

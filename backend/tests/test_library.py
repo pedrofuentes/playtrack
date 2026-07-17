@@ -428,6 +428,51 @@ def test_library_allocates_persists_and_renames_player_names(tmp_path: Path) -> 
     }
 
 
+def test_library_keeps_legacy_player_names_over_80_characters(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    record = store.register_path(tiny_video, "Game")
+    legacy_name = f"Legacy Player {'x' * 80}"
+    track_job_id = "legacy-track"
+    store.library.save_track(
+        record.video_id,
+        track_job_id,
+        0,
+        (10, 10, 30, 30),
+        _track(),
+        name=legacy_name,
+    )
+    export_id = "legacy-export-a1b2c3"
+    exports_dir = tmp_path / "exports"
+    exports_dir.mkdir()
+    exported = exports_dir / f"{export_id}.mp4"
+    exported.write_bytes(b"fake-mp4")
+    store.library.save_export(
+        export_id,
+        record.video_id,
+        track_job_id,
+        {"outWidth": 128, "outHeight": 72},
+        exported,
+    )
+    jobs = JobRegistry()
+    jobs.restore_completed(export_id, [])
+
+    saved = store.library.iter_tracks()
+    with TestClient(
+        create_app(store, job_registry=jobs, exports_dir=exports_dir)
+    ) as client:
+        listing = client.get("/api/library")
+        downloaded = client.get(f"/api/exports/{export_id}.mp4")
+
+    assert len(saved) == 1
+    assert saved[0].name == legacy_name
+    assert listing.json()["videos"][0]["tracks"][0]["name"] == legacy_name
+    assert downloaded.headers["content-disposition"].startswith(
+        'attachment; filename="game-legacy-player-'
+    )
+
+
 def test_library_backfills_legacy_track_names_in_stable_order(tmp_path: Path) -> None:
     library = LibraryStore(tmp_path / "data")
     library.save_track("video-1", "later", 0, (10, 10, 30, 30), _track())

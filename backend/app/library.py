@@ -193,7 +193,11 @@ class LibraryStore:
                         box=tuple(int(value) for value in raw["box"]),  # type: ignore[arg-type]
                         track=frames,
                         created_at=str(raw["createdAt"]),
-                        name=_clean_name(raw.get("name"), label="Player name"),
+                        name=_clean_name(
+                            raw.get("name"),
+                            label="Player name",
+                            validate_length=False,
+                        ),
                     )
                 )
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:

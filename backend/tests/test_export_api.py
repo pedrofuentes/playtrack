@@ -232,12 +232,25 @@ def test_download_filename_uses_legacy_fallbacks_and_preserves_suffix_when_cappe
         "2026-07-17T14:30:22+00:00",
         "x",
     )
+    balanced_prefix = main_module.download_filename(
+        "A" * 200,
+        "White 19",
+        1920,
+        1080,
+        "2026-07-17T14:30:22+00:00",
+        "export-abc123",
+    )
 
     assert legacy == "source-player-video-20260717-143022-123xyz.mp4"
     assert len(capped) <= 180
     assert capped.endswith("-1920x1080-20260717-143022-abc123.mp4")
     assert invalid_dimensions == "source-player-video-20260717-143022-abc123.mp4"
     assert short_id == "source-player-128x72-20260717-143022-2d7116.mp4"
+    assert len(balanced_prefix) <= 180
+    assert balanced_prefix.startswith("a")
+    assert balanced_prefix.endswith(
+        "-white-19-1920x1080-20260717-143022-abc123.mp4"
+    )
 
 
 def test_export_download_disposition_falls_back_for_legacy_catalog(

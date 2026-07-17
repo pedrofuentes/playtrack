@@ -191,6 +191,69 @@ def test_video_rename_catalog_failure_preserves_memory_and_catalog(
     assert store.library.videos()[0]["name"] == "Original"
 
 
+def test_registration_and_rename_share_one_catalog_transaction_lock(
+    tmp_path: Path,
+    tiny_video: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    original = store.register_path(tiny_video, "Original")
+    second_path = tiny_video.with_name("second.mp4")
+    shutil.copyfile(tiny_video, second_path)
+    original_write = store.library._write_list
+    original_probe = store._probe_video
+    rendezvous = threading.Barrier(2)
+    registered_written = threading.Event()
+    probe_reached = threading.Event()
+    release_probe = threading.Event()
+    rename_write_reached = threading.Event()
+
+    def synchronized_probe(path: Path) -> object:
+        if path == second_path:
+            probe_reached.set()
+            assert release_probe.wait(timeout=3)
+        return original_probe(path)
+
+    def synchronized_write(
+        path: Path, entries: list[dict[str, object]]
+    ) -> None:
+        if path != store.library.videos_path:
+            original_write(path, entries)
+            return
+        try:
+            if len(entries) == 1:
+                rename_write_reached.set()
+            rendezvous.wait(timeout=2)
+        except threading.BrokenBarrierError:
+            original_write(path, entries)
+            return
+        if len(entries) == 2:
+            original_write(path, entries)
+            registered_written.set()
+        else:
+            assert registered_written.wait(timeout=1)
+            original_write(path, entries)
+
+    monkeypatch.setattr(store.library, "_write_list", synchronized_write)
+    monkeypatch.setattr(store, "_probe_video", synchronized_probe)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        registered_future = pool.submit(store.register_path, second_path, "Second")
+        assert probe_reached.wait(timeout=1)
+        renamed_future = pool.submit(store.rename, original.video_id, "Renamed")
+        assert rename_write_reached.wait(timeout=1)
+        release_probe.set()
+        registered = registered_future.result(timeout=8)
+        renamed_future.result(timeout=8)
+
+    catalog = {item["videoId"]: item["name"] for item in store.library.videos()}
+    memory = {record.video_id: record.name for record in store.records()}
+    assert catalog == memory == {
+        original.video_id: "Renamed",
+        registered.video_id: "Second",
+    }
+
+
 def test_reuses_canonical_path_registration(
     tmp_path: Path, tiny_video: Path
 ) -> None:
