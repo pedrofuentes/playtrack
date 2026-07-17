@@ -8,6 +8,7 @@ import pytest
 
 av = pytest.importorskip("av", reason="PyAV dependency is not installed")
 
+import app.exporter as exporter_module
 from app.crop_planner import CropWindow
 from app.exporter import ExportError, export_video
 
@@ -188,11 +189,19 @@ def test_exports_subpixel_crop_windows_without_changing_output_shape(
 
 
 def test_exports_subrange_and_trims_audio_to_matching_rebased_interval(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = tmp_path / "source-with-audio.mp4"
     destination = tmp_path / "subrange.mp4"
     _write_synthetic_video_with_audio(source)
+    silence_calls: list[int] = []
+    real_silence = exporter_module._silence_audio_frame_like
+
+    def track_silence(frame: object, sample_count: int) -> object:
+        silence_calls.append(sample_count)
+        return real_silence(frame, sample_count)
+
+    monkeypatch.setattr(exporter_module, "_silence_audio_frame_like", track_silence)
     source_start_frame = 9
     windows = [
         CropWindow(frame_idx=index, x=0, y=0, width=96, height=64)
@@ -247,6 +256,11 @@ def test_exports_subrange_and_trims_audio_to_matching_rebased_interval(
         audio_samples[round(1.91 * sample_rate) : round(1.99 * sample_rate)],
         sample_rate,
     ) == pytest.approx(613, abs=20)
+    final_tail = audio_samples[
+        round(1.985 * sample_rate) : round(1.998 * sample_rate)
+    ]
+    assert float(np.sqrt(np.mean(np.square(final_tail)))) > 0.05
+    assert silence_calls == []
 
 
 def test_exports_partial_range_without_audio(tmp_path: Path) -> None:
@@ -314,7 +328,9 @@ def test_rejects_incomplete_partial_audio_and_removes_temporary_output(
 def test_full_range_export_stream_copies_audio_packets(tmp_path: Path) -> None:
     source = tmp_path / "full-source.mp4"
     destination = tmp_path / "full-export.mp4"
-    _write_synthetic_video_with_audio(source, frame_count=8)
+    _write_synthetic_video_with_audio(
+        source, frame_count=8, audio_end_seconds=2.0
+    )
     windows = [
         CropWindow(frame_idx=index, x=0, y=0, width=96, height=64)
         for index in range(8)
@@ -405,7 +421,7 @@ def test_accepts_codec_frame_audio_boundary_mismatch_with_zero_based_pts(
     destination = tmp_path / "codec-boundary-export.mp4"
     _write_synthetic_video_with_audio(
         source,
-        audio_gap_seconds=(1, 1 + 512 / 48_000),
+        audio_end_seconds=3 - 512 / 48_000,
     )
     windows = [
         CropWindow(frame_idx=index, x=0, y=0, width=96, height=64)
@@ -430,3 +446,28 @@ def test_accepts_codec_frame_audio_boundary_mismatch_with_zero_based_pts(
     assert sum(frame.samples for frame in frames) / stream.rate == pytest.approx(
         2.0, abs=1_024 / 48_000
     )
+
+
+def test_rejects_small_internal_audio_dropout(tmp_path: Path) -> None:
+    source = tmp_path / "small-gap-source.mp4"
+    destination = tmp_path / "small-gap-export.mp4"
+    _write_synthetic_video_with_audio(
+        source,
+        audio_gap_seconds=(1.75, 1.75 + 512 / 48_000),
+    )
+    windows = [
+        CropWindow(frame_idx=index, x=0, y=0, width=96, height=64)
+        for index in range(16)
+    ]
+
+    with pytest.raises(ExportError, match="audio.*selected interval"):
+        export_video(
+            source,
+            destination,
+            windows,
+            output_width=96,
+            output_height=64,
+            fps=8.0,
+            source_start_frame=8,
+            source_total_frames=32,
+        )

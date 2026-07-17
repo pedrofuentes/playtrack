@@ -114,6 +114,7 @@ def export_video(
                     backward=True,
                     any_frame=False,
                 )
+            demux_exhausted = False
             for packet in source.demux(streams):
                 if input_audio is not None and packet.stream.index == input_audio.index:
                     if copy_audio and output_audio is not None and packet.dts is not None:
@@ -151,6 +152,8 @@ def export_video(
                             if overlap_start > audio_coverage_end + tolerance:
                                 boundary_gap = overlap_start - audio_coverage_end
                                 if (
+                                    audio_output_end_pts is None
+                                    and
                                     boundary_gap
                                     <= Fraction(audio_codec_frame_samples, sample_rate)
                                 ):
@@ -234,10 +237,7 @@ def export_video(
                             for encoded in output_audio.encode(trimmed):
                                 output.mux(encoded)
                     if output_frame_index >= len(windows) and (
-                        copy_audio
-                        or audio_coverage_end
-                        >= audio_end
-                        - Fraction(audio_codec_frame_samples, decoded_audio_rate or 1)
+                        not copy_audio and audio_coverage_end >= audio_end
                     ):
                         break
                     continue
@@ -290,6 +290,8 @@ def export_video(
                         )
                 if output_frame_index >= len(windows) and input_audio is None:
                     break
+            else:
+                demux_exhausted = True
 
             for encoded in output_video.encode():
                 output.mux(encoded)
@@ -311,6 +313,7 @@ def export_video(
                 if (
                     0 < missing_end_samples <= audio_codec_frame_samples
                     and audio_frame_template is not None
+                    and demux_exhausted
                 ):
                     silence = _silence_audio_frame_like(
                         audio_frame_template, missing_end_samples
