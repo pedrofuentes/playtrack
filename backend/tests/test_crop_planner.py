@@ -154,3 +154,80 @@ def test_float_centers_are_edge_clamped_while_preview_windows_stay_even() -> Non
     assert windows[-1].cx == 1000 - windows[-1].width / 2
     assert windows[-1].cy == 600 - windows[-1].height / 2
     assert all(window.x % 2 == window.y % 2 == 0 for window in windows)
+
+
+def test_adaptive_crop_keeps_fast_player_box_visible() -> None:
+    centers = [(500.0, 700.0)] * 12 + [(2500.0, 700.0)] * 40
+    boxes = [
+        (460.0, 640.0, 540.0, 760.0) if index < 12
+        else (2460.0, 640.0, 2540.0, 760.0)
+        for index in range(len(centers))
+    ]
+
+    windows = plan_crop_windows(
+        centers,
+        boxes=boxes,
+        source_width=4096,
+        source_height=1024,
+        output_width=1280,
+        output_height=720,
+        fps=30,
+        zoom=3.4,
+        smoothing=SmoothingOptions(responsiveness=1.2, max_acceleration=3),
+    )
+
+    for window, box in zip(windows, boxes, strict=True):
+        x1, y1, x2, y2 = box
+        assert window.x <= x1 <= x2 <= window.x + window.width
+        assert window.y <= y1 <= y2 <= window.y + window.height
+
+
+def test_adaptive_crop_widens_immediately_and_returns_slowly() -> None:
+    centers = [(500.0, 500.0)] * 5 + [(1800.0, 500.0)] + [(500.0, 500.0)] * 180
+    boxes = [(center[0] - 40, 440.0, center[0] + 40, 560.0) for center in centers]
+
+    windows = plan_crop_windows(
+        centers,
+        boxes=boxes,
+        source_width=2400,
+        source_height=1350,
+        output_width=1280,
+        output_height=720,
+        fps=30,
+        zoom=4,
+        smoothing=SmoothingOptions(responsiveness=1.2, max_acceleration=9999),
+    )
+
+    target_width = windows[0].width
+    widened_width = windows[5].width
+    assert widened_width > target_width
+    assert target_width < windows[6].width <= widened_width
+    assert windows[-1].width < windows[6].width
+    assert windows[-1].width <= target_width + 4
+
+
+def test_adaptive_crop_holds_safe_scale_while_track_is_lost() -> None:
+    centers = [(500.0, 500.0), (1800.0, 500.0), None, None, (500.0, 500.0)]
+    boxes = [
+        (460.0, 440.0, 540.0, 560.0),
+        (1760.0, 440.0, 1840.0, 560.0),
+        None,
+        None,
+        (460.0, 440.0, 540.0, 560.0),
+    ]
+
+    windows = plan_crop_windows(
+        centers,
+        boxes=boxes,
+        source_width=2400,
+        source_height=1350,
+        output_width=1280,
+        output_height=720,
+        fps=30,
+        zoom=4,
+        smoothing=SmoothingOptions(responsiveness=1.2, max_acceleration=9999),
+    )
+
+    assert windows[2].width == windows[1].width
+    assert windows[3].width == windows[1].width
+    assert all(window.width % 2 == window.height % 2 == 0 for window in windows)

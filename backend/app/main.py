@@ -459,6 +459,9 @@ def create_app(
         centers: list[tuple[float, float] | None] = [
             None
         ] * record.metadata.nb_frames
+        boxes: list[tuple[float, float, float, float] | None] = [
+            None
+        ] * record.metadata.nb_frames
         for frame in track_snapshot.track:
             if (
                 0 <= frame.frame_idx < len(centers)
@@ -466,9 +469,12 @@ def create_app(
                 and frame.center is not None
             ):
                 centers[frame.frame_idx] = frame.center
+                if frame.box is not None:
+                    boxes[frame.frame_idx] = tuple(float(value) for value in frame.box)
         try:
             windows = plan_crop_windows(
                 centers,
+                boxes=boxes,
                 source_width=record.metadata.width,
                 source_height=record.metadata.height,
                 output_width=out_width,
