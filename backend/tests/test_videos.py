@@ -358,6 +358,34 @@ def test_reuses_canonical_path_registration(
     assert len(store.records()) == 1
 
 
+def test_concurrent_canonical_path_registrations_commit_one_source(
+    tmp_path: Path,
+    tiny_video: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    original_probe = store._probe_video
+    probe_rendezvous = threading.Barrier(2)
+
+    def synchronized_probe(path: Path) -> object:
+        probe_rendezvous.wait(timeout=3)
+        return original_probe(path)
+
+    monkeypatch.setattr(store, "_probe_video", synchronized_probe)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        records = list(
+            pool.map(
+                store.register_path,
+                (tiny_video, tiny_video.resolve()),
+            )
+        )
+
+    assert records[0].video_id == records[1].video_id
+    assert len(store.library.videos()) == 1
+    assert len(store.records()) == 1
+
+
 def test_discards_duplicate_uploaded_content(
     tmp_path: Path, tiny_video: Path
 ) -> None:
@@ -370,6 +398,60 @@ def test_discards_duplicate_uploaded_content(
 
     assert second.video_id == first.video_id
     assert list(store.upload_dir.iterdir()) == [first.path]
+
+
+def test_concurrent_identical_uploads_commit_one_source_and_file(
+    tmp_path: Path,
+    tiny_video: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    original_probe = store._probe_video
+    probe_rendezvous = threading.Barrier(2)
+
+    def synchronized_probe(path: Path) -> object:
+        probe_rendezvous.wait(timeout=3)
+        return original_probe(path)
+
+    monkeypatch.setattr(store, "_probe_video", synchronized_probe)
+
+    def upload(filename: str) -> object:
+        with tiny_video.open("rb") as source:
+            return store.register_upload(source, filename)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        records = list(pool.map(upload, ("one.mp4", "two.mp4")))
+
+    assert records[0].video_id == records[1].video_id
+    assert len(store.library.videos()) == 1
+    assert len(store.records()) == 1
+    assert list(store.upload_dir.iterdir()) == [records[0].path]
+
+
+def test_restored_cataloged_path_reuses_original_identity_and_metadata(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    data_dir = tmp_path / "data"
+    original_bytes = tiny_video.read_bytes()
+    initial = VideoStore(repo_root=tmp_path, data_dir=data_dir)
+    original = initial.register_path(tiny_video, "Championship Game")
+    tiny_video.unlink()
+
+    restarted_while_missing = VideoStore(repo_root=tmp_path, data_dir=data_dir)
+    assert restarted_while_missing.records() == ()
+    tiny_video.write_bytes(original_bytes)
+
+    restored = restarted_while_missing.register_path(tiny_video)
+
+    assert restored.video_id == original.video_id
+    assert restored.name == "Championship Game"
+    assert restored.metadata == original.metadata
+    assert restored.source_kind == "path"
+    assert restored.source_key == f"path:{tiny_video.resolve()}"
+    assert restarted_while_missing.records() == (restored,)
+    assert [item["videoId"] for item in restarted_while_missing.library.videos()] == [
+        original.video_id
+    ]
 
 
 def test_path_registration_does_not_publish_after_catalog_write_failure(

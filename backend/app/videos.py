@@ -126,16 +126,17 @@ class VideoStore:
         if not path.is_file():
             raise VideoNotFoundError(f"Video file not found: {raw_path}")
         source_key = _path_source_key(path)
-        existing = self._record_for_source("path", source_key)
+        existing = self._reuse_source(
+            "path", source_key, display_name=name
+        )
         if existing is not None:
-            if name is not None:
-                return self.rename(existing.video_id, name)
             return existing
         return self._register(
             path,
             source_kind="path",
             display_name=name,
             source_key=source_key,
+            reuse_display_name=name,
         )
 
     def register_upload(
@@ -157,14 +158,14 @@ class VideoStore:
                     digest.update(chunk)
                     output.write(chunk)
             source_key = _upload_source_key(digest.hexdigest())
-            existing = self._record_for_source("upload", source_key)
+            existing = self._reuse_source(
+                "upload", source_key, display_name=name
+            )
             if existing is not None:
                 temporary.unlink()
-                if name is not None:
-                    return self.rename(existing.video_id, name)
                 return existing
             temporary.replace(destination)
-            return self._register(
+            record = self._register(
                 destination,
                 source_kind="upload",
                 display_name=(
@@ -172,7 +173,11 @@ class VideoStore:
                     or sanitize_display_name(filename)
                 ),
                 source_key=source_key,
+                reuse_display_name=name,
             )
+            if record.path != destination:
+                destination.unlink(missing_ok=True)
+            return record
         except Exception:
             temporary.unlink(missing_ok=True)
             destination.unlink(missing_ok=True)
@@ -354,64 +359,117 @@ class VideoStore:
         source_kind: str,
         display_name: str | None = None,
         source_key: str = "",
+        reuse_display_name: str | None = None,
     ) -> VideoRecord:
         metadata = self._probe_video(path)
-        video_id = uuid.uuid4().hex
-        record = VideoRecord(
-            video_id=video_id,
-            path=path,
-            metadata=metadata,
-            frame_cache_dir=self.frame_cache_root / video_id,
-            source_kind=source_kind,
-            display_name=display_name,
-            source_key=source_key,
-        )
         with self._lock:
+            existing = self._reuse_source_locked(
+                source_kind,
+                source_key,
+                display_name=reuse_display_name,
+            )
+            if existing is not None:
+                return existing
+            video_id = uuid.uuid4().hex
+            record = VideoRecord(
+                video_id=video_id,
+                path=path,
+                metadata=metadata,
+                frame_cache_dir=self.frame_cache_root / video_id,
+                source_kind=source_kind,
+                display_name=display_name,
+                source_key=source_key,
+            )
             self.library.save_video(record, source_kind=source_kind)
             self._records[video_id] = record
         return record
 
-    def _record_for_source(
-        self, source_kind: str, source_key: str
+    def _reuse_source(
+        self,
+        source_kind: str,
+        source_key: str,
+        *,
+        display_name: str | None,
     ) -> VideoRecord | None:
         with self._lock:
-            return next(
+            return self._reuse_source_locked(
+                source_kind,
+                source_key,
+                display_name=display_name,
+            )
+
+    def _reuse_source_locked(
+        self,
+        source_kind: str,
+        source_key: str,
+        *,
+        display_name: str | None,
+    ) -> VideoRecord | None:
+        record = next(
+            (
+                candidate
+                for candidate in self._records.values()
+                if candidate.source_kind == source_kind
+                and candidate.source_key == source_key
+            ),
+            None,
+        )
+        if record is None:
+            saved = next(
                 (
-                    record
-                    for record in self._records.values()
-                    if record.source_kind == source_kind
-                    and record.source_key == source_key
+                    entry
+                    for entry in self.library.videos()
+                    if str(entry.get("sourceKind", "path")) == source_kind
+                    and str(entry.get("sourceKey", "")) == source_key
                 ),
                 None,
             )
+            if saved is not None:
+                record = self._record_from_saved(saved)
+        if record is None:
+            return None
+        if display_name is not None:
+            renamed = self.library.rename_video(record.video_id, display_name)
+            if renamed is None:
+                raise VideoNotFoundError("Video not found")
+            record = replace(record, display_name=renamed)
+        self._records[record.video_id] = record
+        return record
 
     def _rehydrate(self) -> None:
         for saved in self.library.videos():
-            try:
-                path = Path(str(saved["path"])).resolve()
-                metadata = saved["metadata"]
-                if not path.is_file():
-                    continue
-                record = VideoRecord(
-                    video_id=str(saved["videoId"]),
-                    path=path,
-                    metadata=VideoMetadata(
-                        width=int(metadata["width"]), height=int(metadata["height"]),
-                        fps=float(metadata["fps"]), nb_frames=int(metadata["nbFrames"]),
-                        duration=float(metadata["duration"]),
-                    ),
-                    frame_cache_dir=self.frame_cache_root / str(saved["videoId"]),
-                    source_kind=str(saved.get("sourceKind", "path")),
-                    display_name=_clean_name(
-                        saved.get("name"),
-                        label="Source name",
-                        validate_length=False,
-                    ),
-                    source_key=str(saved.get("sourceKey", "")),
-                )
+            record = self._record_from_saved(saved)
+            if record is not None:
                 self._records[record.video_id] = record
-            except (KeyError, TypeError, ValueError):
-                continue
+
+    def _record_from_saved(self, saved: dict[str, object]) -> VideoRecord | None:
+        try:
+            path = Path(str(saved["path"])).resolve()
+            metadata = saved["metadata"]
+            if not path.is_file() or not isinstance(metadata, dict):
+                return None
+            video_id = str(saved["videoId"])
+            return VideoRecord(
+                video_id=video_id,
+                path=path,
+                metadata=VideoMetadata(
+                    width=int(metadata["width"]),
+                    height=int(metadata["height"]),
+                    fps=float(metadata["fps"]),
+                    nb_frames=int(metadata["nbFrames"]),
+                    duration=float(metadata["duration"]),
+                ),
+                frame_cache_dir=self.frame_cache_root / video_id,
+                source_kind=str(saved.get("sourceKind", "path")),
+                display_name=_clean_name(
+                    saved.get("name"),
+                    label="Source name",
+                    validate_length=False,
+                ),
+                source_key=str(saved.get("sourceKey", "")),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
 
     @staticmethod
     def _is_under(path: Path, root: Path) -> bool:
