@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { selectByClick, startTracking, trackJobWebSocketUrl } from './api'
+import {
+  exportDownloadUrl,
+  fetchCropPlan,
+  selectByClick,
+  startExport,
+  startTracking,
+  trackJobWebSocketUrl,
+} from './api'
 
 describe('selectByClick', () => {
   afterEach(() => {
@@ -72,5 +79,64 @@ describe('trackJobWebSocketUrl', () => {
         host: 'findme.local',
       }),
     ).toBe('wss://findme.local/ws/jobs/job%2Fone')
+  })
+})
+
+describe('export API', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  const settings = {
+    outWidth: 1280,
+    outHeight: 720,
+    zoom: 1.5,
+    smoothing: {
+      windowSec: 0.8,
+      deadZonePx: 30,
+      maxVelPxPerFrame: 28,
+    },
+  }
+
+  it('fetches a crop preview with the complete smoothing query', async () => {
+    const result = {
+      videoId: 'video-1',
+      trackJobId: 'track-1',
+      windows: [{ frameIdx: 0, x: 0, y: 0, w: 1280, h: 720 }],
+    }
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue(result),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchCropPlan('video-1', 'track-1', settings)).resolves.toEqual(
+      result,
+    )
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      '/api/export/plan?videoId=video-1&trackJobId=track-1&outWidth=1280&outHeight=720&zoom=1.5&windowSec=0.8&deadZonePx=30&maxVelPxPerFrame=28',
+    )
+  })
+
+  it('starts an export and exposes its download URL', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ jobId: 'export/1' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(startExport('video-1', 'track-1', settings)).resolves.toEqual({
+      jobId: 'export/1',
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        videoId: 'video-1',
+        trackJobId: 'track-1',
+        ...settings,
+      }),
+    })
+    expect(exportDownloadUrl('export/1')).toBe('/api/exports/export%2F1.mp4')
   })
 })

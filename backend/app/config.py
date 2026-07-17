@@ -11,6 +11,7 @@ class Settings:
     data_dir: Path
     frontend_dist: Path
     checkpoints_dir: Path
+    exports_dir: Path
     sam2_checkpoint: Path
     sam2_model_config: str
     sam2_crop_size: int = 1024
@@ -51,6 +52,7 @@ def load_settings() -> Settings:
         data_dir=data_dir,
         frontend_dist=repo_root / "frontend" / "dist",
         checkpoints_dir=checkpoints_dir,
+        exports_dir=repo_root / "exports",
         sam2_checkpoint=sam2_checkpoint,
         sam2_model_config=os.environ.get(
             "FINDME_SAM2_CONFIG",

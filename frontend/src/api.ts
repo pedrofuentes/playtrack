@@ -32,6 +32,33 @@ export interface TrackJobUpdate {
   track: TrackFrame[]
 }
 
+export interface SmoothingSettings {
+  windowSec: number
+  deadZonePx: number
+  maxVelPxPerFrame: number
+}
+
+export interface ExportSettings {
+  outWidth: number
+  outHeight: number
+  zoom: number
+  smoothing: SmoothingSettings
+}
+
+export interface CropWindow {
+  frameIdx: number
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+export interface CropPlanResponse {
+  videoId: string
+  trackJobId: string
+  windows: CropWindow[]
+}
+
 interface WebSocketLocation {
   protocol: string
   host: string
@@ -129,6 +156,49 @@ export function watchTrackJob(
   }
   socket.onerror = () => onError('Lost the tracking progress connection')
   return socket
+}
+
+export async function fetchCropPlan(
+  videoId: string,
+  trackJobId: string,
+  settings: ExportSettings,
+  signal?: AbortSignal,
+): Promise<CropPlanResponse> {
+  const query = new URLSearchParams({
+    videoId,
+    trackJobId,
+    outWidth: String(settings.outWidth),
+    outHeight: String(settings.outHeight),
+    zoom: String(settings.zoom),
+    windowSec: String(settings.smoothing.windowSec),
+    deadZonePx: String(settings.smoothing.deadZonePx),
+    maxVelPxPerFrame: String(settings.smoothing.maxVelPxPerFrame),
+  })
+  const response = await fetch(`/api/export/plan?${query}`, { signal })
+  if (!response.ok) {
+    throw new Error(await responseError(response, 'Could not preview crop'))
+  }
+  return (await response.json()) as CropPlanResponse
+}
+
+export async function startExport(
+  videoId: string,
+  trackJobId: string,
+  settings: ExportSettings,
+): Promise<{ jobId: string }> {
+  const response = await fetch('/api/export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ videoId, trackJobId, ...settings }),
+  })
+  if (!response.ok) {
+    throw new Error(await responseError(response, 'Could not start export'))
+  }
+  return (await response.json()) as { jobId: string }
+}
+
+export function exportDownloadUrl(jobId: string): string {
+  return `/api/exports/${encodeURIComponent(jobId)}.mp4`
 }
 
 async function responseError(response: Response, fallback: string): Promise<string> {

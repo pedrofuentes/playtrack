@@ -55,3 +55,22 @@ def test_registry_rejects_unknown_jobs() -> None:
         assert str(exc) == "Tracking job not found"
     else:
         raise AssertionError("Expected JobNotFoundError")
+
+
+def test_registry_runs_progress_only_export_worker() -> None:
+    registry = JobRegistry()
+    calls: list[tuple[str, float, str]] = []
+
+    def worker(job_id: str, report: object) -> None:
+        report(0.25, "Exporting frame 1")
+        calls.append((job_id, 0.25, "Exporting frame 1"))
+        report(1.0, "Exporting frame 4")
+
+    job_id = registry.submit_progress(worker, completion_message="Export complete")
+    snapshot = registry.wait_until_terminal(job_id, timeout=2)
+
+    assert calls == [(job_id, 0.25, "Exporting frame 1")]
+    assert snapshot.state == "completed"
+    assert snapshot.progress == 1.0
+    assert snapshot.message == "Export complete"
+    assert snapshot.track == ()

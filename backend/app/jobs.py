@@ -12,6 +12,8 @@ from .tracking import TrackFrame
 JobState = Literal["queued", "running", "completed", "failed"]
 JobReporter = Callable[[float, str, TrackFrame], None]
 JobWorker = Callable[[JobReporter], Sequence[TrackFrame]]
+ProgressReporter = Callable[[float, str], None]
+ProgressWorker = Callable[[str, ProgressReporter], None]
 
 
 class JobNotFoundError(KeyError):
@@ -59,13 +61,27 @@ class JobRegistry:
         self._condition = threading.Condition(threading.RLock())
 
     def submit(self, worker: JobWorker) -> str:
-        job_id = uuid.uuid4().hex
-        with self._condition:
-            self._jobs[job_id] = _Job(job_id=job_id)
+        job_id = self._create_job()
         thread = threading.Thread(
             target=self._run_worker,
             args=(job_id, worker),
             name=f"findme-track-{job_id[:8]}",
+            daemon=True,
+        )
+        thread.start()
+        return job_id
+
+    def submit_progress(
+        self,
+        worker: ProgressWorker,
+        *,
+        completion_message: str,
+    ) -> str:
+        job_id = self._create_job()
+        thread = threading.Thread(
+            target=self._run_progress_worker,
+            args=(job_id, worker, completion_message),
+            name=f"findme-job-{job_id[:8]}",
             daemon=True,
         )
         thread.start()
@@ -125,6 +141,35 @@ class JobRegistry:
             job.message = "Tracking complete"
             job.version += 1
             self._condition.notify_all()
+
+    def _run_progress_worker(
+        self,
+        job_id: str,
+        worker: ProgressWorker,
+        completion_message: str,
+    ) -> None:
+        self._set_state(job_id, "running", 0.0, "Starting export")
+
+        def report(progress: float, message: str) -> None:
+            with self._condition:
+                job = self._get_job(job_id)
+                job.progress = min(max(float(progress), job.progress), 1.0)
+                job.message = message
+                job.version += 1
+                self._condition.notify_all()
+
+        try:
+            worker(job_id, report)
+        except Exception as exc:
+            self._set_state(job_id, "failed", None, str(exc) or type(exc).__name__)
+            return
+        self._set_state(job_id, "completed", 1.0, completion_message)
+
+    def _create_job(self) -> str:
+        job_id = uuid.uuid4().hex
+        with self._condition:
+            self._jobs[job_id] = _Job(job_id=job_id)
+        return job_id
 
     def _set_state(
         self,

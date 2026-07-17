@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   type ClickSelection,
+  type CropWindow,
   registerVideo,
   selectByClick,
   startTracking,
@@ -11,6 +12,7 @@ import {
   watchTrackJob,
 } from './api'
 import { VideoStage } from './components/VideoStage'
+import { ExportPanel } from './components/ExportPanel'
 import type { Point } from './geometry'
 
 const EXAMPLE_PATH = 'examples/example.mp4'
@@ -26,6 +28,7 @@ export default function App() {
   const [trackJob, setTrackJob] = useState<TrackJobUpdate | null>(null)
   const [trackStarting, setTrackStarting] = useState(false)
   const [trackError, setTrackError] = useState<string | null>(null)
+  const [cropWindows, setCropWindows] = useState<CropWindow[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const selectionRequest = useRef<AbortController | null>(null)
@@ -47,6 +50,7 @@ export default function App() {
     setTrackJob(null)
     setTrackStarting(false)
     setTrackError(null)
+    setCropWindows([])
     try {
       setVideo(await registerVideo(EXAMPLE_PATH))
     } catch (reason) {
@@ -85,6 +89,7 @@ export default function App() {
       setTrackJob(null)
       setTrackStarting(false)
       setTrackError(null)
+      setCropWindows([])
       setSelectionLoading(true)
       void selectByClick(
         video.videoId,
@@ -120,6 +125,7 @@ export default function App() {
     setTrackError(null)
     setTrackMessage('Starting SAM 2 video propagation…')
     setTrackJob(null)
+    setCropWindows([])
     try {
       const { jobId } = await startTracking(
         video.videoId,
@@ -157,7 +163,7 @@ export default function App() {
     <main className="app-shell">
       <header className="app-header">
         <div>
-          <p className="eyebrow">M2 · Video tracking</p>
+          <p className="eyebrow">M3 · Crop and export</p>
           <h1>FindMe</h1>
         </div>
         <p className="intro">Open the panoramic match, scrub to any frame, then click a player.</p>
@@ -181,6 +187,7 @@ export default function App() {
               frameCount={video.nbFrames}
               selection={selection}
               track={trackJob?.track ?? []}
+              cropWindows={cropWindows}
               onSourceClick={handleSourceClick}
             />
             <aside className="details-panel">
@@ -247,6 +254,13 @@ export default function App() {
                 )}
                 {trackError && <p className="selection-error">{trackError}</p>}
               </div>
+              {trackJob?.state === 'completed' && (
+                <ExportPanel
+                  videoId={video.videoId}
+                  trackJobId={trackJob.jobId}
+                  onPlanChange={setCropWindows}
+                />
+              )}
             </aside>
           </>
         )}

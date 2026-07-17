@@ -103,6 +103,21 @@ state to system memory:
 SAM2_OFFLOAD_VIDEO_TO_CPU=true SAM2_OFFLOAD_STATE_TO_CPU=true ./scripts/dev.sh
 ```
 
+## M3: crop planning and export
+
+Completed tracks expose a virtual-camera export panel with 1920×1080,
+1280×720, and custom output sizes. Zoom, dead-zone, smoothing-window, and pan
+speed controls update a source-space crop preview on the video. Exports run as
+background jobs and produce H.264/yuv420p MP4 files under the ignored
+`exports/` directory; source audio is carried into the result.
+
+The supporting endpoints are:
+
+- `GET /api/export/plan` for read-only per-frame crop windows.
+- `POST /api/export` to start a background export job.
+- `GET /api/exports/{jobId}.mp4` to download a completed result.
+- `WS /ws/jobs/{jobId}` for export progress, shared with tracking jobs.
+
 ### Checks
 
 ```bash

@@ -14,8 +14,8 @@ import {
   type Point,
   sourcePointFromCanvas,
 } from '../geometry'
-import type { ClickSelection } from '../api'
-import type { TrackFrame } from '../api'
+import type { ClickSelection, CropWindow, TrackFrame } from '../api'
+import { CropOverlay } from './CropOverlay'
 import { TrackOverlay } from './TrackOverlay'
 
 interface VideoStageProps {
@@ -26,6 +26,7 @@ interface VideoStageProps {
   frameCount: number
   selection: ClickSelection | null
   track: readonly TrackFrame[]
+  cropWindows: readonly CropWindow[]
   onSourceClick: (point: Point, frameIdx: number) => void
 }
 
@@ -37,6 +38,7 @@ export function VideoStage({
   frameCount,
   selection,
   track,
+  cropWindows,
   onSourceClick,
 }: VideoStageProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -102,6 +104,14 @@ export function VideoStage({
       <TrackOverlay
         videoRef={videoRef}
         track={track}
+        sourceWidth={sourceWidth}
+        sourceHeight={sourceHeight}
+        fps={fps}
+        frameCount={frameCount}
+      />
+      <CropOverlay
+        videoRef={videoRef}
+        windows={cropWindows}
         sourceWidth={sourceWidth}
         sourceHeight={sourceHeight}
         fps={fps}

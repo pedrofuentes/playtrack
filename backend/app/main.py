@@ -12,6 +12,13 @@ from pydantic import BaseModel, Field, ValidationError
 from starlette.datastructures import UploadFile
 
 from .config import settings
+from .crop_planner import (
+    CropPlanningError,
+    CropWindow,
+    SmoothingOptions,
+    plan_crop_windows,
+)
+from .exporter import export_video
 from .jobs import JobNotFoundError, JobRegistry
 from .models.sam2_engine import get_sam2_engine, get_sam2_video_engine
 from .selection import (
@@ -68,6 +75,21 @@ class TrackJobResponse(BaseModel):
     jobId: str
 
 
+class SmoothingRequest(BaseModel):
+    windowSec: float = Field(default=0.8, ge=0)
+    deadZonePx: float = Field(default=30.0, ge=0)
+    maxVelPxPerFrame: float = Field(default=28.0, gt=0)
+
+
+class ExportRequest(BaseModel):
+    videoId: str
+    trackJobId: str
+    outWidth: int = Field(ge=2)
+    outHeight: int = Field(ge=2)
+    zoom: float = 1.0
+    smoothing: SmoothingRequest = Field(default_factory=SmoothingRequest)
+
+
 def create_app(
     video_store: VideoStore | None = None,
     *,
@@ -75,6 +97,8 @@ def create_app(
     click_selector: Any | None = None,
     track_runner: Any | None = None,
     job_registry: JobRegistry | None = None,
+    video_exporter: Any | None = None,
+    exports_dir: Path | None = None,
 ) -> FastAPI:
     store = video_store or VideoStore(
         repo_root=settings.repo_root,
@@ -105,12 +129,16 @@ def create_app(
             ),
         )
     jobs = job_registry or JobRegistry()
+    exporter = video_exporter or export_video
+    export_root = exports_dir if exports_dir is not None else settings.exports_dir
 
     app = FastAPI(title="FindMe", version="0.1.0")
     app.state.video_store = store
     app.state.click_selector = selector
     app.state.track_runner = tracker
     app.state.job_registry = jobs
+    app.state.video_exporter = exporter
+    app.state.exports_dir = export_root
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -261,6 +289,133 @@ def create_app(
             return jobs.get(job_id).to_dict()
         except JobNotFoundError as exc:
             raise HTTPException(404, str(exc)) from exc
+
+    def build_export_plan(
+        *,
+        video_id: str,
+        track_job_id: str,
+        out_width: int,
+        out_height: int,
+        zoom: float,
+        window_sec: float,
+        dead_zone_px: float,
+        max_velocity: float,
+    ) -> tuple[Any, list[CropWindow]]:
+        try:
+            record = store.get(video_id)
+        except VideoNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        try:
+            track_snapshot = jobs.get(track_job_id)
+        except JobNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        if track_snapshot.state != "completed":
+            raise HTTPException(409, "Tracking job is not complete")
+        if out_width % 2 or out_height % 2:
+            raise HTTPException(422, "Output dimensions must be even")
+
+        centers: list[tuple[float, float] | None] = [
+            None
+        ] * record.metadata.nb_frames
+        for frame in track_snapshot.track:
+            if (
+                0 <= frame.frame_idx < len(centers)
+                and not frame.lost
+                and frame.center is not None
+            ):
+                centers[frame.frame_idx] = frame.center
+        try:
+            windows = plan_crop_windows(
+                centers,
+                source_width=record.metadata.width,
+                source_height=record.metadata.height,
+                output_width=out_width,
+                output_height=out_height,
+                fps=record.metadata.fps,
+                zoom=zoom,
+                smoothing=SmoothingOptions(
+                    window_sec=window_sec,
+                    dead_zone_px=dead_zone_px,
+                    max_velocity=max_velocity,
+                ),
+            )
+        except CropPlanningError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return record, windows
+
+    @app.get("/api/export/plan")
+    def export_plan(
+        videoId: str,
+        trackJobId: str,
+        outWidth: int,
+        outHeight: int,
+        zoom: float = 1.0,
+        windowSec: float = 0.8,
+        deadZonePx: float = 30.0,
+        maxVelPxPerFrame: float = 28.0,
+    ) -> dict[str, object]:
+        _record, windows = build_export_plan(
+            video_id=videoId,
+            track_job_id=trackJobId,
+            out_width=outWidth,
+            out_height=outHeight,
+            zoom=zoom,
+            window_sec=windowSec,
+            dead_zone_px=deadZonePx,
+            max_velocity=maxVelPxPerFrame,
+        )
+        return {
+            "videoId": videoId,
+            "trackJobId": trackJobId,
+            "windows": [window.to_dict() for window in windows],
+        }
+
+    @app.post("/api/export", response_model=TrackJobResponse, status_code=202)
+    def start_export(payload: ExportRequest) -> dict[str, str]:
+        record, windows = build_export_plan(
+            video_id=payload.videoId,
+            track_job_id=payload.trackJobId,
+            out_width=payload.outWidth,
+            out_height=payload.outHeight,
+            zoom=payload.zoom,
+            window_sec=payload.smoothing.windowSec,
+            dead_zone_px=payload.smoothing.deadZonePx,
+            max_velocity=payload.smoothing.maxVelPxPerFrame,
+        )
+
+        def run_export(job_id: str, report: Any) -> None:
+            exporter(
+                record.path,
+                export_root / f"{job_id}.mp4",
+                windows,
+                output_width=payload.outWidth,
+                output_height=payload.outHeight,
+                fps=record.metadata.fps,
+                on_progress=report,
+            )
+
+        job_id = jobs.submit_progress(
+            run_export,
+            completion_message="Export complete",
+        )
+        return {"jobId": job_id}
+
+    @app.get("/api/exports/{job_id}.mp4", response_class=FileResponse)
+    def exported_video(job_id: str) -> FileResponse:
+        try:
+            snapshot = jobs.get(job_id)
+        except JobNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        if snapshot.state not in ("completed", "failed"):
+            raise HTTPException(409, "Export is not complete")
+        destination = export_root / f"{job_id}.mp4"
+        if snapshot.state == "failed" or not destination.is_file():
+            raise HTTPException(404, "Exported video not found")
+        return FileResponse(
+            destination,
+            media_type="video/mp4",
+            filename=f"findme-{job_id}.mp4",
+        )
 
     @app.websocket("/ws/jobs/{job_id}")
     async def track_updates(websocket: WebSocket, job_id: str) -> None:

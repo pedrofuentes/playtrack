@@ -90,7 +90,8 @@ h1 {
 .video-stage video,
 .selection-mask,
 .video-overlay,
-.track-overlay {
+.track-overlay,
+.crop-overlay {
   position: absolute;
   inset: 0;
   display: block;
@@ -112,6 +113,10 @@ h1 {
 }
 
 .track-overlay {
+  pointer-events: none;
+}
+
+.crop-overlay {
   pointer-events: none;
 }
 
@@ -169,6 +174,70 @@ h1 {
 .tracking-progress {
   width: 100%;
   accent-color: #ff5f8f;
+}
+
+.export-panel {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 0.75rem;
+  padding-top: 1rem;
+  border-top: 1px solid #343d39;
+}
+
+.export-panel label {
+  display: grid;
+  gap: 0.35rem;
+  color: #b9c1bc;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.export-panel input,
+.export-panel select {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid #46504c;
+  border-radius: 0.5rem;
+  padding: 0.5rem;
+  color: #f4f0e7;
+  background: #0d1218;
+  font: inherit;
+}
+
+.export-panel input[type="range"] {
+  padding: 0;
+  accent-color: #ffcb66;
+}
+
+.export-panel output {
+  color: #ffcb66;
+}
+
+.dimension-inputs {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: end;
+  gap: 0.5rem;
+}
+
+.dimension-inputs span {
+  padding-bottom: 0.5rem;
+}
+
+.smoothing-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.export-panel progress {
+  width: 100%;
+  accent-color: #ffcb66;
+}
+
+.download-link {
+  color: #2fe1b4;
+  font-weight: 750;
 }
 
 button:disabled {
