@@ -11,6 +11,7 @@ import {
   renameLibraryPlayer,
   renameLibrarySource,
 } from '../api'
+import { frameRangeCount, normalizeFrameRange } from '../frameRange'
 
 type LibraryTab = 'sources' | 'players' | 'exports'
 
@@ -159,7 +160,8 @@ export function LibraryPanel({
                   </div>
                 ) : <strong>{player.name}</strong>}
                 <span>{video.name}</span>
-                <span>{player.frameCount} frames · {player.lostCount} lost · {formatDate(player.createdAt)}</span>
+                <span>{formatPlayerRange(video, player)}</span>
+                <span>{player.lostCount} lost · {formatDate(player.createdAt)}</span>
               </div>
               <button type="button" disabled={busy || openingDisabled || !video.sourceExists} onClick={() => void openPlayer(video, player)}>Open player</button>
             </div>
@@ -215,4 +217,21 @@ function formatDate(value: string | null): string {
 
 function formatZoom(value: unknown): string {
   return typeof value === 'number' ? `${value.toFixed(1)}×` : 'Unknown zoom'
+}
+
+function formatPlayerRange(video: LibraryVideo, player: LibraryTrack): string {
+  const range = normalizeFrameRange({
+    startFrameIdx: player.startFrameIdx ?? 0,
+    endFrameExclusive: player.endFrameExclusive ?? video.metadata.nbFrames,
+  }, video.metadata.nbFrames)
+  const count = frameRangeCount(range)
+  const duration = video.metadata.fps > 0 ? count / video.metadata.fps : 0
+  return `${formatRangeTime(range.startFrameIdx, video.metadata.fps)}–${formatRangeTime(range.endFrameExclusive, video.metadata.fps)} · ${duration.toFixed(1)} sec · ${count} frame${count === 1 ? '' : 's'}`
+}
+
+function formatRangeTime(frameIdx: number, fps: number): string {
+  const totalSeconds = fps > 0 ? Math.floor(frameIdx / fps) : 0
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
 }

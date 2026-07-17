@@ -172,7 +172,13 @@ describe('startTracking', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(
-      startTracking('video-1', 12, [100, 200, 140, 260], ' White 19 '),
+      startTracking(
+        'video-1',
+        12,
+        [100, 200, 140, 260],
+        ' White 19 ',
+        { startFrameIdx: 10, endFrameExclusive: 81 },
+      ),
     ).resolves.toEqual({ jobId: 'job-1', playerName: 'White 19' })
     expect(fetchMock).toHaveBeenCalledWith('/api/track', {
       method: 'POST',
@@ -182,6 +188,8 @@ describe('startTracking', () => {
         frameIdx: 12,
         box: [100, 200, 140, 260],
         playerName: ' White 19 ',
+        startFrameIdx: 10,
+        endFrameExclusive: 81,
       }),
     })
   })

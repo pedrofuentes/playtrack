@@ -22,6 +22,11 @@ import {
   uploadVideo,
 } from '../api'
 import type { Point } from '../geometry'
+import {
+  containsFrame,
+  type FrameRange,
+  normalizeFrameRange,
+} from '../frameRange'
 import { isJobActive, type WorkspaceStage, workspaceStage } from '../workflow'
 
 const EXAMPLE_PATH = 'examples/example.mp4'
@@ -30,6 +35,7 @@ export interface WorkspaceController {
   video: VideoMetadata | null
   videoName: string | null
   currentFrame: number
+  range: FrameRange
   selection: ClickSelection | null
   selectionKind: 'click' | 'text'
   selectionLoading: boolean
@@ -61,6 +67,10 @@ export interface WorkspaceController {
   confirmCandidate(candidate: LocateCandidate, frameIdx: number): void
   setPlayerName(name: string): void
   setCurrentFrame(frameIdx: number): void
+  setRange(range: FrameRange): void
+  setRangeIn(): void
+  setRangeOut(): void
+  resetRange(): void
   startTrack(): Promise<void>
   retryTrack(): Promise<void>
   beginFraming(): void
@@ -74,6 +84,10 @@ export function useWorkspace(): WorkspaceController {
   const [video, setVideo] = useState<VideoMetadata | null>(null)
   const [videoName, setVideoName] = useState<string | null>(null)
   const [currentFrame, setCurrentFrameState] = useState(0)
+  const [range, setRangeState] = useState<FrameRange>({
+    startFrameIdx: 0,
+    endFrameExclusive: 1,
+  })
   const [anchorFrame, setAnchorFrame] = useState<number | null>(null)
   const [selection, setSelection] = useState<ClickSelection | null>(null)
   const [selectionKind, setSelectionKind] = useState<'click' | 'text'>('click')
@@ -99,11 +113,17 @@ export function useWorkspace(): WorkspaceController {
   const [exportJob, setExportJobState] = useState<TrackJobUpdate | null>(null)
   const selectionRequest = useRef<AbortController | null>(null)
   const trackSocket = useRef<WebSocket | null>(null)
+  const rangeRef = useRef(range)
+  rangeRef.current = range
+  const trackStartingRef = useRef(trackStarting)
+  trackStartingRef.current = trackStarting
 
   const stage = workspaceStage(selection, trackJob, framing)
   const videoSwitchLocked = trackStarting || isJobActive(trackJob) || isJobActive(exportJob)
   const videoSwitchLockedRef = useRef(videoSwitchLocked)
   videoSwitchLockedRef.current = videoSwitchLocked
+  const stageRef = useRef(stage)
+  stageRef.current = stage
 
   const clearDownstreamState = useCallback(() => {
     trackSocket.current?.close()
@@ -116,6 +136,19 @@ export function useWorkspace(): WorkspaceController {
     setCropWindowsState([])
     setFraming(false)
     setExportJobState(null)
+  }, [])
+
+  const clearSelectionState = useCallback(() => {
+    selectionRequest.current?.abort()
+    selectionRequest.current = null
+    setAnchorFrame(null)
+    setSelection(null)
+    setSelectionKind('click')
+    setSelectionLoading(false)
+    setSelectionError(null)
+    setCandidates([])
+    setPlayerName('')
+    setCandidateFrame(null)
   }, [])
 
   const openVideo = useCallback(async (
@@ -144,6 +177,7 @@ export function useWorkspace(): WorkspaceController {
       const registered = await register()
       setVideo(registered)
       setVideoName(savedName ?? registered.name)
+      setRangeState({ startFrameIdx: 0, endFrameExclusive: registered.nbFrames })
     } catch (reason) {
       setVideo(null)
       setVideoName(null)
@@ -186,6 +220,13 @@ export function useWorkspace(): WorkspaceController {
     if (restored.state !== 'completed') {
       throw new Error('Saved player track is not complete')
     }
+    const restoredRange = normalizeFrameRange({
+      startFrameIdx: player.startFrameIdx ?? 0,
+      endFrameExclusive: player.endFrameExclusive ?? saved.metadata.nbFrames,
+    }, saved.metadata.nbFrames)
+    if (!containsFrame(restoredRange, player.anchorFrameIdx)) {
+      throw new Error('Saved player anchor is outside its tracked range')
+    }
 
     selectionRequest.current?.abort()
     selectionRequest.current = null
@@ -195,6 +236,7 @@ export function useWorkspace(): WorkspaceController {
     setVideo(saved.metadata)
     setVideoName(saved.name)
     setCurrentFrameState(player.anchorFrameIdx)
+    setRangeState(restoredRange)
     setAnchorFrame(player.anchorFrameIdx)
     setSelection(null)
     setSelectionKind('click')
@@ -244,6 +286,10 @@ export function useWorkspace(): WorkspaceController {
 
   const selectAt = useCallback((point: Point, frameIdx: number) => {
     if (!video) return
+    if (!containsFrame(rangeRef.current, frameIdx)) {
+      setSelectionError('Choose a frame inside the selected range')
+      return
+    }
     selectionRequest.current?.abort()
     const controller = new AbortController()
     selectionRequest.current = controller
@@ -267,6 +313,10 @@ export function useWorkspace(): WorkspaceController {
   const selectByDescription = useCallback((rawPrompt: string) => {
     const prompt = rawPrompt.trim()
     if (!video || !prompt) return
+    if (!containsFrame(rangeRef.current, currentFrame)) {
+      setSelectionError('Choose a frame inside the selected range')
+      return
+    }
     selectionRequest.current?.abort()
     const controller = new AbortController()
     selectionRequest.current = controller
@@ -291,6 +341,10 @@ export function useWorkspace(): WorkspaceController {
   }, [currentFrame, prepareSelection, video])
 
   const confirmCandidate = useCallback((candidate: LocateCandidate, frameIdx: number) => {
+    if (!containsFrame(rangeRef.current, frameIdx)) {
+      setSelectionError('Choose a frame inside the selected range')
+      return
+    }
     setSelection({ box: candidate.box, score: candidate.score, maskPng: '' })
     setSelectionKind('text')
     setAnchorFrame(frameIdx)
@@ -307,10 +361,40 @@ export function useWorkspace(): WorkspaceController {
     }
   }, [candidateFrame])
 
+  const setRange = useCallback((nextRange: FrameRange) => {
+    if (!video || stageRef.current !== 'select' || trackStartingRef.current) return
+    const normalized = normalizeFrameRange(nextRange, video.nbFrames)
+    const current = rangeRef.current
+    if (
+      normalized.startFrameIdx === current.startFrameIdx
+      && normalized.endFrameExclusive === current.endFrameExclusive
+    ) return
+    clearSelectionState()
+    rangeRef.current = normalized
+    setRangeState(normalized)
+  }, [clearSelectionState, video])
+
+  const setRangeIn = useCallback(() => {
+    setRange({ ...rangeRef.current, startFrameIdx: currentFrame })
+  }, [currentFrame, setRange])
+
+  const setRangeOut = useCallback(() => {
+    setRange({ ...rangeRef.current, endFrameExclusive: currentFrame + 1 })
+  }, [currentFrame, setRange])
+
+  const resetRange = useCallback(() => {
+    if (!video) return
+    setRange({ startFrameIdx: 0, endFrameExclusive: video.nbFrames })
+  }, [setRange, video])
+
   const startTrack = useCallback(async () => {
-    if (!video || !selection || anchorFrame === null) return
+    if (
+      !video || !selection || anchorFrame === null
+      || !containsFrame(rangeRef.current, anchorFrame)
+    ) return
     trackSocket.current?.close()
     trackSocket.current = null
+    trackStartingRef.current = true
     setTrackStarting(true)
     setTrackStartedAt(Date.now())
     setTrackError(null)
@@ -321,7 +405,7 @@ export function useWorkspace(): WorkspaceController {
     setExportJobState(null)
     try {
       const { jobId, playerName: resolvedName } = await startTracking(
-        video.videoId, anchorFrame, selection.box, playerName,
+        video.videoId, anchorFrame, selection.box, playerName, rangeRef.current,
       )
       setPlayerName(resolvedName)
       setTrackJob({
@@ -354,23 +438,15 @@ export function useWorkspace(): WorkspaceController {
       setTrackError(reason instanceof Error ? reason.message : 'Could not start tracking')
       setTrackMessage(null)
     } finally {
+      trackStartingRef.current = false
       setTrackStarting(false)
     }
   }, [anchorFrame, playerName, refreshLibrary, selection, video])
 
   const resetSelection = useCallback(() => {
-    selectionRequest.current?.abort()
-    selectionRequest.current = null
-    setAnchorFrame(null)
-    setSelection(null)
-    setSelectionKind('click')
-    setSelectionLoading(false)
-    setSelectionError(null)
-    setCandidates([])
-    setPlayerName('')
-    setCandidateFrame(null)
+    clearSelectionState()
     clearDownstreamState()
-  }, [clearDownstreamState])
+  }, [clearDownstreamState, clearSelectionState])
 
   const clearCaches = useCallback(async () => {
     await clearFrameCaches()
@@ -381,6 +457,7 @@ export function useWorkspace(): WorkspaceController {
     video,
     videoName,
     currentFrame,
+    range,
     selection,
     selectionKind,
     selectionLoading,
@@ -412,6 +489,10 @@ export function useWorkspace(): WorkspaceController {
     confirmCandidate,
     setPlayerName,
     setCurrentFrame,
+    setRange,
+    setRangeIn,
+    setRangeOut,
+    resetRange,
     startTrack,
     retryTrack: startTrack,
     beginFraming: () => setFraming(true),
@@ -422,9 +503,9 @@ export function useWorkspace(): WorkspaceController {
   }), [
     candidates, clearCaches, confirmCandidate, cropWindows, currentFrame, exportJob,
     features, framing, library, loading, loadingLabel, openError, openLibraryPlayer,
-    openLibraryVideo, openPath, openUpload, refreshLibrary, resetSelection,
+    openLibraryVideo, openPath, openUpload, range, refreshLibrary, resetRange, resetSelection,
     playerName, selectAt, selectByDescription, selection, selectionError, selectionKind,
-    selectionLoading, stage, startTrack, trackError, trackJob, trackMessage,
+    selectionLoading, setRange, setRangeIn, setRangeOut, stage, startTrack, trackError, trackJob, trackMessage,
     trackStartedAt, trackStarting, video, videoName, videoSwitchLocked,
   ])
 }

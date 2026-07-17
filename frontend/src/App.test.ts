@@ -9,6 +9,7 @@ const appMocks = vi.hoisted(() => ({
   pause: vi.fn(),
   play: vi.fn(),
   playbackLocked: false,
+  selectionLocked: false,
   workspace: null as unknown,
 }))
 
@@ -20,10 +21,11 @@ vi.mock('./components/VideoStage', async () => {
   const { createElement, forwardRef, useImperativeHandle } = await import('react')
   return {
     VideoStage: forwardRef(function MockVideoStage(
-      { playbackLocked }: { playbackLocked: boolean },
+      { playbackLocked, selectionLocked }: { playbackLocked: boolean; selectionLocked: boolean },
       ref,
     ) {
       appMocks.playbackLocked = playbackLocked
+      appMocks.selectionLocked = selectionLocked
       useImperativeHandle(ref, () => ({
         pause: appMocks.pause,
         play: appMocks.play,
@@ -44,6 +46,7 @@ function workspace(overrides: Record<string, unknown> = {}) {
     video: null,
     videoName: null,
     currentFrame: 0,
+    range: { startFrameIdx: 0, endFrameExclusive: 1 },
     selection: null,
     selectionKind: 'click',
     selectionLoading: false,
@@ -75,6 +78,10 @@ function workspace(overrides: Record<string, unknown> = {}) {
     confirmCandidate: vi.fn(),
     setPlayerName: vi.fn(),
     setCurrentFrame: vi.fn(),
+    setRange: vi.fn(),
+    setRangeIn: vi.fn(),
+    setRangeOut: vi.fn(),
+    resetRange: vi.fn(),
     startTrack: vi.fn(),
     retryTrack: vi.fn(),
     beginFraming: vi.fn(),
@@ -98,6 +105,7 @@ function openedWorkspace(overrides: Record<string, unknown> = {}) {
       duration: 3,
     },
     videoName: 'game.mp4',
+    range: { startFrameIdx: 0, endFrameExclusive: 90 },
     ...overrides,
   })
 }
@@ -107,6 +115,7 @@ beforeEach(() => {
   appMocks.pause.mockClear()
   appMocks.play.mockClear()
   appMocks.playbackLocked = false
+  appMocks.selectionLocked = false
   appMocks.workspace = workspace()
 })
 
@@ -244,4 +253,80 @@ it.each(['track', 'review', 'export'])('leaves %s playback unlocked', async (sta
 
   expect(appMocks.playbackLocked).toBe(false)
   await act(async () => root.unmount())
+})
+
+it.each([
+  ['outside the range in Select', { currentFrame: 20, range: { startFrameIdx: 30, endFrameExclusive: 60 }, stage: 'select' }],
+  ['while reviewing', { currentFrame: 40, range: { startFrameIdx: 30, endFrameExclusive: 60 }, stage: 'review' }],
+])('locks player selection %s', async (_label, state) => {
+  appMocks.workspace = openedWorkspace(state)
+  const container = document.createElement('div')
+  const root = createRoot(container)
+
+  await act(async () => root.render(createElement(App)))
+
+  expect(appMocks.selectionLocked).toBe(true)
+  await act(async () => root.unmount())
+})
+
+it('wires editable ranges to the timeline only during Select', async () => {
+  const setRange = vi.fn()
+  appMocks.workspace = openedWorkspace({
+    currentFrame: 30,
+    range: { startFrameIdx: 10, endFrameExclusive: 60 },
+    setRange,
+  })
+  const container = document.createElement('div')
+  const root = createRoot(container)
+
+  await act(async () => root.render(createElement(App)))
+  const setIn = [...container.querySelectorAll('button')]
+    .find((item) => item.textContent === 'Set In')!
+  await act(async () => setIn.click())
+  expect(setRange).toHaveBeenCalledWith({ startFrameIdx: 30, endFrameExclusive: 60 })
+
+  appMocks.workspace = openedWorkspace({
+    currentFrame: 30,
+    range: { startFrameIdx: 10, endFrameExclusive: 60 },
+    stage: 'review',
+    setRange,
+  })
+  await act(async () => root.render(createElement(App)))
+  expect([...container.querySelectorAll('button')]
+    .find((item) => item.textContent === 'Set In')?.disabled).toBe(true)
+
+  appMocks.workspace = openedWorkspace({
+    currentFrame: 30,
+    range: { startFrameIdx: 10, endFrameExclusive: 60 },
+    stage: 'select',
+    trackStarting: true,
+    setRange,
+  })
+  await act(async () => root.render(createElement(App)))
+  expect([...container.querySelectorAll('button')]
+    .find((item) => item.textContent === 'Set In')?.disabled).toBe(true)
+  expect(appMocks.selectionLocked).toBe(true)
+  await act(async () => root.unmount())
+})
+
+it('calculates track coverage over the selected range', async () => {
+  appMocks.workspace = openedWorkspace({
+    range: { startFrameIdx: 10, endFrameExclusive: 20 },
+    stage: 'review',
+    trackJob: {
+      jobId: 'track-1',
+      state: 'completed',
+      progress: 1,
+      message: 'done',
+      track: Array.from({ length: 5 }, (_value, index) => ({
+        frameIdx: 10 + index,
+        box: [1, 2, 3, 4],
+        center: [2, 3],
+        lost: false,
+      })),
+    },
+  })
+
+  const markup = renderToStaticMarkup(createElement(App))
+  expect(markup).toContain('50% coverage')
 })

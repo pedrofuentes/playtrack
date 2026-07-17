@@ -95,6 +95,47 @@ describe('VideoStage pointer interactions', () => {
     await act(async () => root.unmount())
   })
 
+  it('ignores source and candidate clicks while selection is locked', async () => {
+    const onSourceClick = vi.fn()
+    const onCandidateConfirm = vi.fn()
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+
+    await act(async () => root.render(
+      <VideoStage
+        src="/video.mp4"
+        sourceWidth={400}
+        sourceHeight={200}
+        fps={30}
+        frameCount={90}
+        selection={null}
+        track={[]}
+        cropWindows={[]}
+        candidates={[{ box: [50, 25, 150, 75], score: 0.9 }]}
+        playbackLocked={false}
+        selectionLocked
+        onSourceClick={onSourceClick}
+        onCandidateConfirm={onCandidateConfirm}
+        onFrameChange={vi.fn()}
+      />,
+    ))
+    const video = container.querySelector('video')!
+    const pause = vi.spyOn(video, 'pause').mockImplementation(() => {})
+    video.getBoundingClientRect = () => DOMRect.fromRect({ width: 400, height: 200 })
+
+    await act(async () => video.dispatchEvent(new MouseEvent('click', {
+      bubbles: true,
+      clientX: 100,
+      clientY: 50,
+    })))
+
+    expect(pause).not.toHaveBeenCalled()
+    expect(onSourceClick).not.toHaveBeenCalled()
+    expect(onCandidateConfirm).not.toHaveBeenCalled()
+    await act(async () => root.unmount())
+  })
+
   it('suppresses the video click emitted after a pan drag', async () => {
     const onSourceClick = vi.fn()
     const container = document.createElement('div')

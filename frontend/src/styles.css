@@ -269,15 +269,29 @@ progress { width: 100%; height: 0.45rem; accent-color: var(--mint); }
 .download-link { text-decoration: none; }
 
 .timeline-region { grid-column: 2; grid-row: 3; min-width: 0; border-top: 1px solid var(--border); background: #0d131a; }
-.track-timeline { height: 100%; padding: 0.65rem 0.9rem; }
+.track-timeline { height: 100%; padding: 0.5rem 0.9rem; }
 .timeline-summary { display: flex; align-items: center; justify-content: space-between; gap: 1rem; color: var(--muted); font-size: 0.66rem; font-variant-numeric: tabular-nums; }
 .timeline-label { color: #aeb9c5; font-weight: 850; letter-spacing: 0.09em; text-transform: uppercase; }
-.timeline-track { position: relative; height: 34px; margin-top: 0.55rem; overflow: hidden; border: 1px solid #26313e; border-radius: var(--radius-sm); background: #151d26; }
-.timeline-progress { position: absolute; inset: 0 auto 0 0; background: rgba(69, 213, 166, 0.23); }
+.timeline-track { position: relative; height: 34px; margin-top: 0.4rem; overflow: hidden; border: 1px solid #26313e; border-radius: var(--radius-sm); background: #151d26; }
+.timeline-included-range { position: absolute; z-index: 1; top: 0; bottom: 0; background: rgba(241, 194, 78, 0.1); }
+.timeline-progress { position: absolute; z-index: 2; top: 0; bottom: 0; background: rgba(69, 213, 166, 0.23); }
 .timeline-lost-range { position: absolute; z-index: 2; left: var(--range-left); top: 0; bottom: 0; width: var(--range-width); min-width: 4px; border: 0; border-radius: 0; padding: 0; background: repeating-linear-gradient(135deg, var(--orange) 0 3px, #b66e34 3px 6px); }
 .timeline-lost-range:hover { background: var(--orange) !important; }
-.timeline-playhead { position: absolute; z-index: 3; top: 0; bottom: 0; width: 1px; background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35); }
+.timeline-excluded { position: absolute; z-index: 4; top: 0; bottom: 0; background: rgba(3, 6, 9, 0.68); pointer-events: none; }
+.timeline-range-handle { position: absolute; z-index: 6; inset: 0; height: 100%; margin: 0; border: 0; border-radius: 0; padding: 0; background: transparent; pointer-events: none; appearance: none; }
+.timeline-range-handle::-webkit-slider-runnable-track { height: 100%; background: transparent; }
+.timeline-range-handle::-moz-range-track { height: 100%; background: transparent; }
+.timeline-range-handle::-webkit-slider-thumb { width: 12px; height: 32px; margin-top: 0; border: 1px solid #1b1404; border-radius: 3px; background: var(--amber); cursor: ew-resize; pointer-events: auto; appearance: none; }
+.timeline-range-handle::-moz-range-thumb { width: 12px; height: 32px; border: 1px solid #1b1404; border-radius: 3px; background: var(--amber); cursor: ew-resize; pointer-events: auto; }
+.timeline-range-handle:disabled::-webkit-slider-thumb { cursor: default; opacity: 0.65; }
+.timeline-range-handle:disabled::-moz-range-thumb { cursor: default; opacity: 0.65; }
+.timeline-range-handle:focus-visible { box-shadow: inset var(--focus); }
+.timeline-playhead { position: absolute; z-index: 5; top: 0; bottom: 0; width: 1px; background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35); pointer-events: none; }
 .timeline-playhead::before { position: absolute; top: 0; left: -4px; border-right: 4px solid transparent; border-left: 4px solid transparent; border-top: 6px solid #fff; content: ""; }
+.timeline-range-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-top: 0.35rem; }
+.timeline-range-summary { overflow: hidden; color: #aeb9c5; font-size: 0.63rem; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.timeline-range-actions { display: flex; flex: 0 0 auto; gap: 0.3rem; }
+.timeline-range-actions button { padding: 0.25rem 0.45rem; font-size: 0.59rem; }
 .empty-timeline { display: grid; height: 100%; place-items: center; color: var(--subtle); font-size: 0.68rem; }
 
 .workspace-drawer { position: absolute; z-index: 15; top: 56px; bottom: 0; left: 56px; width: min(370px, calc(100vw - 56px)); overflow: auto; border-right: 1px solid var(--border-strong); background: rgba(15, 21, 28, 0.98); box-shadow: 1.2rem 0 3rem rgba(0, 0, 0, 0.42); backdrop-filter: blur(16px); }

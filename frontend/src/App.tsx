@@ -16,6 +16,7 @@ import { WorkflowInspector } from './components/WorkflowInspector'
 import { type WorkspaceSurface, WorkspaceShell } from './components/WorkspaceShell'
 import { useWorkspace } from './hooks/useWorkspace'
 import { useWorkspaceShortcuts } from './hooks/useWorkspaceShortcuts'
+import { containsFrame, frameRangeCount } from './frameRange'
 import { summarizeTrack } from './trackHealth'
 
 const EXAMPLE_PATH = 'examples/example.mp4'
@@ -28,9 +29,9 @@ export default function App() {
 
   const health = useMemo(() => (
     workspace.video && workspace.trackJob?.state === 'completed'
-      ? summarizeTrack(workspace.trackJob.track, workspace.video.nbFrames)
+      ? summarizeTrack(workspace.trackJob.track, frameRangeCount(workspace.range))
       : null
-  ), [workspace.trackJob, workspace.video])
+  ), [workspace.range, workspace.trackJob, workspace.video])
 
   const primaryAction = () => {
     if (workspace.stage === 'select' && workspace.selection) void workspace.startTrack()
@@ -53,6 +54,8 @@ export default function App() {
     workspace.candidates.length > 0 ||
     workspace.selection !== null
   )
+  const selectionLocked = workspace.trackStarting || workspace.stage !== 'select'
+    || !containsFrame(workspace.range, workspace.currentFrame)
   const exportPanel = workspace.video && workspace.trackJob?.state === 'completed' ? (
     <ExportPanel
       key={`${workspace.video.videoId}:${workspace.trackJob.jobId}`}
@@ -78,6 +81,7 @@ export default function App() {
       cropWindows={workspace.cropWindows}
       candidates={workspace.candidates}
       playbackLocked={playbackLocked}
+      selectionLocked={selectionLocked}
       onSourceClick={workspace.selectAt}
       onCandidateConfirm={workspace.confirmCandidate}
       onFrameChange={workspace.setCurrentFrame}
@@ -134,8 +138,11 @@ export default function App() {
       currentFrame={workspace.currentFrame}
       frameCount={workspace.video.nbFrames}
       fps={workspace.video.fps}
+      range={workspace.range}
+      rangeEditable={workspace.stage === 'select' && !workspace.trackStarting}
       jobProgress={workspace.trackJob?.progress ?? null}
       health={health}
+      onRangeChange={workspace.setRange}
       onSeek={seekToFrame}
     />
   ) : <div className="empty-timeline">Space to play · ← → to step frames · ⌘K to open Library</div>
@@ -192,7 +199,7 @@ export default function App() {
           />
         </div>
       )}
-      jobs={<JobPanel trackJob={workspace.trackJob} exportJob={workspace.exportJob} frameCount={workspace.video?.nbFrames ?? 0} />}
+      jobs={<JobPanel trackJob={workspace.trackJob} exportJob={workspace.exportJob} frameCount={workspace.video ? frameRangeCount(workspace.range) : 0} />}
       settings={<SettingsPanel cacheBytes={workspace.library.cacheBytes} onClearFrameCaches={workspace.clearCaches} />}
     />
   )

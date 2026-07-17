@@ -38,6 +38,7 @@ export interface VideoStageProps {
   cropWindows: readonly CropWindow[]
   candidates: readonly LocateCandidate[]
   playbackLocked: boolean
+  selectionLocked?: boolean
   onSourceClick: (point: Point, frameIdx: number) => void
   onCandidateConfirm: (candidate: LocateCandidate, frameIdx: number) => void
   onFrameChange: (frameIdx: number) => void
@@ -122,6 +123,7 @@ export const VideoStage = forwardRef<VideoStageHandle, VideoStageProps>(function
   cropWindows,
   candidates,
   playbackLocked,
+  selectionLocked = false,
   onSourceClick,
   onCandidateConfirm,
   onFrameChange,
@@ -212,6 +214,7 @@ export const VideoStage = forwardRef<VideoStageHandle, VideoStageProps>(function
       suppressNextClickRef.current = false
       return
     }
+    if (selectionLocked) return
     event.currentTarget.pause()
     const bounds = event.currentTarget.getBoundingClientRect()
     const point = sourcePointFromCanvas(

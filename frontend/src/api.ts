@@ -1,4 +1,5 @@
 import type { SourceBox } from './geometry'
+import type { FrameRange } from './frameRange'
 
 export interface VideoMetadata {
   videoId: string
@@ -77,6 +78,8 @@ export interface LibraryTrack {
   name: string
   anchorFrameIdx: number
   box: SourceBox
+  startFrameIdx: number
+  endFrameExclusive: number
   frameCount: number
   lostCount: number
   createdAt: string
@@ -213,11 +216,18 @@ export async function startTracking(
   frameIdx: number,
   box: SourceBox,
   playerName?: string,
+  range?: FrameRange,
 ): Promise<{ jobId: string; playerName: string }> {
   const response = await fetch('/api/track', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ videoId, frameIdx, box, playerName }),
+    body: JSON.stringify({
+      videoId,
+      frameIdx,
+      box,
+      playerName,
+      ...(range ?? {}),
+    }),
   })
   if (!response.ok) {
     throw new Error(await responseError(response, 'Could not start tracking'))

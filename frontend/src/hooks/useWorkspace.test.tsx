@@ -84,6 +84,7 @@ describe('useWorkspace', () => {
     const root = await mountController()
 
     expect(controller?.video).toEqual(video)
+    expect(controller?.range).toEqual({ startFrameIdx: 0, endFrameExclusive: 930 })
     await act(async () => {
       controller?.selectAt({ x: 100, y: 200 }, 20)
       await Promise.resolve()
@@ -97,6 +98,7 @@ describe('useWorkspace', () => {
     })
     expect(apiMocks.startTracking).toHaveBeenCalledWith(
       'video-1', 20, [1, 2, 3, 4], ' White 19 ',
+      { startFrameIdx: 0, endFrameExclusive: 930 },
     )
     expect(controller?.playerName).toBe('White 19')
     expect(controller?.videoSwitchLocked).toBe(true)
@@ -148,6 +150,91 @@ describe('useWorkspace', () => {
     await act(async () => root.unmount())
   })
 
+  it('sets half-open in/out points from the current frame and resets to the full video', async () => {
+    const root = await mountController()
+
+    act(() => controller?.setCurrentFrame(250))
+    act(() => controller?.setRangeIn())
+    expect(controller?.range).toEqual({ startFrameIdx: 250, endFrameExclusive: 930 })
+
+    act(() => controller?.setCurrentFrame(700))
+    act(() => controller?.setRangeOut())
+    expect(controller?.range).toEqual({ startFrameIdx: 250, endFrameExclusive: 701 })
+
+    act(() => controller?.resetRange())
+    expect(controller?.range).toEqual({ startFrameIdx: 0, endFrameExclusive: 930 })
+    await act(async () => root.unmount())
+  })
+
+  it('aborts and clears stale selection state whenever a boundary changes', async () => {
+    const pendingSignals: AbortSignal[] = []
+    apiMocks.selectByClick.mockImplementation((_videoId, _frame, _x, _y, signal) => {
+      pendingSignals.push(signal)
+      return new Promise(() => {})
+    })
+    const root = await mountController()
+
+    act(() => controller?.selectAt({ x: 10, y: 20 }, 20))
+    expect(controller?.selectionLoading).toBe(true)
+    act(() => controller?.setRange({ startFrameIdx: 10, endFrameExclusive: 100 }))
+
+    expect(pendingSignals[0].aborted).toBe(true)
+    expect(controller?.selection).toBeNull()
+    expect(controller?.candidates).toEqual([])
+    expect(controller?.selectionError).toBeNull()
+    expect(controller?.selectionLoading).toBe(false)
+    await act(async () => root.unmount())
+  })
+
+  it('rejects click, text, and candidate anchors outside the selected range', async () => {
+    const root = await mountController()
+    act(() => controller?.setRange({ startFrameIdx: 10, endFrameExclusive: 20 }))
+
+    act(() => controller?.selectAt({ x: 10, y: 20 }, 9))
+    expect(apiMocks.selectByClick).not.toHaveBeenCalled()
+
+    act(() => controller?.setCurrentFrame(20))
+    act(() => controller?.selectByDescription('white jersey'))
+    expect(apiMocks.selectByText).not.toHaveBeenCalled()
+
+    act(() => controller?.confirmCandidate({ box: [1, 2, 3, 4], score: 1 }, 20))
+    expect(controller?.selection).toBeNull()
+
+    await act(async () => {
+      controller?.selectAt({ x: 10, y: 20 }, 10)
+      await Promise.resolve()
+    })
+    expect(apiMocks.selectByClick).toHaveBeenCalledOnce()
+    expect(controller?.selection).not.toBeNull()
+    await act(async () => root.unmount())
+  })
+
+  it('freezes the submitted range while tracking is starting', async () => {
+    let resolveStart: ((value: { jobId: string; playerName: string }) => void) | null = null
+    apiMocks.startTracking.mockImplementation(() => new Promise((resolve) => {
+      resolveStart = resolve
+    }))
+    const root = await mountController()
+    await act(async () => {
+      controller?.selectAt({ x: 10, y: 20 }, 20)
+      await Promise.resolve()
+    })
+
+    let starting: Promise<void> | undefined
+    act(() => {
+      starting = controller?.startTrack()
+    })
+    expect(controller?.trackStarting).toBe(true)
+    act(() => controller?.setRange({ startFrameIdx: 10, endFrameExclusive: 100 }))
+    expect(controller?.range).toEqual({ startFrameIdx: 0, endFrameExclusive: 930 })
+
+    await act(async () => {
+      resolveStart?.({ jobId: 'track-1', playerName: 'White 19' })
+      await starting
+    })
+    await act(async () => root.unmount())
+  })
+
   it('forwards optional names and uses the source name returned by registration', async () => {
     const root = await mountController()
     const file = new File(['video'], 'filename.mp4', { type: 'video/mp4' })
@@ -173,6 +260,8 @@ describe('useWorkspace', () => {
       name: 'White 19',
       anchorFrameIdx: 42,
       box: [10, 20, 30, 60],
+      startFrameIdx: 30,
+      endFrameExclusive: 90,
       frameCount: 930,
       lostCount: 0,
       createdAt: '2026-07-17T00:00:00Z',
@@ -212,6 +301,7 @@ describe('useWorkspace', () => {
     expect(controller?.currentFrame).toBe(42)
     expect(controller?.trackJob).toEqual(restored)
     expect(controller?.stage).toBe('review')
+    expect(controller?.range).toEqual({ startFrameIdx: 30, endFrameExclusive: 90 })
 
     apiMocks.getTrack.mockRejectedValueOnce(new Error('Track missing'))
     await act(async () => {
@@ -223,6 +313,7 @@ describe('useWorkspace', () => {
     expect(controller?.videoName).toBe('match.mp4')
     expect(controller?.playerName).toBe('White 19')
     expect(controller?.trackJob).toEqual(restored)
+    expect(controller?.range).toEqual({ startFrameIdx: 30, endFrameExclusive: 90 })
     await act(async () => root.unmount())
   })
 })

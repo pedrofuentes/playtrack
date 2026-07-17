@@ -29,8 +29,8 @@ function savedVideo(videoId: string, name: string, sourceKind: 'path' | 'upload'
     sourceExists: true,
     sourceKind,
     path: `/${name}`,
-    metadata: { videoId, name, width: 320, height: 180, fps: 10, nbFrames: 4, duration: .4 },
-    tracks: [{ name: 'White 19', jobId: `${videoId}-track`, anchorFrameIdx: 2, box: [1, 2, 3, 4], frameCount: 4, lostCount: 1, createdAt: '2026-07-16T00:00:00Z' }],
+    metadata: { videoId, name, width: 320, height: 180, fps: 25, nbFrames: 1000, duration: 40 },
+    tracks: [{ name: 'White 19', jobId: `${videoId}-track`, anchorFrameIdx: 250, box: [1, 2, 3, 4], startFrameIdx: 250, endFrameExclusive: 701, frameCount: 451, lostCount: 1, createdAt: '2026-07-16T00:00:00Z' }],
     exports: [{ exportId: `${videoId}-export`, videoId, trackJobId: `${videoId}-track`, params: { outWidth: 128, outHeight: 72, zoom: 2 }, path: '/export.mp4', size: 512, createdAt: '2026-07-16T00:00:00Z', sourceExists: true }],
   }
 }
@@ -79,6 +79,7 @@ it('separates sources, named players, and exports into tabs', async () => {
   expect(container.textContent).toContain('White 19')
   expect(container.textContent).toContain('Championship Final.mp4')
   expect(container.textContent).toContain('Open player')
+  expect(container.textContent).toContain('00:10–00:28 · 18.0 sec · 451 frames')
   expect(container.textContent).not.toContain('Re-export')
 
   await act(async () => button(container, 'Exports').click())
@@ -86,6 +87,21 @@ it('separates sources, named players, and exports into tabs', async () => {
   expect(container.textContent).toContain('128 × 72')
   expect(container.querySelector('a[download]')).not.toBeNull()
   expect(container.textContent).not.toContain('Open player')
+  await act(async () => root.unmount())
+})
+
+it('shows legacy players without range fields as full-video ranges', async () => {
+  const current = savedVideo('legacy', 'Legacy.mp4', 'path')
+  const legacyPlayer = { ...current.tracks[0] } as Partial<(typeof current.tracks)[number]>
+  delete legacyPlayer.startFrameIdx
+  delete legacyPlayer.endFrameExclusive
+  current.tracks = [legacyPlayer as (typeof current.tracks)[number]]
+  const { container, root } = await renderLibrary({
+    library: { cacheBytes: 0, videos: [current] },
+  })
+
+  await act(async () => button(container, 'Players').click())
+  expect(container.textContent).toContain('00:00–00:40 · 40.0 sec · 1000 frames')
   await act(async () => root.unmount())
 })
 
