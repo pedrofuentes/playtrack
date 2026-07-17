@@ -9,6 +9,10 @@ The primary deployment target is Windows with an NVIDIA RTX 2080 Ti. macOS is
 supported for development and click-to-select/tracking through MPS;
 LocateAnything text selection is CUDA-only.
 
+Working on this repo with a coding agent (Claude Code, Codex, or others)? Start
+with [AGENTS.md](AGENTS.md) — architecture map, commands, conventions, and
+known pitfalls.
+
 ## Windows quick start (RTX 2080 Ti)
 
 Requirements:
