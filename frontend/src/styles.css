@@ -289,6 +289,8 @@ progress { width: 100%; height: 0.45rem; accent-color: var(--mint); }
 .open-video-panel { display: grid; gap: 0.7rem; }
 .open-video-panel.is-dragging { border-color: var(--amber) !important; background: rgba(241, 194, 78, 0.08) !important; }
 .open-video-panel .label { margin: 0; }
+.source-name-field { display: grid; gap: 0.35rem; color: #b9c3ce; font-size: 0.72rem; font-weight: 750; }
+.source-name-field small { color: var(--subtle); font-size: 0.61rem; font-weight: 500; }
 .file-upload { display: grid; gap: 0.45rem; color: #b9c3ce; font-size: 0.72rem; font-weight: 750; }
 .file-upload input[type="file"] { padding: 0.45rem; }
 .file-upload input[type="file"]::file-selector-button { margin-right: 0.5rem; border: 1px solid var(--amber-strong); border-radius: var(--radius-sm); padding: 0.4rem 0.55rem; color: #19150a; background: var(--amber); font-weight: 800; }
@@ -322,6 +324,7 @@ progress { width: 100%; height: 0.45rem; accent-color: var(--mint); }
 .library-actions button, .library-actions a { padding: 0.34rem 0.45rem; color: var(--text); font-size: 0.6rem; text-decoration: none; }
 .library-actions a { color: var(--amber); }
 .library-player > .library-actions { justify-content: flex-end; border-top: 1px solid var(--border); padding-top: 0.45rem; }
+.library-source-actions { justify-content: flex-end; border-top: 1px solid var(--border); padding-top: 0.45rem; }
 .library-rename { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0.3rem; align-items: center; }
 .library-rename input { min-width: 0; padding: 0.38rem 0.45rem; font-size: 0.66rem; }
 .library-rename button { padding: 0.36rem 0.42rem; font-size: 0.58rem; }

@@ -27,6 +27,7 @@ vi.mock('../api', async (importOriginal) => ({
 
 const video: VideoMetadata = {
   videoId: 'video-1',
+  name: 'Returned Source Name',
   width: 4096,
   height: 1024,
   fps: 30,
@@ -147,6 +148,25 @@ describe('useWorkspace', () => {
     await act(async () => root.unmount())
   })
 
+  it('forwards optional names and uses the source name returned by registration', async () => {
+    const root = await mountController()
+    const file = new File(['video'], 'filename.mp4', { type: 'video/mp4' })
+
+    await act(async () => {
+      await controller?.openPath('/videos/path-name.mp4', 'Requested Path Name')
+    })
+    expect(apiMocks.registerVideo).toHaveBeenLastCalledWith('/videos/path-name.mp4', 'Requested Path Name')
+    expect(controller?.videoName).toBe('Returned Source Name')
+
+    apiMocks.uploadVideo.mockResolvedValueOnce({ ...video, name: 'Returned Upload Name' })
+    await act(async () => {
+      await controller?.openUpload(file, 'Requested Upload Name')
+    })
+    expect(apiMocks.uploadVideo).toHaveBeenCalledWith(file, 'Requested Upload Name')
+    expect(controller?.videoName).toBe('Returned Upload Name')
+    await act(async () => root.unmount())
+  })
+
   it('restores a saved player atomically at its anchor and preserves state on failure', async () => {
     const savedPlayer: LibraryTrack = {
       jobId: 'saved-track',
@@ -162,7 +182,7 @@ describe('useWorkspace', () => {
       name: 'match.mp4',
       sourceKind: 'path',
       path: '/match.mp4',
-      metadata: video,
+      metadata: { ...video, name: 'Stale metadata name' },
       size: 100,
       openedAt: '2026-07-17T00:00:00Z',
       sourceExists: true,
@@ -178,6 +198,11 @@ describe('useWorkspace', () => {
     }
     apiMocks.getTrack.mockResolvedValue(restored)
     const root = await mountController()
+
+    await act(async () => {
+      await controller?.openLibraryVideo(savedVideo)
+    })
+    expect(controller?.videoName).toBe('match.mp4')
 
     await act(async () => {
       await expect(controller?.openLibraryPlayer(savedVideo, savedPlayer)).resolves.toBe(true)

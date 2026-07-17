@@ -51,8 +51,8 @@ export interface WorkspaceController {
   exportJob: TrackJobUpdate | null
   stage: WorkspaceStage
   videoSwitchLocked: boolean
-  openUpload(file: File): Promise<void>
-  openPath(path: string): Promise<void>
+  openUpload(file: File, name?: string): Promise<void>
+  openPath(path: string, name?: string): Promise<void>
   openLibraryVideo(video: LibraryVideo): Promise<void>
   openLibraryPlayer(video: LibraryVideo, player: LibraryTrack): Promise<boolean>
   refreshLibrary(): void
@@ -120,8 +120,9 @@ export function useWorkspace(): WorkspaceController {
 
   const openVideo = useCallback(async (
     register: () => Promise<VideoMetadata>,
-    filename: string,
+    fallbackName: string,
     activity: string,
+    savedName?: string,
   ) => {
     if (videoSwitchLockedRef.current) return
     selectionRequest.current?.abort()
@@ -140,12 +141,13 @@ export function useWorkspace(): WorkspaceController {
     setPlayerName('')
     setCandidateFrame(null)
     try {
-      setVideo(await register())
-      setVideoName(filename)
+      const registered = await register()
+      setVideo(registered)
+      setVideoName(savedName ?? registered.name)
     } catch (reason) {
       setVideo(null)
       setVideoName(null)
-      setOpenError(reason instanceof Error ? reason.message : `Could not open ${filename}`)
+      setOpenError(reason instanceof Error ? reason.message : `Could not open ${fallbackName}`)
     } finally {
       setLoading(false)
     }
@@ -155,14 +157,14 @@ export function useWorkspace(): WorkspaceController {
     void getLibrary().then(setLibrary).catch(() => {})
   }, [])
 
-  const openPath = useCallback((path: string) => openVideo(
-    () => registerVideo(path),
+  const openPath = useCallback((path: string, name?: string) => openVideo(
+    () => registerVideo(path, name),
     filenameFromPath(path),
     `Opening ${path}…`,
   ), [openVideo])
 
-  const openUpload = useCallback((file: File) => openVideo(
-    () => uploadVideo(file),
+  const openUpload = useCallback((file: File, name?: string) => openVideo(
+    () => uploadVideo(file, name),
     file.name,
     `Uploading ${file.name}…`,
   ), [openVideo])
@@ -171,6 +173,7 @@ export function useWorkspace(): WorkspaceController {
     () => Promise.resolve(saved.metadata),
     saved.name,
     `Opening ${saved.name}…`,
+    saved.name,
   ), [openVideo])
 
   const openLibraryPlayer = useCallback(async (

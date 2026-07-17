@@ -2,6 +2,7 @@ import type { SourceBox } from './geometry'
 
 export interface VideoMetadata {
   videoId: string
+  name: string
   width: number
   height: number
   fps: number
@@ -114,11 +115,12 @@ interface WebSocketLocation {
   host: string
 }
 
-export async function registerVideo(path: string): Promise<VideoMetadata> {
+export async function registerVideo(path: string, name?: string): Promise<VideoMetadata> {
+  const trimmedName = name?.trim()
   const response = await fetch('/api/videos', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path }),
+    body: JSON.stringify({ path, ...(trimmedName ? { name: trimmedName } : {}) }),
   })
   if (!response.ok) {
     let message = `Could not open video (${response.status})`
@@ -133,9 +135,11 @@ export async function registerVideo(path: string): Promise<VideoMetadata> {
   return (await response.json()) as VideoMetadata
 }
 
-export async function uploadVideo(file: File): Promise<VideoMetadata> {
+export async function uploadVideo(file: File, name?: string): Promise<VideoMetadata> {
   const form = new FormData()
   form.append('file', file)
+  const trimmedName = name?.trim()
+  if (trimmedName) form.append('name', trimmedName)
   const response = await fetch('/api/videos', {
     method: 'POST',
     body: form,
@@ -320,6 +324,19 @@ export async function renameLibraryPlayer(
   })
   if (!response.ok) throw new Error(await responseError(response, 'Could not rename player'))
   return (await response.json()) as { jobId: string; name: string }
+}
+
+export async function renameLibrarySource(
+  videoId: string,
+  name: string,
+): Promise<{ videoId: string; name: string }> {
+  const response = await fetch(`/api/library/videos/${encodeURIComponent(videoId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  if (!response.ok) throw new Error(await responseError(response, 'Could not rename source'))
+  return (await response.json()) as { videoId: string; name: string }
 }
 
 export async function clearFrameCaches(): Promise<{ bytesFreed: number }> {

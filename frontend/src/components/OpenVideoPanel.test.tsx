@@ -26,6 +26,9 @@ describe('OpenVideoPanel', () => {
 
     expect(markup).toContain('type="file"')
     expect(markup).toContain('accept="video/mp4,video/*"')
+    expect(markup).toContain('Source name (optional)')
+    expect(markup).toContain('maxLength="80"')
+    expect(markup).toContain('Uses the filename when blank.')
     expect(markup).toContain('placeholder="examples/example.mp4"')
     expect(markup).toContain('Open server path')
     expect(markup).toContain('More options')
@@ -60,7 +63,43 @@ describe('OpenVideoPanel', () => {
       await Promise.resolve()
     })
 
-    expect(onUpload).toHaveBeenCalledWith(file)
+    expect(onUpload).toHaveBeenCalledWith(file, undefined)
+    await act(async () => root.unmount())
+  })
+
+  it('passes a trimmed source name to both server-path and upload callbacks', async () => {
+    const onUpload = vi.fn().mockResolvedValue(undefined)
+    const onOpenPath = vi.fn().mockResolvedValue(undefined)
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    await act(async () => root.render(
+      <OpenVideoPanel disabled={false} variant="empty" onUpload={onUpload} onOpenPath={onOpenPath} />,
+    ))
+
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    const nameInput = container.querySelector<HTMLInputElement>('input[aria-label="Source name (optional)"]')!
+    const pathInput = container.querySelector<HTMLInputElement>('input[placeholder="examples/example.mp4"]')!
+    await act(async () => {
+      setValue?.call(nameInput, '  Championship Final  ')
+      nameInput.dispatchEvent(new Event('input', { bubbles: true }))
+      setValue?.call(pathInput, '  /videos/match.mp4  ')
+      pathInput.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      container.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      await Promise.resolve()
+    })
+    expect(onOpenPath).toHaveBeenCalledWith('/videos/match.mp4', 'Championship Final')
+
+    const file = new File(['video'], 'match.mp4', { type: 'video/mp4' })
+    const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]')!
+    Object.defineProperty(fileInput, 'files', { configurable: true, value: [file] })
+    await act(async () => {
+      fileInput.dispatchEvent(new Event('change', { bubbles: true }))
+      await Promise.resolve()
+    })
+    expect(onUpload).toHaveBeenCalledWith(file, 'Championship Final')
     await act(async () => root.unmount())
   })
 })

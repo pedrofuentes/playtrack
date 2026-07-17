@@ -9,8 +9,8 @@ import {
 interface OpenVideoPanelProps {
   disabled: boolean
   variant?: 'empty' | 'drawer'
-  onUpload: (file: File) => Promise<void>
-  onOpenPath: (path: string) => Promise<void>
+  onUpload: (file: File, name?: string) => Promise<void>
+  onOpenPath: (path: string, name?: string) => Promise<void>
 }
 
 export function OpenVideoPanel({
@@ -20,10 +20,13 @@ export function OpenVideoPanel({
   onOpenPath,
 }: OpenVideoPanelProps) {
   const [path, setPath] = useState('')
+  const [sourceName, setSourceName] = useState('')
   const [busy, setBusy] = useState<'upload' | 'path' | null>(null)
   const [dragging, setDragging] = useState(false)
   const pathInputId = `server-video-path-${useId()}`
+  const sourceNameInputId = `source-name-${useId()}`
   const unavailable = disabled || busy !== null
+  const requestedName = sourceName.trim() || undefined
 
   const submitPath = async (event: FormEvent) => {
     event.preventDefault()
@@ -31,7 +34,7 @@ export function OpenVideoPanel({
     if (!value || unavailable) return
     setBusy('path')
     try {
-      await onOpenPath(value)
+      await onOpenPath(value, requestedName)
     } finally {
       setBusy(null)
     }
@@ -41,7 +44,7 @@ export function OpenVideoPanel({
     if (!file || unavailable) return
     setBusy('upload')
     try {
-      await onUpload(file)
+      await onUpload(file, requestedName)
     } finally {
       setBusy(null)
     }
@@ -73,6 +76,19 @@ export function OpenVideoPanel({
       onDrop={(event) => void dropFile(event)}
     >
       <p className="label">Open video</p>
+      <label className="source-name-field" htmlFor={sourceNameInputId}>
+        <span>Source name (optional)</span>
+        <input
+          id={sourceNameInputId}
+          aria-label="Source name (optional)"
+          type="text"
+          maxLength={80}
+          value={sourceName}
+          disabled={unavailable}
+          onChange={(event) => setSourceName(event.target.value)}
+        />
+        <small>Uses the filename when blank.</small>
+      </label>
       <label className="file-upload">
         <span>{variant === 'empty' ? 'Drop a video here or browse this computer' : 'Upload from this computer'}</span>
         <input

@@ -12,6 +12,7 @@ const apiMocks = vi.hoisted(() => ({
   deleteLibraryTrack: vi.fn().mockResolvedValue(undefined),
   deleteLibraryVideo: vi.fn().mockResolvedValue(undefined),
   renameLibraryPlayer: vi.fn().mockResolvedValue({ jobId: 'video-1-track', name: 'Goalie' }),
+  renameLibrarySource: vi.fn().mockResolvedValue({ videoId: 'video-1', name: 'Championship Final' }),
 }))
 
 vi.mock('../api', async (importOriginal) => ({
@@ -28,7 +29,7 @@ function savedVideo(videoId: string, name: string, sourceKind: 'path' | 'upload'
     sourceExists: true,
     sourceKind,
     path: `/${name}`,
-    metadata: { videoId, width: 320, height: 180, fps: 10, nbFrames: 4, duration: .4 },
+    metadata: { videoId, name, width: 320, height: 180, fps: 10, nbFrames: 4, duration: .4 },
     tracks: [{ name: 'White 19', jobId: `${videoId}-track`, anchorFrameIdx: 2, box: [1, 2, 3, 4], frameCount: 4, lostCount: 1, createdAt: '2026-07-16T00:00:00Z' }],
     exports: [{ exportId: `${videoId}-export`, videoId, trackJobId: `${videoId}-track`, params: { outWidth: 128, outHeight: 72, zoom: 2 }, path: '/export.mp4', size: 512, createdAt: '2026-07-16T00:00:00Z', sourceExists: true }],
   }
@@ -123,5 +124,32 @@ it('renames a player inline and keeps missing sources deletable', async () => {
   expect(apiMocks.renameLibraryPlayer).toHaveBeenCalledWith('video-1-track', 'Goalie')
   expect(props.onRefresh).toHaveBeenCalled()
   expect(button(container, 'Delete').disabled).toBe(false)
+  await act(async () => root.unmount())
+})
+
+it('renames a source inline, refreshes the library, and keeps player rename state independent', async () => {
+  const { container, root, props } = await renderLibrary({
+    library: { ...library, videos: [library.videos[0]] },
+  })
+  await act(async () => button(container, 'Rename').click())
+  const sourceInput = container.querySelector<HTMLInputElement>('input[aria-label="Source name"]')!
+  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  await act(async () => {
+    setValue?.call(sourceInput, 'Championship Final')
+    sourceInput.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+
+  await act(async () => button(container, 'Players').click())
+  await act(async () => button(container, 'Rename').click())
+  expect(container.querySelector<HTMLInputElement>('input[aria-label="Player name"]')?.value).toBe('White 19')
+
+  await act(async () => button(container, 'Sources').click())
+  expect(container.querySelector<HTMLInputElement>('input[aria-label="Source name"]')?.value).toBe('Championship Final')
+  await act(async () => {
+    button(container, 'Save').click()
+    await Promise.resolve()
+  })
+  expect(apiMocks.renameLibrarySource).toHaveBeenCalledWith('video-1', 'Championship Final')
+  expect(props.onRefresh).toHaveBeenCalled()
   await act(async () => root.unmount())
 })

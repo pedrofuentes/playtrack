@@ -155,12 +155,12 @@ export default function App() {
           <OpenVideoPanel
             variant="drawer"
             disabled={workspace.loading || workspace.videoSwitchLocked}
-            onUpload={async (file) => {
-              await workspace.openUpload(file)
+            onUpload={async (file, name) => {
+              await workspace.openUpload(file, name)
               setSurface('editor')
             }}
-            onOpenPath={async (path) => {
-              await workspace.openPath(path)
+            onOpenPath={async (path, name) => {
+              await workspace.openPath(path, name)
               setSurface('editor')
             }}
           />
@@ -193,8 +193,8 @@ interface EmptyWorkspaceProps {
   loading: boolean
   loadingLabel: string
   error: string | null
-  onUpload: (file: File) => Promise<void>
-  onOpenPath: (path: string) => Promise<void>
+  onUpload: (file: File, name?: string) => Promise<void>
+  onOpenPath: (path: string, name?: string) => Promise<void>
 }
 
 function EmptyWorkspace({ loading, loadingLabel, error, onUpload, onOpenPath }: EmptyWorkspaceProps) {

@@ -5,7 +5,7 @@ import type { ClickSelection, TrackJobUpdate, VideoMetadata } from '../api'
 import { WorkflowInspector } from './WorkflowInspector'
 
 const video: VideoMetadata = {
-  videoId: 'video-1', width: 4096, height: 1024, fps: 30, nbFrames: 930, duration: 31,
+  videoId: 'video-1', name: 'Championship Final', width: 4096, height: 1024, fps: 30, nbFrames: 930, duration: 31,
 }
 const selection: ClickSelection = { box: [1, 2, 3, 4], maskPng: '', score: 0.92 }
 

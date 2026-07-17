@@ -5,6 +5,8 @@ import {
   getLibrary,
   fetchCropPlan,
   getFeatures,
+  registerVideo,
+  renameLibrarySource,
   selectByClick,
   selectByText,
   renameLibraryPlayer,
@@ -22,6 +24,7 @@ describe('uploadVideo', () => {
   it('posts the selected file as multipart form data without overriding its content type', async () => {
     const result = {
       videoId: 'uploaded-video',
+      name: 'Championship Final',
       width: 1920,
       height: 1080,
       fps: 30,
@@ -35,7 +38,7 @@ describe('uploadVideo', () => {
     vi.stubGlobal('fetch', fetchMock)
     const file = new File(['video bytes'], 'match.mp4', { type: 'video/mp4' })
 
-    await expect(uploadVideo(file)).resolves.toEqual(result)
+    await expect(uploadVideo(file, 'Championship Final')).resolves.toEqual(result)
 
     expect(fetchMock).toHaveBeenCalledOnce()
     const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit]
@@ -44,6 +47,38 @@ describe('uploadVideo', () => {
     expect(options.headers).toBeUndefined()
     expect(options.body).toBeInstanceOf(FormData)
     expect((options.body as FormData).get('file')).toBe(file)
+    expect((options.body as FormData).get('name')).toBe('Championship Final')
+  })
+})
+
+describe('registerVideo', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('posts the server path with an optional source name', async () => {
+    const result = {
+      videoId: 'registered-video',
+      name: 'Championship Final',
+      width: 1920,
+      height: 1080,
+      fps: 30,
+      nbFrames: 90,
+      duration: 3,
+    }
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue(result),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(registerVideo('/videos/match.mp4', 'Championship Final')).resolves.toEqual(result)
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/videos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: '/videos/match.mp4', name: 'Championship Final' }),
+    })
   })
 })
 
@@ -247,6 +282,24 @@ describe('library API', () => {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'Goalie' }),
+    })
+  })
+
+  it('renames a saved source', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ videoId: 'video-1', name: 'Championship Final' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(renameLibrarySource('video-1', 'Championship Final')).resolves.toEqual({
+      videoId: 'video-1',
+      name: 'Championship Final',
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/library/videos/video-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Championship Final' }),
     })
   })
 })

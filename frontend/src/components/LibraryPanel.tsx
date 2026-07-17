@@ -9,6 +9,7 @@ import {
   type LibraryTrack,
   type LibraryVideo,
   renameLibraryPlayer,
+  renameLibrarySource,
 } from '../api'
 
 type LibraryTab = 'sources' | 'players' | 'exports'
@@ -31,8 +32,10 @@ export function LibraryPanel({
   const [tab, setTab] = useState<LibraryTab>('sources')
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState(false)
-  const [renaming, setRenaming] = useState<string | null>(null)
-  const [name, setName] = useState('')
+  const [sourceRenaming, setSourceRenaming] = useState<string | null>(null)
+  const [sourceName, setSourceName] = useState('')
+  const [playerRenaming, setPlayerRenaming] = useState<string | null>(null)
+  const [playerName, setPlayerName] = useState('')
   const [error, setError] = useState<string | null>(null)
   const normalized = query.trim().toLocaleLowerCase()
 
@@ -67,9 +70,14 @@ export function LibraryPanel({
     }
   }
 
-  const saveName = (player: LibraryTrack) => run(async () => {
-    await renameLibraryPlayer(player.jobId, name)
-    setRenaming(null)
+  const savePlayerName = (player: LibraryTrack) => run(async () => {
+    await renameLibraryPlayer(player.jobId, playerName)
+    setPlayerRenaming(null)
+  })
+
+  const saveSourceName = (video: LibraryVideo) => run(async () => {
+    await renameLibrarySource(video.videoId, sourceName.trim())
+    setSourceRenaming(null)
   })
 
   const openPlayer = async (video: LibraryVideo, player: LibraryTrack) => {
@@ -115,17 +123,26 @@ export function LibraryPanel({
             <div className="library-video-row">
               <div className="library-thumbnail" aria-hidden="true" />
               <div className="library-video-copy">
-                <strong title={video.name}>{video.name}</strong>
+                {sourceRenaming === video.videoId ? (
+                  <div className="library-rename">
+                    <input aria-label="Source name" maxLength={80} value={sourceName} onChange={(event) => setSourceName(event.target.value)} />
+                    <button type="button" disabled={busy || !sourceName.trim()} onClick={() => void saveSourceName(video)}>Save</button>
+                    <button type="button" disabled={busy} onClick={() => setSourceRenaming(null)}>Cancel</button>
+                  </div>
+                ) : <strong title={video.name}>{video.name}</strong>}
                 <span>{video.sourceKind === 'upload' ? 'Uploaded copy' : 'Registered path'} · {video.tracks.length} player{video.tracks.length === 1 ? '' : 's'}</span>
                 <span>{formatBytes(video.size)} · {formatDate(video.openedAt)}</span>
               </div>
               <button type="button" disabled={busy || openingDisabled || !video.sourceExists} onClick={() => onOpenVideo(video)}>Open</button>
             </div>
-            <button type="button" className="library-delete danger" disabled={busy} onClick={() => {
-              if (window.confirm(`Delete ${video.name} and its saved players/exports?`)) {
-                void run(() => deleteLibraryVideo(video.videoId))
-              }
-            }}>Delete source</button>
+            <div className="library-actions library-source-actions">
+              <button type="button" disabled={busy} onClick={() => { setSourceRenaming(video.videoId); setSourceName(video.name) }}>Rename</button>
+              <button type="button" className="danger" disabled={busy} onClick={() => {
+                if (window.confirm(`Delete ${video.name} and its saved players/exports?`)) {
+                  void run(() => deleteLibraryVideo(video.videoId))
+                }
+              }}>Delete source</button>
+            </div>
           </article>
         ))}
 
@@ -134,11 +151,11 @@ export function LibraryPanel({
             <div className="library-video-row">
               <div className="player-thumbnail" aria-hidden="true" />
               <div className="library-video-copy">
-                {renaming === player.jobId ? (
+                {playerRenaming === player.jobId ? (
                   <div className="library-rename">
-                    <input aria-label="Player name" maxLength={80} value={name} onChange={(event) => setName(event.target.value)} />
-                    <button type="button" disabled={busy || !name.trim()} onClick={() => void saveName(player)}>Save</button>
-                    <button type="button" disabled={busy} onClick={() => setRenaming(null)}>Cancel</button>
+                    <input aria-label="Player name" maxLength={80} value={playerName} onChange={(event) => setPlayerName(event.target.value)} />
+                    <button type="button" disabled={busy || !playerName.trim()} onClick={() => void savePlayerName(player)}>Save</button>
+                    <button type="button" disabled={busy} onClick={() => setPlayerRenaming(null)}>Cancel</button>
                   </div>
                 ) : <strong>{player.name}</strong>}
                 <span>{video.name}</span>
@@ -147,7 +164,7 @@ export function LibraryPanel({
               <button type="button" disabled={busy || openingDisabled || !video.sourceExists} onClick={() => void openPlayer(video, player)}>Open player</button>
             </div>
             <div className="library-actions">
-              <button type="button" disabled={busy} onClick={() => { setRenaming(player.jobId); setName(player.name) }}>Rename</button>
+              <button type="button" disabled={busy} onClick={() => { setPlayerRenaming(player.jobId); setPlayerName(player.name) }}>Rename</button>
               <button type="button" className="danger" disabled={busy} onClick={() => {
                 if (window.confirm(`Delete ${player.name} and its exports?`)) {
                   void run(() => deleteLibraryTrack(player.jobId))

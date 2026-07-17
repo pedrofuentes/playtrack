@@ -19,7 +19,7 @@ it('switches between click and description selection methods', async () => {
   await act(async () => root.render(
     <WorkflowInspector
       stage="select"
-      video={{ videoId: 'video-1', width: 4096, height: 1024, fps: 30, nbFrames: 930, duration: 31 }}
+      video={{ videoId: 'video-1', name: 'Championship Final', width: 4096, height: 1024, fps: 30, nbFrames: 930, duration: 31 }}
       currentFrame={10}
       selection={null}
       selectionKind="click"
