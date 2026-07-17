@@ -203,6 +203,8 @@ it('releases a failed export start and allows a retry with a new token', async (
   })
   expect(props.onExportFinish).toHaveBeenCalledWith(1)
   expect(container.textContent).toContain('Queue unavailable')
+  expect(props.onJobChange).toHaveBeenCalledTimes(1)
+  expect(props.onJobChange).toHaveBeenLastCalledWith(null)
 
   await act(async () => {
     panelRef.current?.triggerExport()

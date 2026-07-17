@@ -155,29 +155,40 @@ export const ExportPanel = forwardRef<ExportPanelHandle, ExportPanelProps>(funct
       }
       setJob(queued)
       onJobChange(queued)
-      const socket = watchTrackJob(
-        jobId,
-        (update) => {
-          if (!isCurrent()) return
-          setJob(update)
-          onJobChange(update)
-          if (update.state === 'failed') setError(update.message)
-          if (update.state === 'completed' || update.state === 'failed') {
-            if (socketRef.current === socket) socketRef.current = null
-            socket.close()
-            if (update.state === 'completed') onLibraryChange()
-          }
-        },
-        (message) => {
-          if (!isCurrent()) return
-          setError(message)
-          setJob((current) => {
-            const failed = current ? { ...current, state: 'failed' as const, message } : null
-            onJobChange(failed)
-            return failed
-          })
-        },
-      )
+      let socket: WebSocket
+      try {
+        socket = watchTrackJob(
+          jobId,
+          (update) => {
+            if (!isCurrent()) return
+            setJob(update)
+            onJobChange(update)
+            if (update.state === 'failed') setError(update.message)
+            if (update.state === 'completed' || update.state === 'failed') {
+              if (socketRef.current === socket) socketRef.current = null
+              socket.close()
+              if (update.state === 'completed') onLibraryChange()
+            }
+          },
+          (message) => {
+            if (!isCurrent()) return
+            setError(message)
+            setJob((current) => {
+              const failed = current ? { ...current, state: 'failed' as const, message } : null
+              onJobChange(failed)
+              return failed
+            })
+          },
+        )
+      } catch (reason) {
+        if (!isCurrent()) return
+        const message = reason instanceof Error ? reason.message : 'Could not watch export'
+        const failed = { ...queued, state: 'failed' as const, message }
+        setError(message)
+        setJob(failed)
+        onJobChange(failed)
+        return
+      }
       socketRef.current = socket
     } catch (reason) {
       if (isCurrent()) {

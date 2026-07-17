@@ -1,20 +1,23 @@
 // @vitest-environment jsdom
 
-import { act } from 'react'
+import { act, createRef } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { LibraryTrack, LibraryVideo, TrackJobUpdate, VideoMetadata } from '../api'
+import { type ExportPanelHandle, ExportPanel } from '../components/ExportPanel'
 import { type WorkspaceController, useWorkspace } from './useWorkspace'
 
 const apiMocks = vi.hoisted(() => ({
   clearFrameCaches: vi.fn(),
+  fetchCropPlan: vi.fn(),
   getFeatures: vi.fn(),
   getLibrary: vi.fn(),
   getTrack: vi.fn(),
   registerVideo: vi.fn(),
   selectByClick: vi.fn(),
   selectByText: vi.fn(),
+  startExport: vi.fn(),
   startTracking: vi.fn(),
   uploadVideo: vi.fn(),
   watchTrackJob: vi.fn(),
@@ -112,11 +115,19 @@ beforeEach(() => {
   apiMocks.selectByText.mockResolvedValue([])
   apiMocks.startTracking.mockResolvedValue({ jobId: 'track-1', playerName: 'White 19' })
   apiMocks.clearFrameCaches.mockResolvedValue({ bytesFreed: 0 })
+  apiMocks.fetchCropPlan.mockResolvedValue({
+    videoId: 'video-1',
+    trackJobId: 'track-1',
+    sourceStartFrame: 0,
+    windows: [],
+  })
+  apiMocks.startExport.mockResolvedValue({ jobId: 'export-1' })
   apiMocks.watchTrackJob.mockReturnValue({ close: vi.fn() } as unknown as WebSocket)
 })
 
 afterEach(() => {
   document.body.innerHTML = ''
+  vi.useRealTimers()
   vi.clearAllMocks()
   vi.unstubAllGlobals()
 })
@@ -403,6 +414,77 @@ describe('useWorkspace', () => {
     expect(retryToken).not.toBeNull()
     expect(retryToken).not.toBe(token)
     act(() => finishExportSubmission(retryToken!))
+    await act(async () => root.unmount())
+  })
+
+  it('fails a queued export when watcher construction throws, unlocks source open, and retries', async () => {
+    vi.useFakeTimers()
+    const retrySocket = { close: vi.fn() } as unknown as WebSocket
+    apiMocks.startExport
+      .mockResolvedValueOnce({ jobId: 'export-1' })
+      .mockResolvedValueOnce({ jobId: 'export-2' })
+    apiMocks.watchTrackJob
+      .mockImplementationOnce(() => { throw new Error('WebSocket unavailable') })
+      .mockReturnValueOnce(retrySocket)
+    const panelRef = createRef<ExportPanelHandle>()
+
+    function ExportHarness() {
+      controller = useWorkspace()
+      return (
+        <ExportPanel
+          ref={panelRef}
+          videoId="video-1"
+          trackJobId="track-1"
+          exportStarting={controller.exportStarting}
+          onExportStart={controller.beginExportSubmission}
+          onExportFinish={controller.finishExportSubmission}
+          onPlanChange={controller.setCropWindows}
+          onJobChange={controller.setExportJob}
+        />
+      )
+    }
+
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    await act(async () => {
+      root.render(<ExportHarness />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(150)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      panelRef.current?.triggerExport()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(controller?.exportJob).toMatchObject({
+      jobId: 'export-1',
+      state: 'failed',
+      message: 'WebSocket unavailable',
+    })
+    expect(controller?.exportStarting).toBe(false)
+    expect(controller?.videoSwitchLocked).toBe(false)
+
+    apiMocks.registerVideo.mockClear()
+    await act(async () => { await controller?.openPath('/other.mp4') })
+    expect(apiMocks.registerVideo).toHaveBeenCalledWith('/other.mp4', undefined)
+
+    await act(async () => {
+      panelRef.current?.triggerExport()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(apiMocks.startExport).toHaveBeenCalledTimes(2)
+    expect(apiMocks.watchTrackJob).toHaveBeenCalledTimes(2)
+    expect(controller?.exportJob).toMatchObject({ jobId: 'export-2', state: 'queued' })
+    expect(controller?.exportStarting).toBe(false)
+    expect(controller?.videoSwitchLocked).toBe(true)
     await act(async () => root.unmount())
   })
 
