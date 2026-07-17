@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 
-import { act } from 'react'
+import { act, createRef } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { VideoStage } from './VideoStage'
+import { type VideoStageHandle, VideoStage } from './VideoStage'
 
 class ResizeObserverStub {
   observe() {}
@@ -140,6 +140,50 @@ describe('VideoStage pointer interactions', () => {
 
     expect(setPointerCapture).toHaveBeenCalledOnce()
     expect(onSourceClick).not.toHaveBeenCalled()
+    await act(async () => root.unmount())
+  })
+
+  it('exposes frame-accurate seek and playback controls', async () => {
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    const stageRef = createRef<VideoStageHandle>()
+
+    await act(async () => {
+      root.render(
+        <VideoStage
+          ref={stageRef}
+          src="/video.mp4"
+          sourceWidth={400}
+          sourceHeight={200}
+          fps={30}
+          frameCount={90}
+          selection={null}
+          track={[]}
+          cropWindows={[]}
+          candidates={[]}
+          onSourceClick={vi.fn()}
+          onCandidateConfirm={vi.fn()}
+          onFrameChange={vi.fn()}
+        />,
+      )
+    })
+
+    const video = container.querySelector('video')!
+    const play = vi.spyOn(video, 'play').mockResolvedValue()
+    const pause = vi.spyOn(video, 'pause').mockImplementation(() => {})
+
+    await act(async () => stageRef.current?.seekToFrame(30))
+    expect(video.currentTime).toBe(1)
+    await act(async () => stageRef.current?.stepFrames(-15))
+    expect(video.currentTime).toBe(0.5)
+
+    Object.defineProperty(video, 'paused', { configurable: true, value: true })
+    await act(async () => stageRef.current?.togglePlayback())
+    expect(play).toHaveBeenCalledOnce()
+    Object.defineProperty(video, 'paused', { configurable: true, value: false })
+    await act(async () => stageRef.current?.togglePlayback())
+    expect(pause).toHaveBeenCalledOnce()
     await act(async () => root.unmount())
   })
 })

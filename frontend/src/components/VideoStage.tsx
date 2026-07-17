@@ -1,10 +1,12 @@
 import {
+  forwardRef,
   type MouseEvent,
   type PointerEvent,
   type RefObject,
   type WheelEvent,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useRef,
   useState,
 } from 'react'
@@ -39,6 +41,12 @@ interface VideoStageProps {
   onSourceClick: (point: Point, frameIdx: number) => void
   onCandidateConfirm: (candidate: LocateCandidate, frameIdx: number) => void
   onFrameChange: (frameIdx: number) => void
+}
+
+export interface VideoStageHandle {
+  togglePlayback(): void
+  seekToFrame(frameIdx: number): void
+  stepFrames(delta: number): void
 }
 
 export interface ViewTransform {
@@ -102,7 +110,7 @@ export function pointerMovedPastThreshold(
   return Math.hypot(current.x - start.x, current.y - start.y) > threshold
 }
 
-export function VideoStage({
+export const VideoStage = forwardRef<VideoStageHandle, VideoStageProps>(function VideoStage({
   src,
   sourceWidth,
   sourceHeight,
@@ -115,7 +123,7 @@ export function VideoStage({
   onSourceClick,
   onCandidateConfirm,
   onFrameChange,
-}: VideoStageProps) {
+}: VideoStageProps, forwardedRef) {
   const stageRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -124,6 +132,29 @@ export function VideoStage({
   const dragRef = useRef<DragState | null>(null)
   const suppressNextClickRef = useRef(false)
   const viewRevision = `${view.zoom}:${view.x}:${view.y}`
+
+  const seekToFrame = useCallback((frameIdx: number) => {
+    const video = videoRef.current
+    if (!video || fps <= 0 || frameCount <= 0) return
+    const clampedFrame = clamp(Math.round(frameIdx), 0, frameCount - 1)
+    video.currentTime = clampedFrame / fps
+    onFrameChange(clampedFrame)
+  }, [fps, frameCount, onFrameChange])
+
+  useImperativeHandle(forwardedRef, () => ({
+    togglePlayback() {
+      const video = videoRef.current
+      if (!video) return
+      if (video.paused) void video.play()
+      else video.pause()
+    },
+    seekToFrame,
+    stepFrames(delta: number) {
+      const video = videoRef.current
+      if (!video) return
+      seekToFrame(Math.round(video.currentTime * fps) + delta)
+    },
+  }), [fps, seekToFrame])
 
   const drawOverlay = useCallback(() => {
     drawOverlayCanvas(
@@ -301,6 +332,7 @@ export function VideoStage({
             aria-hidden="true"
           />
         )}
+        {selection && <span className="sr-only" role="status">Selected player</span>}
         <canvas ref={canvasRef} className="video-overlay" aria-hidden="true" />
         <TrackOverlay
           videoRef={videoRef}
@@ -339,7 +371,7 @@ export function VideoStage({
       </div>
     </div>
   )
-}
+})
 
 function drawOverlayCanvas(
   canvasRef: RefObject<HTMLCanvasElement | null>,
@@ -377,6 +409,14 @@ function drawOverlayCanvas(
       context.strokeStyle = '#2fe1b4'
       context.lineWidth = 3
       context.strokeRect(box.left, box.top, box.width, box.height)
+      const label = 'Selected player'
+      context.font = '700 12px system-ui'
+      const labelWidth = context.measureText(label).width + 12
+      const labelTop = Math.max(2, box.top - 24)
+      context.fillStyle = '#2fe1b4'
+      context.fillRect(box.left, labelTop, labelWidth, 20)
+      context.fillStyle = '#071b15'
+      context.fillText(label, box.left + 6, labelTop + 14)
     }
   }
 
