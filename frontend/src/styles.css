@@ -257,6 +257,7 @@ progress { width: 100%; height: 0.45rem; accent-color: var(--mint); }
 .range-control { display: grid; gap: 0.4rem; color: #b9c3ce; font-size: 0.72rem; font-weight: 700; }
 .range-control > span { display: flex; justify-content: space-between; }
 .range-control output { color: var(--amber); font-variant-numeric: tabular-nums; }
+.range-control small { color: var(--subtle); font-size: 0.61rem; font-weight: 500; line-height: 1.4; }
 .advanced-settings { border-top: 1px solid var(--border); padding-top: 0.75rem; }
 .advanced-settings summary { color: var(--muted); font-size: 0.72rem; font-weight: 750; cursor: pointer; }
 .advanced-settings[open] { display: grid; gap: 0.7rem; }

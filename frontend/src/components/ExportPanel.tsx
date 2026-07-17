@@ -192,6 +192,7 @@ export const ExportPanel = forwardRef<ExportPanelHandle, ExportPanelProps>(funct
           <label className="range-control">
             <span>Camera smoothness <output>{responsiveness.toFixed(1)} s</output></span>
             <input type="range" min={0.2} max={1.5} step={0.1} value={responsiveness} onChange={(event) => setResponsiveness(Number(event.target.value))} />
+            <small>Framing widens automatically when needed to keep the player visible.</small>
           </label>
           <details className="advanced-settings">
             <summary>Advanced settings</summary>

@@ -160,6 +160,26 @@ def test_track_rejects_overlong_player_name(
     assert response.status_code == 422
 
 
+def test_track_validates_player_name_after_trimming(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    client, video_id, tracker = make_tracking_client(tmp_path, tiny_video)
+    expected = "x" * 80
+    with client:
+        response = client.post(
+            "/api/track",
+            json={
+                "videoId": video_id,
+                "frameIdx": 0,
+                "box": [100, 50, 140, 100],
+                "playerName": f"  {expected}  ",
+            },
+        )
+    tracker.release.set()
+    assert response.status_code == 202
+    assert response.json()["playerName"] == expected
+
+
 def test_track_endpoints_validate_video_box_and_job(
     tmp_path: Path, tiny_video: Path
 ) -> None:

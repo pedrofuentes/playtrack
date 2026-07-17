@@ -112,7 +112,7 @@ class TrackRequest(BaseModel):
     videoId: str
     frameIdx: int = Field(ge=0)
     box: tuple[int, int, int, int]
-    playerName: str | None = Field(default=None, max_length=80)
+    playerName: str | None = None
 
 
 class TrackJobResponse(BaseModel):
@@ -125,7 +125,7 @@ class TrackStartResponse(BaseModel):
 
 
 class PlayerNameRequest(BaseModel):
-    name: str = Field(max_length=80)
+    name: str
 
 
 class SmoothingRequest(BaseModel):
@@ -404,9 +404,12 @@ def create_app(
         if sam_image_engine.is_loaded:
             sam_image_engine.unload()
         box = tuple(payload.box)
-        player_name = store.library.resolve_player_name(
-            payload.videoId, payload.playerName
-        )
+        try:
+            player_name = store.library.resolve_player_name(
+                payload.videoId, payload.playerName
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
         job_id = jobs.submit(
             lambda report: tracker.track(
                 payload.videoId,

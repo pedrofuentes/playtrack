@@ -30,6 +30,7 @@ describe('compact export panel', () => {
     expect(markup).toContain('aria-pressed="true"')
     expect(markup).toContain('720p')
     expect(markup).toContain('Camera smoothness')
+    expect(markup).toContain('widens automatically')
     expect(markup).toContain('<summary>Advanced settings</summary>')
     expect(markup).toContain('Max acceleration')
     expect(markup).toContain('Export MP4')
