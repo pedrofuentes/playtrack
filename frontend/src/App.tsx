@@ -67,6 +67,9 @@ export default function App() {
       ref={exportPanelRef}
       videoId={workspace.video.videoId}
       trackJobId={workspace.trackJob.jobId}
+      exportStarting={workspace.exportStarting}
+      onExportStart={workspace.beginExportSubmission}
+      onExportFinish={workspace.finishExportSubmission}
       onPlanChange={workspace.setCropWindows}
       onJobChange={workspace.setExportJob}
       onLibraryChange={workspace.refreshLibrary}
@@ -191,6 +194,7 @@ export default function App() {
           <LibraryPanel
             library={workspace.library}
             openingDisabled={workspace.loading || workspace.videoSwitchLocked}
+            destructiveDisabled={workspace.videoSwitchLocked}
             onOpenVideo={(saved) => {
               void workspace.openLibraryVideo(saved)
               setSurface('editor')
@@ -208,7 +212,13 @@ export default function App() {
         </div>
       )}
       jobs={<JobPanel trackJob={workspace.trackJob} exportJob={workspace.exportJob} frameCount={workspace.video ? frameRangeCount(workspace.range) : 0} />}
-      settings={<SettingsPanel cacheBytes={workspace.library.cacheBytes} onClearFrameCaches={workspace.clearCaches} />}
+      settings={(
+        <SettingsPanel
+          cacheBytes={workspace.library.cacheBytes}
+          disabled={workspace.videoSwitchLocked}
+          onClearFrameCaches={workspace.clearCaches}
+        />
+      )}
     />
   )
 }

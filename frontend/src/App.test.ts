@@ -78,6 +78,7 @@ function workspace(overrides: Record<string, unknown> = {}) {
     openError: null,
     framing: false,
     exportJob: null,
+    exportStarting: false,
     stage: 'select',
     videoSwitchLocked: false,
     openUpload: vi.fn(),
@@ -99,6 +100,8 @@ function workspace(overrides: Record<string, unknown> = {}) {
     beginFraming: vi.fn(),
     setCropWindows: vi.fn(),
     setExportJob: vi.fn(),
+    beginExportSubmission: vi.fn().mockReturnValue(1),
+    finishExportSubmission: vi.fn(),
     resetSelection: vi.fn(),
     clearCaches: vi.fn(),
     ...overrides,
@@ -460,5 +463,40 @@ it('disables Library opens while any workspace open is loading', async () => {
   const openSource = [...container.querySelectorAll('button')]
     .find((item) => item.textContent === 'Open')
   expect(openSource?.disabled).toBe(true)
+  await act(async () => root.unmount())
+})
+
+it('disables Library mutations and cache clearing during active jobs', async () => {
+  const saved = {
+    videoId: 'saved-video',
+    name: 'saved.mp4',
+    sourceKind: 'path',
+    path: '/saved.mp4',
+    metadata: {
+      videoId: 'saved-video', width: 400, height: 200,
+      fps: 30, nbFrames: 90, duration: 3,
+    },
+    size: 100,
+    openedAt: null,
+    sourceExists: true,
+    tracks: [],
+    exports: [],
+  }
+  appMocks.workspace = openedWorkspace({
+    videoSwitchLocked: true,
+    library: { videos: [saved], cacheBytes: 0 },
+  })
+  const container = document.createElement('div')
+  const root = createRoot(container)
+
+  await act(async () => root.render(createElement(App)))
+  await act(async () => container.querySelector<HTMLButtonElement>('button[title="Library"]')?.click())
+  const namedButton = (label: string) => [...container.querySelectorAll('button')]
+    .find((item) => item.textContent === label)
+  expect(namedButton('Rename')?.disabled).toBe(true)
+  expect(namedButton('Delete source')?.disabled).toBe(true)
+
+  await act(async () => container.querySelector<HTMLButtonElement>('button[title="Settings"]')?.click())
+  expect(namedButton('Clear frame cache')?.disabled).toBe(true)
   await act(async () => root.unmount())
 })

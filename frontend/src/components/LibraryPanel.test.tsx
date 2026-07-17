@@ -189,3 +189,18 @@ it('renames a source inline, refreshes the library, and keeps player rename stat
   expect(props.onRefresh).toHaveBeenCalled()
   await act(async () => root.unmount())
 })
+
+it('disables remote rename and delete actions during active jobs', async () => {
+  const { container, root } = await renderLibrary({ destructiveDisabled: true })
+
+  expect(button(container, 'Rename').disabled).toBe(true)
+  expect(button(container, 'Delete source').disabled).toBe(true)
+
+  await act(async () => button(container, 'Players').click())
+  expect(button(container, 'Rename').disabled).toBe(true)
+  expect(button(container, 'Delete').disabled).toBe(true)
+
+  await act(async () => button(container, 'Exports').click())
+  expect(button(container, 'Delete export').disabled).toBe(true)
+  await act(async () => root.unmount())
+})

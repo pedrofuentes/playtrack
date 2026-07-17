@@ -18,6 +18,7 @@ type LibraryTab = 'sources' | 'players' | 'exports'
 interface LibraryPanelProps {
   library: LibraryResponse
   openingDisabled?: boolean
+  destructiveDisabled?: boolean
   onOpenVideo: (video: LibraryVideo) => void
   onOpenPlayer: (video: LibraryVideo, player: LibraryTrack) => Promise<boolean>
   onRefresh: () => void
@@ -26,6 +27,7 @@ interface LibraryPanelProps {
 export function LibraryPanel({
   library,
   openingDisabled = false,
+  destructiveDisabled = false,
   onOpenVideo,
   onOpenPlayer,
   onRefresh,
@@ -127,7 +129,7 @@ export function LibraryPanel({
                 {sourceRenaming === video.videoId ? (
                   <div className="library-rename">
                     <input aria-label="Source name" maxLength={80} value={sourceName} onChange={(event) => setSourceName(event.target.value)} />
-                    <button type="button" disabled={busy || !sourceName.trim()} onClick={() => void saveSourceName(video)}>Save</button>
+                    <button type="button" disabled={busy || destructiveDisabled || !sourceName.trim()} onClick={() => void saveSourceName(video)}>Save</button>
                     <button type="button" disabled={busy} onClick={() => setSourceRenaming(null)}>Cancel</button>
                   </div>
                 ) : <strong title={video.name}>{video.name}</strong>}
@@ -137,8 +139,8 @@ export function LibraryPanel({
               <button type="button" disabled={busy || openingDisabled || !video.sourceExists} onClick={() => onOpenVideo(video)}>Open</button>
             </div>
             <div className="library-actions library-source-actions">
-              <button type="button" disabled={busy} onClick={() => { setSourceRenaming(video.videoId); setSourceName(video.name) }}>Rename</button>
-              <button type="button" className="danger" disabled={busy} onClick={() => {
+              <button type="button" disabled={busy || destructiveDisabled} onClick={() => { setSourceRenaming(video.videoId); setSourceName(video.name) }}>Rename</button>
+              <button type="button" className="danger" disabled={busy || destructiveDisabled} onClick={() => {
                 if (window.confirm(`Delete ${video.name} and its saved players/exports?`)) {
                   void run(() => deleteLibraryVideo(video.videoId))
                 }
@@ -155,7 +157,7 @@ export function LibraryPanel({
                 {playerRenaming === player.jobId ? (
                   <div className="library-rename">
                     <input aria-label="Player name" maxLength={80} value={playerName} onChange={(event) => setPlayerName(event.target.value)} />
-                    <button type="button" disabled={busy || !playerName.trim()} onClick={() => void savePlayerName(player)}>Save</button>
+                    <button type="button" disabled={busy || destructiveDisabled || !playerName.trim()} onClick={() => void savePlayerName(player)}>Save</button>
                     <button type="button" disabled={busy} onClick={() => setPlayerRenaming(null)}>Cancel</button>
                   </div>
                 ) : <strong>{player.name}</strong>}
@@ -166,8 +168,8 @@ export function LibraryPanel({
               <button type="button" disabled={busy || openingDisabled || !video.sourceExists} onClick={() => void openPlayer(video, player)}>Open player</button>
             </div>
             <div className="library-actions">
-              <button type="button" disabled={busy} onClick={() => { setPlayerRenaming(player.jobId); setPlayerName(player.name) }}>Rename</button>
-              <button type="button" className="danger" disabled={busy} onClick={() => {
+              <button type="button" disabled={busy || destructiveDisabled} onClick={() => { setPlayerRenaming(player.jobId); setPlayerName(player.name) }}>Rename</button>
+              <button type="button" className="danger" disabled={busy || destructiveDisabled} onClick={() => {
                 if (window.confirm(`Delete ${player.name} and its exports?`)) {
                   void run(() => deleteLibraryTrack(player.jobId))
                 }
@@ -187,7 +189,7 @@ export function LibraryPanel({
               </div>
               {item.sourceExists && <a href={exportDownloadUrl(item.exportId)} download>Download</a>}
             </div>
-            <button type="button" className="library-delete danger" disabled={busy} onClick={() => {
+            <button type="button" className="library-delete danger" disabled={busy || destructiveDisabled} onClick={() => {
               if (window.confirm('Delete this export?')) void run(() => deleteLibraryExport(item.exportId))
             }}>Delete export</button>
           </article>

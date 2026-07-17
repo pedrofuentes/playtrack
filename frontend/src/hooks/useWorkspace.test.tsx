@@ -365,6 +365,47 @@ describe('useWorkspace', () => {
     await act(async () => root.unmount())
   })
 
+  it('owns export submission synchronously and blocks source opens until release', async () => {
+    const root = await mountController()
+    apiMocks.registerVideo.mockClear()
+    const beginExportSubmission = controller?.beginExportSubmission
+    const finishExportSubmission = controller?.finishExportSubmission
+    expect(beginExportSubmission).toBeTypeOf('function')
+    expect(finishExportSubmission).toBeTypeOf('function')
+    if (!beginExportSubmission || !finishExportSubmission) {
+      await act(async () => root.unmount())
+      return
+    }
+
+    let token: number | null = null
+    let duplicate: number | null = null
+    act(() => {
+      token = beginExportSubmission()
+      duplicate = beginExportSubmission()
+      void controller?.openPath('/other.mp4')
+    })
+
+    expect(token).not.toBeNull()
+    expect(duplicate).toBeNull()
+    expect(apiMocks.registerVideo).not.toHaveBeenCalled()
+    expect(controller?.exportStarting).toBe(true)
+    expect(controller?.videoSwitchLocked).toBe(true)
+
+    act(() => finishExportSubmission((token ?? 0) + 1))
+    expect(controller?.exportStarting).toBe(true)
+
+    act(() => finishExportSubmission(token!))
+    expect(controller?.exportStarting).toBe(false)
+    expect(controller?.videoSwitchLocked).toBe(false)
+
+    let retryToken: number | null = null
+    act(() => { retryToken = beginExportSubmission() })
+    expect(retryToken).not.toBeNull()
+    expect(retryToken).not.toBe(token)
+    act(() => finishExportSubmission(retryToken!))
+    await act(async () => root.unmount())
+  })
+
   it('ignores a stale saved-player completion after a newer path open commits', async () => {
     const restore = deferred<TrackJobUpdate>()
     const registration = deferred<VideoMetadata>()

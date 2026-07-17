@@ -1,20 +1,32 @@
 // @vitest-environment jsdom
 
-import { act } from 'react'
+import { act, createRef } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
-import { ExportPanel } from './ExportPanel'
+import { type ExportPanelHandle, ExportPanel } from './ExportPanel'
 import { playbackGeometryAtTime } from './PlaybackOverlay'
 
 const apiMocks = vi.hoisted(() => ({
   fetchCropPlan: vi.fn(),
+  startExport: vi.fn(),
+  watchTrackJob: vi.fn(),
 }))
 
 vi.mock('../api', async (importOriginal) => ({
   ...await importOriginal<typeof import('../api')>(),
-  fetchCropPlan: apiMocks.fetchCropPlan,
+  ...apiMocks,
 }))
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((onResolve, onReject) => {
+    resolve = onResolve
+    reject = onReject
+  })
+  return { promise, resolve, reject }
+}
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -25,6 +37,8 @@ beforeEach(() => {
     sourceStartFrame: 0,
     windows: [],
   })
+  apiMocks.startExport.mockResolvedValue({ jobId: 'export-1' })
+  apiMocks.watchTrackJob.mockReturnValue({ close: vi.fn() } as unknown as WebSocket)
 })
 
 afterEach(() => {
@@ -40,7 +54,14 @@ it('debounces crop preview requests by 150 ms', async () => {
   document.body.append(container)
   const root = createRoot(container)
   await act(async () => root.render(
-    <ExportPanel videoId="video-1" trackJobId="track-1" onPlanChange={onPlanChange} />,
+    <ExportPanel
+      videoId="video-1"
+      trackJobId="track-1"
+      exportStarting={false}
+      onExportStart={vi.fn().mockReturnValue(1)}
+      onExportFinish={vi.fn()}
+      onPlanChange={onPlanChange}
+    />,
   ))
 
   expect(apiMocks.fetchCropPlan).not.toHaveBeenCalled()
@@ -73,7 +94,14 @@ it('maps output-local preview windows onto absolute source playback frames', asy
   document.body.append(container)
   const root = createRoot(container)
   await act(async () => root.render(
-    <ExportPanel videoId="video-1" trackJobId="track-1" onPlanChange={onPlanChange} />,
+    <ExportPanel
+      videoId="video-1"
+      trackJobId="track-1"
+      exportStarting={false}
+      onExportStart={vi.fn().mockReturnValue(1)}
+      onExportFinish={vi.fn()}
+      onPlanChange={onPlanChange}
+    />,
   ))
 
   await act(async () => {
@@ -93,5 +121,96 @@ it('maps output-local preview windows onto absolute source playback frames', asy
     ...localWindows[15],
     frameIdx: 23,
   })
+  await act(async () => root.unmount())
+})
+
+async function renderReadyExport(overrides: Record<string, unknown> = {}) {
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+  const panelRef = createRef<ExportPanelHandle>()
+  const props = {
+    videoId: 'video-1',
+    trackJobId: 'track-1',
+    exportStarting: false,
+    onExportStart: vi.fn().mockReturnValue(1),
+    onExportFinish: vi.fn(),
+    onPlanChange: vi.fn(),
+    onJobChange: vi.fn(),
+    onLibraryChange: vi.fn(),
+    ...overrides,
+  }
+  await act(async () => root.render(<ExportPanel ref={panelRef} {...props} />))
+  await act(async () => {
+    vi.advanceTimersByTime(150)
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+  return { container, panelRef, props, root }
+}
+
+it('submits one export when triggered twice before React rerenders', async () => {
+  const pending = deferred<{ jobId: string }>()
+  apiMocks.startExport.mockReturnValue(pending.promise)
+  const { panelRef, props, root } = await renderReadyExport()
+
+  act(() => {
+    panelRef.current?.triggerExport()
+    panelRef.current?.triggerExport()
+  })
+
+  expect(props.onExportStart).toHaveBeenCalledOnce()
+  expect(apiMocks.startExport).toHaveBeenCalledOnce()
+  await act(async () => root.unmount())
+})
+
+it('drops a deferred export response after unmount and releases only its token', async () => {
+  const pending = deferred<{ jobId: string }>()
+  apiMocks.startExport.mockReturnValue(pending.promise)
+  const { panelRef, props, root } = await renderReadyExport()
+  act(() => panelRef.current?.triggerExport())
+  expect(apiMocks.startExport).toHaveBeenCalledOnce()
+  props.onJobChange.mockClear()
+
+  await act(async () => root.unmount())
+  expect(props.onExportFinish).toHaveBeenCalledOnce()
+  expect(props.onExportFinish).toHaveBeenCalledWith(1)
+
+  await act(async () => {
+    pending.resolve({ jobId: 'stale-export' })
+    await pending.promise
+    await Promise.resolve()
+  })
+  expect(props.onJobChange).not.toHaveBeenCalled()
+  expect(apiMocks.watchTrackJob).not.toHaveBeenCalled()
+  expect(props.onLibraryChange).not.toHaveBeenCalled()
+  expect(props.onExportFinish).toHaveBeenCalledOnce()
+})
+
+it('releases a failed export start and allows a retry with a new token', async () => {
+  apiMocks.startExport
+    .mockRejectedValueOnce(new Error('Queue unavailable'))
+    .mockResolvedValueOnce({ jobId: 'export-2' })
+  const onExportStart = vi.fn()
+    .mockReturnValueOnce(1)
+    .mockReturnValueOnce(2)
+  const { container, panelRef, props, root } = await renderReadyExport({ onExportStart })
+
+  await act(async () => {
+    panelRef.current?.triggerExport()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+  expect(props.onExportFinish).toHaveBeenCalledWith(1)
+  expect(container.textContent).toContain('Queue unavailable')
+
+  await act(async () => {
+    panelRef.current?.triggerExport()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+  expect(apiMocks.startExport).toHaveBeenCalledTimes(2)
+  expect(onExportStart).toHaveBeenCalledTimes(2)
+  expect(props.onExportFinish).toHaveBeenCalledWith(2)
   await act(async () => root.unmount())
 })

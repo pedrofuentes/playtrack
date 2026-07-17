@@ -48,6 +48,7 @@ export interface WorkspaceController {
   trackMessage: string | null
   trackError: string | null
   trackStarting: boolean
+  exportStarting: boolean
   trackStartedAt: number | null
   cropWindows: CropWindow[]
   loading: boolean
@@ -76,6 +77,8 @@ export interface WorkspaceController {
   beginFraming(): void
   setCropWindows(windows: CropWindow[]): void
   setExportJob(job: TrackJobUpdate | null): void
+  beginExportSubmission(): number | null
+  finishExportSubmission(token: number): void
   resetSelection(): void
   clearCaches(): Promise<void>
 }
@@ -104,6 +107,7 @@ export function useWorkspace(): WorkspaceController {
   const [trackMessage, setTrackMessage] = useState<string | null>(null)
   const [trackError, setTrackError] = useState<string | null>(null)
   const [trackStarting, setTrackStarting] = useState(false)
+  const [exportStarting, setExportStarting] = useState(false)
   const [trackStartedAt, setTrackStartedAt] = useState<number | null>(null)
   const [cropWindows, setCropWindowsState] = useState<CropWindow[]>([])
   const [loading, setLoading] = useState(true)
@@ -114,6 +118,8 @@ export function useWorkspace(): WorkspaceController {
   const selectionRequest = useRef<AbortController | null>(null)
   const trackSocket = useRef<WebSocket | null>(null)
   const openGeneration = useRef(0)
+  const exportSubmissionCounter = useRef(0)
+  const exportSubmissionToken = useRef<number | null>(null)
   const rangeRef = useRef(range)
   rangeRef.current = range
   const trackStartingRef = useRef(trackStarting)
@@ -122,11 +128,29 @@ export function useWorkspace(): WorkspaceController {
   loadingRef.current = loading
 
   const stage = workspaceStage(selection, trackJob, framing)
-  const videoSwitchLocked = trackStarting || isJobActive(trackJob) || isJobActive(exportJob)
+  const videoSwitchLocked = trackStarting || exportStarting
+    || isJobActive(trackJob) || isJobActive(exportJob)
   const videoSwitchLockedRef = useRef(videoSwitchLocked)
   videoSwitchLockedRef.current = videoSwitchLocked
   const stageRef = useRef(stage)
   stageRef.current = stage
+
+  const beginExportSubmission = useCallback((): number | null => {
+    if (
+      exportSubmissionToken.current !== null
+      || loadingRef.current || trackStartingRef.current || videoSwitchLockedRef.current
+    ) return null
+    const token = ++exportSubmissionCounter.current
+    exportSubmissionToken.current = token
+    setExportStarting(true)
+    return token
+  }, [])
+
+  const finishExportSubmission = useCallback((token: number) => {
+    if (exportSubmissionToken.current !== token) return
+    exportSubmissionToken.current = null
+    setExportStarting(false)
+  }, [])
 
   const clearDownstreamState = useCallback(() => {
     trackSocket.current?.close()
@@ -160,7 +184,10 @@ export function useWorkspace(): WorkspaceController {
     activity: string,
     savedName?: string,
   ) => {
-    if (trackStartingRef.current || videoSwitchLockedRef.current) return
+    if (
+      exportSubmissionToken.current !== null
+      || trackStartingRef.current || videoSwitchLockedRef.current
+    ) return
     const generation = ++openGeneration.current
     loadingRef.current = true
     selectionRequest.current?.abort()
@@ -224,7 +251,10 @@ export function useWorkspace(): WorkspaceController {
     saved: LibraryVideo,
     player: LibraryTrack,
   ): Promise<boolean> => {
-    if (trackStartingRef.current || videoSwitchLockedRef.current) return false
+    if (
+      exportSubmissionToken.current !== null
+      || trackStartingRef.current || videoSwitchLockedRef.current
+    ) return false
     if (!saved.sourceExists) throw new Error('Source video is missing')
     const generation = ++openGeneration.current
     loadingRef.current = true
@@ -512,6 +542,7 @@ export function useWorkspace(): WorkspaceController {
     trackMessage,
     trackError,
     trackStarting,
+    exportStarting,
     trackStartedAt,
     cropWindows,
     loading,
@@ -540,10 +571,13 @@ export function useWorkspace(): WorkspaceController {
     beginFraming: () => setFraming(true),
     setCropWindows: setCropWindowsState,
     setExportJob: setExportJobState,
+    beginExportSubmission,
+    finishExportSubmission,
     resetSelection,
     clearCaches,
   }), [
-    candidates, clearCaches, confirmCandidate, cropWindows, currentFrame, exportJob,
+    beginExportSubmission, candidates, clearCaches, confirmCandidate, cropWindows, currentFrame,
+    exportJob, exportStarting, finishExportSubmission,
     features, framing, library, loading, loadingLabel, openError, openLibraryPlayer,
     openLibraryVideo, openPath, openUpload, range, refreshLibrary, resetRange, resetSelection,
     playerName, selectAt, selectByDescription, selection, selectionError, selectionKind,

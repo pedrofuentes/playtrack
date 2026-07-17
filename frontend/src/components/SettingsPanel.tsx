@@ -2,12 +2,14 @@ import { useState } from 'react'
 
 interface SettingsPanelProps {
   cacheBytes: number
+  disabled?: boolean
   onClearFrameCaches: () => Promise<void>
 }
 
-export function SettingsPanel({ cacheBytes, onClearFrameCaches }: SettingsPanelProps) {
+export function SettingsPanel({ cacheBytes, disabled = false, onClearFrameCaches }: SettingsPanelProps) {
   const [busy, setBusy] = useState(false)
   const clear = async () => {
+    if (disabled) return
     if (!window.confirm('Clear extracted frame caches? Source videos, tracks, and exports are kept.')) return
     setBusy(true)
     try {
@@ -27,7 +29,7 @@ export function SettingsPanel({ cacheBytes, onClearFrameCaches }: SettingsPanelP
         </div>
         <span>{formatBytes(cacheBytes)}</span>
       </div>
-      <button type="button" className="secondary danger" disabled={busy} onClick={() => void clear()}>
+      <button type="button" className="secondary danger" disabled={busy || disabled} onClick={() => void clear()}>
         {busy ? 'Clearing…' : 'Clear frame cache'}
       </button>
     </section>

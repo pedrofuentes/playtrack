@@ -32,6 +32,9 @@ interface ExportPanelProps {
   videoId: string
   trackJobId: string
   disabled?: boolean
+  exportStarting: boolean
+  onExportStart: () => number | null
+  onExportFinish: (token: number) => void
   onPlanChange: (windows: CropWindow[]) => void
   onJobChange?: (job: TrackJobUpdate | null) => void
   onLibraryChange?: () => void
@@ -41,6 +44,9 @@ export const ExportPanel = forwardRef<ExportPanelHandle, ExportPanelProps>(funct
   videoId,
   trackJobId,
   disabled = false,
+  exportStarting,
+  onExportStart,
+  onExportFinish,
   onPlanChange,
   onJobChange = () => {},
   onLibraryChange = () => {},
@@ -52,10 +58,12 @@ export const ExportPanel = forwardRef<ExportPanelHandle, ExportPanelProps>(funct
   const [responsiveness, setResponsiveness] = useState(0.5)
   const [maxAccelPxPerFrame2, setMaxAccelPxPerFrame2] = useState(3)
   const [previewLoading, setPreviewLoading] = useState(false)
-  const [exportStarting, setExportStarting] = useState(false)
   const [job, setJob] = useState<TrackJobUpdate | null>(null)
   const [error, setError] = useState<string | null>(null)
   const socketRef = useRef<WebSocket | null>(null)
+  const mountedRef = useRef(true)
+  const requestGenerationRef = useRef(0)
+  const activeSubmissionRef = useRef<{ generation: number; token: number } | null>(null)
 
   const settings = useMemo<ExportSettings>(() => ({
     outWidth,
@@ -95,10 +103,19 @@ export const ExportPanel = forwardRef<ExportPanelHandle, ExportPanelProps>(funct
     }
   }, [disabled, onPlanChange, settings, trackJobId, validDimensions, videoId])
 
-  useEffect(() => () => {
-    socketRef.current?.close()
-    onPlanChange([])
-  }, [onPlanChange])
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      requestGenerationRef.current += 1
+      socketRef.current?.close()
+      socketRef.current = null
+      const active = activeSubmissionRef.current
+      activeSubmissionRef.current = null
+      if (active) onExportFinish(active.token)
+      onPlanChange([])
+    }
+  }, [onExportFinish, onPlanChange])
 
   const choosePreset = (key: string) => {
     setPreset(key)
@@ -110,14 +127,25 @@ export const ExportPanel = forwardRef<ExportPanelHandle, ExportPanelProps>(funct
   }
 
   const beginExport = useCallback(async () => {
-    if (disabled || !validDimensions || previewLoading || exportStarting) return
+    if (
+      disabled || !validDimensions || previewLoading || exportStarting
+      || activeSubmissionRef.current !== null
+    ) return
+    const token = onExportStart()
+    if (token === null) return
+    const generation = ++requestGenerationRef.current
+    activeSubmissionRef.current = { generation, token }
+    const isCurrent = () => (
+      mountedRef.current && requestGenerationRef.current === generation
+    )
     socketRef.current?.close()
-    setExportStarting(true)
+    socketRef.current = null
     setJob(null)
     onJobChange(null)
     setError(null)
     try {
       const { jobId } = await startExport(videoId, trackJobId, settings)
+      if (!isCurrent()) return
       const queued: TrackJobUpdate = {
         jobId,
         state: 'queued',
@@ -130,6 +158,7 @@ export const ExportPanel = forwardRef<ExportPanelHandle, ExportPanelProps>(funct
       const socket = watchTrackJob(
         jobId,
         (update) => {
+          if (!isCurrent()) return
           setJob(update)
           onJobChange(update)
           if (update.state === 'failed') setError(update.message)
@@ -140,6 +169,7 @@ export const ExportPanel = forwardRef<ExportPanelHandle, ExportPanelProps>(funct
           }
         },
         (message) => {
+          if (!isCurrent()) return
           setError(message)
           setJob((current) => {
             const failed = current ? { ...current, state: 'failed' as const, message } : null
@@ -150,13 +180,19 @@ export const ExportPanel = forwardRef<ExportPanelHandle, ExportPanelProps>(funct
       )
       socketRef.current = socket
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Could not start export')
+      if (isCurrent()) {
+        setError(reason instanceof Error ? reason.message : 'Could not start export')
+      }
     } finally {
-      setExportStarting(false)
+      const active = activeSubmissionRef.current
+      if (active?.generation === generation && active.token === token) {
+        activeSubmissionRef.current = null
+        onExportFinish(token)
+      }
     }
   }, [
-    disabled, exportStarting, onJobChange, onLibraryChange, previewLoading,
-    settings, trackJobId, validDimensions, videoId,
+    disabled, exportStarting, onExportFinish, onExportStart, onJobChange,
+    onLibraryChange, previewLoading, settings, trackJobId, validDimensions, videoId,
   ])
 
   useImperativeHandle(forwardedRef, () => ({
