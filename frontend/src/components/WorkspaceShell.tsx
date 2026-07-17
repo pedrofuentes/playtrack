@@ -96,7 +96,7 @@ export function WorkspaceShell({
           {videoMeta && <span>{videoMeta}</span>}
         </div>
         <div className="topbar-actions">
-          <span className="shortcut-hint">⌘K</span>
+          <span className="shortcut-hint">Ctrl/⌘ K</span>
           <label className={`button secondary${openingDisabled ? ' is-disabled' : ''}`}>
             Open video
             <input

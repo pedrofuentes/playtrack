@@ -1,4 +1,10 @@
-import { type ChangeEvent, type FormEvent, useState } from 'react'
+import {
+  type ChangeEvent,
+  type DragEvent,
+  type FormEvent,
+  useId,
+  useState,
+} from 'react'
 
 interface OpenVideoPanelProps {
   disabled: boolean
@@ -15,6 +21,8 @@ export function OpenVideoPanel({
 }: OpenVideoPanelProps) {
   const [path, setPath] = useState('')
   const [busy, setBusy] = useState<'upload' | 'path' | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const pathInputId = `server-video-path-${useId()}`
   const unavailable = disabled || busy !== null
 
   const submitPath = async (event: FormEvent) => {
@@ -29,24 +37,44 @@ export function OpenVideoPanel({
     }
   }
 
-  const chooseFile = async (event: ChangeEvent<HTMLInputElement>) => {
-    const input = event.currentTarget
-    const file = input.files?.[0]
+  const openFile = async (file: File | undefined) => {
     if (!file || unavailable) return
     setBusy('upload')
     try {
       await onUpload(file)
     } finally {
       setBusy(null)
+    }
+  }
+
+  const chooseFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget
+    try {
+      await openFile(input.files?.[0])
+    } finally {
       input.value = ''
     }
   }
 
+  const dropFile = async (event: DragEvent<HTMLElement>) => {
+    event.preventDefault()
+    setDragging(false)
+    await openFile(event.dataTransfer.files?.[0])
+  }
+
   return (
-    <section className={`open-video-panel ${variant}`}>
+    <section
+      className={`open-video-panel ${variant}${dragging ? ' is-dragging' : ''}`}
+      onDragOver={(event) => {
+        event.preventDefault()
+        if (!unavailable) setDragging(true)
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(event) => void dropFile(event)}
+    >
       <p className="label">Open video</p>
       <label className="file-upload">
-        <span>Upload from this computer</span>
+        <span>{variant === 'empty' ? 'Drop a video here or browse this computer' : 'Upload from this computer'}</span>
         <input
           type="file"
           accept="video/mp4,video/*"
@@ -59,6 +87,7 @@ export function OpenVideoPanel({
         <details className="open-path-options">
           <summary>More options</summary>
           <PathForm
+            inputId={pathInputId}
             path={path}
             unavailable={unavailable}
             onPathChange={setPath}
@@ -67,6 +96,7 @@ export function OpenVideoPanel({
         </details>
       ) : (
         <PathForm
+          inputId={pathInputId}
           path={path}
           unavailable={unavailable}
           onPathChange={setPath}
@@ -83,18 +113,19 @@ export function OpenVideoPanel({
 }
 
 interface PathFormProps {
+  inputId: string
   path: string
   unavailable: boolean
   onPathChange: (path: string) => void
   onSubmit: (event: FormEvent) => Promise<void>
 }
 
-function PathForm({ path, unavailable, onPathChange, onSubmit }: PathFormProps) {
+function PathForm({ inputId, path, unavailable, onPathChange, onSubmit }: PathFormProps) {
   return (
     <form onSubmit={(event) => void onSubmit(event)}>
-      <label htmlFor="server-video-path">Path on the server</label>
+      <label htmlFor={inputId}>Path on the server</label>
       <input
-        id="server-video-path"
+        id={inputId}
         type="text"
         value={path}
         disabled={unavailable}

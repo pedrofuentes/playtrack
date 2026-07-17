@@ -69,6 +69,7 @@ function SelectionInspector({
   onResetSelection,
 }: WorkflowInspectorProps) {
   const [prompt, setPrompt] = useState('')
+  const [method, setMethod] = useState<'click' | 'describe'>('click')
   const submitPrompt = (event: FormEvent) => {
     event.preventDefault()
     if (prompt.trim()) onTextSelect(prompt)
@@ -78,18 +79,30 @@ function SelectionInspector({
     <div className="inspector-body">
       {textSelectionEnabled && (
         <div className="selection-methods" role="group" aria-label="Selection method">
-          <span className="is-active">Click</span>
-          <span>Describe</span>
+          <button
+            type="button"
+            data-method="click"
+            className={method === 'click' ? 'is-active' : ''}
+            aria-pressed={method === 'click'}
+            onClick={() => setMethod('click')}
+          >Click</button>
+          <button
+            type="button"
+            data-method="describe"
+            className={method === 'describe' ? 'is-active' : ''}
+            aria-pressed={method === 'describe'}
+            onClick={() => setMethod('describe')}
+          >Describe</button>
         </div>
       )}
-      {!selection && (
+      {!selection && method === 'click' && (
         <div className="inspector-callout">
           <p className="section-label">Choose target</p>
           <h3>Click a player</h3>
           <p>Scrub to a clear frame, zoom if needed, then click the player in the video.</p>
         </div>
       )}
-      {textSelectionEnabled && !selection && (
+      {textSelectionEnabled && !selection && method === 'describe' && (
         <form className="text-selection-form" onSubmit={submitPrompt}>
           <label htmlFor="player-description">Describe a player</label>
           <div>

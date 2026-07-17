@@ -218,7 +218,7 @@ progress { width: 100%; height: 0.45rem; accent-color: var(--mint); }
 .inspector-callout { padding: 0.85rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: #0d141b; }
 .inspector-callout h3 { margin: 0.15rem 0 0.35rem; }
 .selection-methods { display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem; padding: 0.22rem; border-radius: var(--radius-md); background: #0b1016; }
-.selection-methods span { padding: 0.45rem; border-radius: 5px; color: var(--muted); font-size: 0.72rem; font-weight: 750; text-align: center; }
+.selection-methods button { padding: 0.45rem; border-color: transparent; border-radius: 5px; color: var(--muted); background: transparent; font-size: 0.72rem; font-weight: 750; text-align: center; }
 .selection-methods .is-active { color: var(--amber); background: var(--surface-2); }
 .selected-player-card { display: grid; grid-template-columns: 46px minmax(0, 1fr); gap: 0.7rem; align-items: center; padding: 0.75rem; border: 1px solid rgba(69, 213, 166, 0.36); border-radius: var(--radius-md); background: rgba(69, 213, 166, 0.06); }
 .selected-player-card strong, .selected-player-card span { display: block; }
@@ -284,6 +284,7 @@ progress { width: 100%; height: 0.45rem; accent-color: var(--mint); }
 
 .library-drawer-content { display: grid; gap: 1rem; }
 .open-video-panel { display: grid; gap: 0.7rem; }
+.open-video-panel.is-dragging { border-color: var(--amber) !important; background: rgba(241, 194, 78, 0.08) !important; }
 .open-video-panel .label { margin: 0; }
 .file-upload { display: grid; gap: 0.45rem; color: #b9c3ce; font-size: 0.72rem; font-weight: 750; }
 .file-upload input[type="file"] { padding: 0.45rem; }
