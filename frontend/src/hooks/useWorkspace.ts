@@ -63,7 +63,7 @@ export interface WorkspaceController {
   openLibraryPlayer(video: LibraryVideo, player: LibraryTrack): Promise<boolean>
   refreshLibrary(): void
   selectAt(point: Point, frameIdx: number): void
-  selectByDescription(prompt: string): void
+  selectByDescription(prompt: string, frameIdx?: number): void
   confirmCandidate(candidate: LocateCandidate, frameIdx: number): void
   setPlayerName(name: string): void
   setCurrentFrame(frameIdx: number): void
@@ -214,7 +214,7 @@ export function useWorkspace(): WorkspaceController {
   ), [openVideo])
 
   const openLibraryVideo = useCallback((saved: LibraryVideo) => openVideo(
-    () => Promise.resolve(saved.metadata),
+    () => Promise.resolve(videoMetadataFromLibrary(saved)),
     saved.name,
     `Opening ${saved.name}…`,
     saved.name,
@@ -248,7 +248,7 @@ export function useWorkspace(): WorkspaceController {
       selectionRequest.current = null
       clearDownstreamState()
       setOpenError(null)
-      setVideo(saved.metadata)
+      setVideo(videoMetadataFromLibrary(saved))
       setVideoName(saved.name)
       setCurrentFrameState(player.anchorFrameIdx)
       setRangeState(restoredRange)
@@ -335,22 +335,23 @@ export function useWorkspace(): WorkspaceController {
       })
   }, [prepareSelection, video])
 
-  const selectByDescription = useCallback((rawPrompt: string) => {
+  const selectByDescription = useCallback((rawPrompt: string, frameIdx?: number) => {
     const prompt = rawPrompt.trim()
+    const selectionFrame = frameIdx ?? currentFrame
     if (loadingRef.current || trackStartingRef.current || !video || !prompt) return
-    if (!containsFrame(rangeRef.current, currentFrame)) {
+    if (!containsFrame(rangeRef.current, selectionFrame)) {
       setSelectionError('Choose a frame inside the selected range')
       return
     }
     selectionRequest.current?.abort()
     const controller = new AbortController()
     selectionRequest.current = controller
-    prepareSelection(currentFrame, 'text')
-    void selectByText(video.videoId, currentFrame, prompt, controller.signal)
+    prepareSelection(selectionFrame, 'text')
+    void selectByText(video.videoId, selectionFrame, prompt, controller.signal)
       .then((result) => {
         if (controller.signal.aborted) return
         setCandidates(result)
-        setCandidateFrame(currentFrame)
+        setCandidateFrame(selectionFrame)
         if (result.length === 0) setSelectionError('No players matched that prompt')
       })
       .catch((reason: unknown) => {
@@ -367,6 +368,12 @@ export function useWorkspace(): WorkspaceController {
 
   const confirmCandidate = useCallback((candidate: LocateCandidate, frameIdx: number) => {
     if (loadingRef.current || trackStartingRef.current) return
+    if (candidateFrame === null || frameIdx !== candidateFrame) {
+      if (candidateFrame !== null) {
+        setSelectionError(`Return to frame ${candidateFrame} to confirm this candidate`)
+      }
+      return
+    }
     if (!containsFrame(rangeRef.current, frameIdx)) {
       setSelectionError('Choose a frame inside the selected range')
       return
@@ -377,7 +384,7 @@ export function useWorkspace(): WorkspaceController {
     setCandidates([])
     setCandidateFrame(null)
     setSelectionError(null)
-  }, [])
+  }, [candidateFrame])
 
   const setCurrentFrame = useCallback((frameIdx: number) => {
     setCurrentFrameState(frameIdx)
@@ -547,4 +554,8 @@ export function useWorkspace(): WorkspaceController {
 
 function filenameFromPath(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path
+}
+
+function videoMetadataFromLibrary(saved: LibraryVideo): VideoMetadata {
+  return { ...saved.metadata, name: saved.name }
 }

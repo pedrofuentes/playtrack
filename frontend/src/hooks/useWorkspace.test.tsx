@@ -64,7 +64,10 @@ function savedPlayerFixture() {
     name: 'saved.mp4',
     sourceKind: 'path',
     path: '/saved.mp4',
-    metadata: { ...video, videoId: 'saved-video', name: 'saved.mp4' },
+    metadata: {
+      videoId: 'saved-video', width: video.width, height: video.height,
+      fps: video.fps, nbFrames: video.nbFrames, duration: video.duration,
+    },
     size: 100,
     openedAt: '2026-07-17T00:00:00Z',
     sourceExists: true,
@@ -236,6 +239,7 @@ describe('useWorkspace', () => {
 
     act(() => controller?.selectAt({ x: 10, y: 20 }, 9))
     expect(apiMocks.selectByClick).not.toHaveBeenCalled()
+    expect(controller?.selectionError).toBe('Choose a frame inside the selected range')
 
     act(() => controller?.setCurrentFrame(20))
     act(() => controller?.selectByDescription('white jersey'))
@@ -250,6 +254,30 @@ describe('useWorkspace', () => {
     })
     expect(apiMocks.selectByClick).toHaveBeenCalledOnce()
     expect(controller?.selection).not.toBeNull()
+    await act(async () => root.unmount())
+  })
+
+  it('grounds text at the exact paused frame and only confirms candidates there', async () => {
+    const candidate = { box: [10, 20, 30, 40] as const, score: 0.95 }
+    apiMocks.selectByText.mockResolvedValueOnce([candidate])
+    const root = await mountController()
+    act(() => controller?.setCurrentFrame(10))
+
+    await act(async () => {
+      controller?.selectByDescription('white jersey', 37)
+      await Promise.resolve()
+    })
+    expect(apiMocks.selectByText).toHaveBeenCalledWith(
+      'video-1', 37, 'white jersey', expect.any(AbortSignal),
+    )
+    expect(controller?.candidates).toEqual([candidate])
+
+    act(() => controller?.confirmCandidate(candidate, 38))
+    expect(controller?.selection).toBeNull()
+    expect(controller?.selectionError).toBe('Return to frame 37 to confirm this candidate')
+
+    act(() => controller?.confirmCandidate(candidate, 37))
+    expect(controller?.selection?.box).toEqual(candidate.box)
     await act(async () => root.unmount())
   })
 
@@ -553,7 +581,10 @@ describe('useWorkspace', () => {
       name: 'match.mp4',
       sourceKind: 'path',
       path: '/match.mp4',
-      metadata: { ...video, name: 'Stale metadata name' },
+      metadata: {
+        videoId: video.videoId, width: video.width, height: video.height,
+        fps: video.fps, nbFrames: video.nbFrames, duration: video.duration,
+      },
       size: 100,
       openedAt: '2026-07-17T00:00:00Z',
       sourceExists: true,

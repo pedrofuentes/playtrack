@@ -45,7 +45,7 @@ export interface VideoStageProps {
 }
 
 export interface VideoStageHandle {
-  pause(): void
+  pause(): number | null
   togglePlayback(): void
   seekToFrame(frameIdx: number): void
   stepFrames(delta: number): void
@@ -135,19 +135,35 @@ export const VideoStage = forwardRef<VideoStageHandle, VideoStageProps>(function
   const [view, setView] = useState<ViewTransform>({ zoom: 1, x: 0, y: 0 })
   const dragRef = useRef<DragState | null>(null)
   const suppressNextClickRef = useRef(false)
+  const frozenFrameRef = useRef<number | null>(null)
   const viewRevision = `${view.zoom}:${view.x}:${view.y}`
 
   const seekToFrame = useCallback((frameIdx: number) => {
     const video = videoRef.current
-    if (!video || fps <= 0 || frameCount <= 0) return
+    if (playbackLocked || !video || fps <= 0 || frameCount <= 0) return
     const clampedFrame = clamp(Math.round(frameIdx), 0, frameCount - 1)
     video.currentTime = clampedFrame / fps
     onFrameChange(clampedFrame)
-  }, [fps, frameCount, onFrameChange])
+  }, [fps, frameCount, onFrameChange, playbackLocked])
+
+  const pauseAtDisplayedFrame = useCallback((): number | null => {
+    const video = videoRef.current
+    if (!video) return null
+    video.pause()
+    const frameIdx = playbackLocked && frozenFrameRef.current !== null
+      ? frozenFrameRef.current
+      : displayedFrameIndex(video.currentTime, fps, frameCount)
+    frozenFrameRef.current = frameIdx
+    if (fps > 0 && displayedFrameIndex(video.currentTime, fps, frameCount) !== frameIdx) {
+      video.currentTime = frameIdx / fps
+    }
+    onFrameChange(frameIdx)
+    return frameIdx
+  }, [fps, frameCount, onFrameChange, playbackLocked])
 
   useImperativeHandle(forwardedRef, () => ({
     pause() {
-      videoRef.current?.pause()
+      return pauseAtDisplayedFrame()
     },
     togglePlayback() {
       const video = videoRef.current
@@ -158,10 +174,10 @@ export const VideoStage = forwardRef<VideoStageHandle, VideoStageProps>(function
     seekToFrame,
     stepFrames(delta: number) {
       const video = videoRef.current
-      if (!video) return
+      if (!video || playbackLocked) return
       seekToFrame(Math.round(video.currentTime * fps) + delta)
     },
-  }), [fps, playbackLocked, seekToFrame])
+  }), [fps, pauseAtDisplayedFrame, playbackLocked, seekToFrame])
 
   const drawOverlay = useCallback(() => {
     drawOverlayCanvas(
@@ -190,9 +206,23 @@ export const VideoStage = forwardRef<VideoStageHandle, VideoStageProps>(function
   useEffect(() => {
     setView({ zoom: 1, x: 0, y: 0 })
     setLastPoint(null)
+    frozenFrameRef.current = null
     dragRef.current = null
     suppressNextClickRef.current = false
   }, [src])
+
+  useEffect(() => {
+    if (!playbackLocked) {
+      frozenFrameRef.current = null
+      return
+    }
+    const video = videoRef.current
+    if (!video) return
+    video.pause()
+    if (frozenFrameRef.current === null) {
+      frozenFrameRef.current = displayedFrameIndex(video.currentTime, fps, frameCount)
+    }
+  }, [fps, frameCount, playbackLocked])
 
   useEffect(() => {
     const stage = stageRef.current
@@ -215,7 +245,8 @@ export const VideoStage = forwardRef<VideoStageHandle, VideoStageProps>(function
       return
     }
     if (selectionLocked) return
-    event.currentTarget.pause()
+    const frameIdx = pauseAtDisplayedFrame()
+    if (frameIdx === null) return
     const bounds = event.currentTarget.getBoundingClientRect()
     const point = sourcePointFromCanvas(
       { x: event.clientX - bounds.left, y: event.clientY - bounds.top },
@@ -223,11 +254,6 @@ export const VideoStage = forwardRef<VideoStageHandle, VideoStageProps>(function
       { width: sourceWidth, height: sourceHeight },
     )
     if (!point) return
-    const frameIdx = displayedFrameIndex(
-      event.currentTarget.currentTime,
-      fps,
-      frameCount,
-    )
     const candidate = candidateAtSourcePoint(candidates, point)
     if (candidate) {
       setLastPoint(null)
@@ -305,9 +331,17 @@ export const VideoStage = forwardRef<VideoStageHandle, VideoStageProps>(function
 
   const reportFrame = () => {
     const video = videoRef.current
-    if (video) {
-      onFrameChange(displayedFrameIndex(video.currentTime, fps, frameCount))
+    if (!video) return
+    const frozenFrame = frozenFrameRef.current
+    if (playbackLocked && frozenFrame !== null) {
+      const displayedFrame = displayedFrameIndex(video.currentTime, fps, frameCount)
+      if (fps > 0 && displayedFrame !== frozenFrame) {
+        video.currentTime = frozenFrame / fps
+      }
+      onFrameChange(frozenFrame)
+      return
     }
+    onFrameChange(displayedFrameIndex(video.currentTime, fps, frameCount))
   }
 
   return (
@@ -331,6 +365,7 @@ export const VideoStage = forwardRef<VideoStageHandle, VideoStageProps>(function
             if (playbackLocked) videoRef.current?.pause()
           }}
           onLoadedMetadata={reportFrame}
+          onSeeking={reportFrame}
           onSeeked={reportFrame}
           onTimeUpdate={reportFrame}
         >

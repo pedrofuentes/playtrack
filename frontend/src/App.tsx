@@ -16,7 +16,7 @@ import { WorkflowInspector } from './components/WorkflowInspector'
 import { type WorkspaceSurface, WorkspaceShell } from './components/WorkspaceShell'
 import { useWorkspace } from './hooks/useWorkspace'
 import { useWorkspaceShortcuts } from './hooks/useWorkspaceShortcuts'
-import { containsFrame, frameRangeCount } from './frameRange'
+import { frameRangeCount } from './frameRange'
 import { summarizeTrack } from './trackHealth'
 
 const EXAMPLE_PATH = 'examples/example.mp4'
@@ -32,6 +32,11 @@ export default function App() {
       ? summarizeTrack(workspace.trackJob.track, frameRangeCount(workspace.range))
       : null
   ), [workspace.range, workspace.trackJob, workspace.video])
+  const playbackLocked = workspace.stage === 'select' && (
+    workspace.selectionLoading ||
+    workspace.candidates.length > 0 ||
+    workspace.selection !== null
+  )
 
   const primaryAction = () => {
     if (
@@ -45,21 +50,17 @@ export default function App() {
 
   useWorkspaceShortcuts({
     togglePlayback: () => videoStageRef.current?.togglePlayback(),
-    stepFrames: (delta) => videoStageRef.current?.stepFrames(delta),
+    stepFrames: (delta) => {
+      if (!playbackLocked) videoStageRef.current?.stepFrames(delta)
+    },
     primaryAction,
     openLibrary: () => setSurface('library'),
     closeSurface: () => setSurface('editor'),
   })
 
   const seekToFrame = (frameIdx: number) => videoStageRef.current?.seekToFrame(frameIdx)
-  const playbackLocked = workspace.stage === 'select' && (
-    workspace.selectionLoading ||
-    workspace.candidates.length > 0 ||
-    workspace.selection !== null
-  )
   const selectionMutationLocked = workspace.loading || workspace.trackStarting
   const selectionLocked = selectionMutationLocked || workspace.stage !== 'select'
-    || !containsFrame(workspace.range, workspace.currentFrame)
   const exportPanel = workspace.video && workspace.trackJob?.state === 'completed' ? (
     <ExportPanel
       key={`${workspace.video.videoId}:${workspace.trackJob.jobId}`}
@@ -121,8 +122,8 @@ export default function App() {
       trackFrameCount={frameRangeCount(workspace.range)}
       health={health}
       onTextSelect={(prompt) => {
-        videoStageRef.current?.pause()
-        workspace.selectByDescription(prompt)
+        const frameIdx = videoStageRef.current?.pause()
+        workspace.selectByDescription(prompt, frameIdx ?? workspace.currentFrame)
       }}
       onPlayerNameChange={workspace.setPlayerName}
       onTrack={() => void workspace.startTrack()}

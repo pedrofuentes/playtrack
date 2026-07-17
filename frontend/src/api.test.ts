@@ -15,6 +15,7 @@ import {
   trackJobWebSocketUrl,
   uploadVideo,
 } from './api'
+import type { LibraryResponse } from './api'
 
 describe('uploadVideo', () => {
   afterEach(() => {
@@ -269,7 +270,24 @@ describe('library API', () => {
   afterEach(() => vi.unstubAllGlobals())
 
   it('loads the persisted library catalog', async () => {
-    const result = { videos: [], cacheBytes: 0 }
+    const result = {
+      videos: [{
+        videoId: 'video-1',
+        name: 'Championship Final',
+        sourceKind: 'path' as const,
+        path: '/videos/final.mp4',
+        metadata: {
+          videoId: 'video-1', width: 1920, height: 1080,
+          fps: 30, nbFrames: 90, duration: 3,
+        },
+        size: 1024,
+        openedAt: '2026-07-17T00:00:00Z',
+        sourceExists: true,
+        tracks: [],
+        exports: [],
+      }],
+      cacheBytes: 0,
+    } satisfies LibraryResponse
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue(result) })
     vi.stubGlobal('fetch', fetchMock)
     await expect(getLibrary()).resolves.toEqual(result)

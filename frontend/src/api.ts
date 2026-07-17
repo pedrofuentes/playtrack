@@ -11,6 +11,8 @@ export interface VideoMetadata {
   duration: number
 }
 
+export type LibraryVideoMetadata = Omit<VideoMetadata, 'name'>
+
 export interface ClickSelection {
   box: SourceBox
   maskPng: string
@@ -101,7 +103,7 @@ export interface LibraryVideo {
   name: string
   sourceKind: 'path' | 'upload'
   path: string
-  metadata: VideoMetadata
+  metadata: LibraryVideoMetadata
   size: number
   openedAt: string | null
   sourceExists: boolean

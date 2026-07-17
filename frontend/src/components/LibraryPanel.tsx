@@ -226,7 +226,7 @@ function formatPlayerRange(video: LibraryVideo, player: LibraryTrack): string {
   }, video.metadata.nbFrames)
   const count = frameRangeCount(range)
   const duration = video.metadata.fps > 0 ? count / video.metadata.fps : 0
-  return `${formatRangeTime(range.startFrameIdx, video.metadata.fps)}–${formatRangeTime(range.endFrameExclusive, video.metadata.fps)} · ${duration.toFixed(1)} sec · ${count} frame${count === 1 ? '' : 's'}`
+  return `${formatRangeTime(range.startFrameIdx, video.metadata.fps)}–${formatRangeTime(range.endFrameExclusive - 1, video.metadata.fps)} · ${duration.toFixed(1)} sec · ${count} frame${count === 1 ? '' : 's'}`
 }
 
 function formatRangeTime(frameIdx: number, fps: number): string {

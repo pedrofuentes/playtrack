@@ -99,6 +99,18 @@ describe('TrackTimeline', () => {
     await act(async () => root.unmount())
   })
 
+  it('labels Out with the final included frame while duration uses the frame count', async () => {
+    const { container, root } = await renderTimeline({
+      currentFrame: 2,
+      frameCount: 10,
+      fps: 2,
+      range: { startFrameIdx: 2, endFrameExclusive: 4 },
+    })
+
+    expect(container.textContent).toContain('00:01.0–00:01.5 · 1.0 sec · 2 frames')
+    await act(async () => root.unmount())
+  })
+
   it('seeks to the first frame of a lost range', async () => {
     const onSeek = vi.fn()
     const { container, root } = await renderTimeline({ onSeek })

@@ -154,7 +154,7 @@ export function TrackTimeline({
       </div>
       <div className="timeline-range-row">
         <span id="timeline-range-summary" className="timeline-range-summary">
-          {formatTime(safeRange.startFrameIdx, fps)}–{formatTime(safeRange.endFrameExclusive, fps)}
+          {formatTime(safeRange.startFrameIdx, fps)}–{formatTime(outFrameIdx, fps)}
           {' · '}{formatSelectedDuration(selectedFrameCount, fps)}
           {' · '}{selectedFrameCount} frame{selectedFrameCount === 1 ? '' : 's'}
         </span>

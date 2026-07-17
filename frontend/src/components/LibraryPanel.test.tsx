@@ -29,7 +29,7 @@ function savedVideo(videoId: string, name: string, sourceKind: 'path' | 'upload'
     sourceExists: true,
     sourceKind,
     path: `/${name}`,
-    metadata: { videoId, name, width: 320, height: 180, fps: 25, nbFrames: 1000, duration: 40 },
+    metadata: { videoId, width: 320, height: 180, fps: 25, nbFrames: 1000, duration: 40 },
     tracks: [{ name: 'White 19', jobId: `${videoId}-track`, anchorFrameIdx: 250, box: [1, 2, 3, 4], startFrameIdx: 250, endFrameExclusive: 701, frameCount: 451, lostCount: 1, createdAt: '2026-07-16T00:00:00Z' }],
     exports: [{ exportId: `${videoId}-export`, videoId, trackJobId: `${videoId}-track`, params: { outWidth: 128, outHeight: 72, zoom: 2 }, path: '/export.mp4', size: 512, createdAt: '2026-07-16T00:00:00Z', sourceExists: true }],
   }
@@ -101,7 +101,27 @@ it('shows legacy players without range fields as full-video ranges', async () =>
   })
 
   await act(async () => button(container, 'Players').click())
-  expect(container.textContent).toContain('00:00–00:40 · 40.0 sec · 1000 frames')
+  expect(container.textContent).toContain('00:00–00:39 · 40.0 sec · 1000 frames')
+  await act(async () => root.unmount())
+})
+
+it('labels Out with the final included frame while duration uses the frame count', async () => {
+  const current = savedVideo('low-fps', 'Low FPS.mp4', 'path')
+  current.metadata.fps = 2
+  current.metadata.nbFrames = 10
+  current.tracks = [{
+    ...current.tracks[0],
+    anchorFrameIdx: 2,
+    startFrameIdx: 2,
+    endFrameExclusive: 4,
+    frameCount: 2,
+  }]
+  const { container, root } = await renderLibrary({
+    library: { cacheBytes: 0, videos: [current] },
+  })
+
+  await act(async () => button(container, 'Players').click())
+  expect(container.textContent).toContain('00:01–00:01 · 1.0 sec · 2 frames')
   await act(async () => root.unmount())
 })
 

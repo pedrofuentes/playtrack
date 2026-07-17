@@ -232,6 +232,87 @@ describe('VideoStage pointer interactions', () => {
     await act(async () => root.unmount())
   })
 
+  it('returns and reports the exact media frame when paused', async () => {
+    const onFrameChange = vi.fn()
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    const stageRef = createRef<VideoStageHandle>()
+
+    await act(async () => root.render(
+      <VideoStage
+        ref={stageRef}
+        src="/video.mp4"
+        sourceWidth={400}
+        sourceHeight={200}
+        fps={30}
+        frameCount={90}
+        selection={null}
+        track={[]}
+        cropWindows={[]}
+        candidates={[]}
+        playbackLocked={false}
+        onSourceClick={vi.fn()}
+        onCandidateConfirm={vi.fn()}
+        onFrameChange={onFrameChange}
+      />,
+    ))
+    const video = container.querySelector('video')!
+    video.currentTime = 37 / 30
+
+    let pausedFrame: unknown
+    await act(async () => { pausedFrame = stageRef.current?.pause() })
+
+    expect(pausedFrame).toBe(37)
+    expect(onFrameChange).toHaveBeenLastCalledWith(37)
+    await act(async () => root.unmount())
+  })
+
+  it('restores the frozen frame across imperative and native navigation', async () => {
+    const onFrameChange = vi.fn()
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    const stageRef = createRef<VideoStageHandle>()
+    const renderStage = (playbackLocked: boolean) => (
+      <VideoStage
+        ref={stageRef}
+        src="/video.mp4"
+        sourceWidth={400}
+        sourceHeight={200}
+        fps={30}
+        frameCount={90}
+        selection={null}
+        track={[]}
+        cropWindows={[]}
+        candidates={[]}
+        playbackLocked={playbackLocked}
+        onSourceClick={vi.fn()}
+        onCandidateConfirm={vi.fn()}
+        onFrameChange={onFrameChange}
+      />
+    )
+
+    await act(async () => root.render(renderStage(false)))
+    const video = container.querySelector('video')!
+    video.currentTime = 37 / 30
+    await act(async () => { stageRef.current?.pause() })
+    await act(async () => root.render(renderStage(true)))
+
+    await act(async () => {
+      stageRef.current?.seekToFrame(60)
+      stageRef.current?.stepFrames(1)
+    })
+    expect(video.currentTime).toBeCloseTo(37 / 30)
+
+    video.currentTime = 2
+    await act(async () => video.dispatchEvent(new Event('seeking', { bubbles: true })))
+    await act(async () => video.dispatchEvent(new Event('seeked', { bubbles: true })))
+    expect(video.currentTime).toBeCloseTo(37 / 30)
+    expect(onFrameChange).toHaveBeenLastCalledWith(37)
+    await act(async () => root.unmount())
+  })
+
   it('pauses before reporting a source click', async () => {
     const onSourceClick = vi.fn()
     const container = document.createElement('div')
@@ -264,6 +345,7 @@ describe('VideoStage pointer interactions', () => {
     Object.defineProperty(video, 'currentTime', {
       configurable: true,
       get: currentTimeRead,
+      set: vi.fn(),
     })
     video.getBoundingClientRect = () => DOMRect.fromRect({ width: 400, height: 200 })
 
@@ -316,6 +398,7 @@ describe('VideoStage pointer interactions', () => {
     Object.defineProperty(video, 'currentTime', {
       configurable: true,
       get: currentTimeRead,
+      set: vi.fn(),
     })
     video.getBoundingClientRect = () => DOMRect.fromRect({ width: 400, height: 200 })
 

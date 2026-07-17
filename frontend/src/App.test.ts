@@ -8,6 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const appMocks = vi.hoisted(() => ({
   pause: vi.fn(),
   play: vi.fn(),
+  seekToFrame: vi.fn(),
+  sourceClick: vi.fn(),
+  stepFrames: vi.fn(),
   playbackLocked: false,
   selectionLocked: false,
   workspace: null as unknown,
@@ -21,17 +24,26 @@ vi.mock('./components/VideoStage', async () => {
   const { createElement, forwardRef, useImperativeHandle } = await import('react')
   return {
     VideoStage: forwardRef(function MockVideoStage(
-      { playbackLocked, selectionLocked }: { playbackLocked: boolean; selectionLocked: boolean },
+      {
+        playbackLocked,
+        selectionLocked,
+        onSourceClick,
+      }: {
+        playbackLocked: boolean
+        selectionLocked: boolean
+        onSourceClick: (point: { x: number; y: number }, frameIdx: number) => void
+      },
       ref,
     ) {
       appMocks.playbackLocked = playbackLocked
       appMocks.selectionLocked = selectionLocked
+      appMocks.sourceClick.mockImplementation(onSourceClick)
       useImperativeHandle(ref, () => ({
         pause: appMocks.pause,
         play: appMocks.play,
         togglePlayback: appMocks.play,
-        seekToFrame: vi.fn(),
-        stepFrames: vi.fn(),
+        seekToFrame: appMocks.seekToFrame,
+        stepFrames: appMocks.stepFrames,
       }))
       return createElement('div', { 'data-testid': 'video-stage' })
     }),
@@ -113,7 +125,11 @@ function openedWorkspace(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   appMocks.pause.mockClear()
+  appMocks.pause.mockReturnValue(undefined)
   appMocks.play.mockClear()
+  appMocks.seekToFrame.mockClear()
+  appMocks.sourceClick.mockReset()
+  appMocks.stepFrames.mockClear()
   appMocks.playbackLocked = false
   appMocks.selectionLocked = false
   appMocks.workspace = workspace()
@@ -174,7 +190,9 @@ it('renders the pro-editor shell without expanded secondary surfaces', () => {
 
 it('pauses the video before starting text selection', async () => {
   const selectByDescription = vi.fn()
+  appMocks.pause.mockReturnValue(37)
   appMocks.workspace = openedWorkspace({
+    currentFrame: 10,
     features: { textSelection: { enabled: true, reason: '' } },
     selectByDescription,
   })
@@ -197,6 +215,7 @@ it('pauses the video before starting text selection', async () => {
   expect(appMocks.pause.mock.invocationCallOrder[0]).toBeLessThan(
     selectByDescription.mock.invocationCallOrder[0],
   )
+  expect(selectByDescription).toHaveBeenCalledWith('white jersey', 37)
   await act(async () => root.unmount())
   container.remove()
 })
@@ -255,10 +274,8 @@ it.each(['track', 'review', 'export'])('leaves %s playback unlocked', async (sta
   await act(async () => root.unmount())
 })
 
-it.each([
-  ['outside the range in Select', { currentFrame: 20, range: { startFrameIdx: 30, endFrameExclusive: 60 }, stage: 'select' }],
-  ['while reviewing', { currentFrame: 40, range: { startFrameIdx: 30, endFrameExclusive: 60 }, stage: 'review' }],
-])('locks player selection %s', async (_label, state) => {
+it('locks player selection while reviewing', async () => {
+  const state = { currentFrame: 40, range: { startFrameIdx: 30, endFrameExclusive: 60 }, stage: 'review' }
   appMocks.workspace = openedWorkspace(state)
   const container = document.createElement('div')
   const root = createRoot(container)
@@ -266,6 +283,41 @@ it.each([
   await act(async () => root.render(createElement(App)))
 
   expect(appMocks.selectionLocked).toBe(true)
+  await act(async () => root.unmount())
+})
+
+it('routes an outside-range click to workspace validation', async () => {
+  const selectAt = vi.fn()
+  appMocks.workspace = openedWorkspace({
+    currentFrame: 20,
+    range: { startFrameIdx: 30, endFrameExclusive: 60 },
+    selectAt,
+  })
+  const container = document.createElement('div')
+  const root = createRoot(container)
+
+  await act(async () => root.render(createElement(App)))
+  expect(appMocks.selectionLocked).toBe(false)
+  act(() => appMocks.sourceClick({ x: 100, y: 50 }, 20))
+  expect(selectAt).toHaveBeenCalledWith({ x: 100, y: 50 }, 20)
+  await act(async () => root.unmount())
+})
+
+it.each([
+  ['selection loading', { selectionLoading: true }],
+  ['text candidates', { candidates: [{ box: [1, 2, 3, 4], score: 0.9 }] }],
+  ['confirmed selection', { selection: { box: [1, 2, 3, 4], score: 0.9, maskPng: '' } }],
+])('blocks ArrowRight frame stepping during %s', async (_label, selectionState) => {
+  appMocks.workspace = openedWorkspace(selectionState)
+  const container = document.createElement('div')
+  const root = createRoot(container)
+
+  await act(async () => root.render(createElement(App)))
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+  })
+
+  expect(appMocks.stepFrames).not.toHaveBeenCalled()
   await act(async () => root.unmount())
 })
 
@@ -386,7 +438,7 @@ it('disables Library opens while any workspace open is loading', async () => {
     sourceKind: 'path',
     path: '/saved.mp4',
     metadata: {
-      videoId: 'saved-video', name: 'saved.mp4', width: 400, height: 200,
+      videoId: 'saved-video', width: 400, height: 200,
       fps: 30, nbFrames: 90, duration: 3,
     },
     size: 100,
