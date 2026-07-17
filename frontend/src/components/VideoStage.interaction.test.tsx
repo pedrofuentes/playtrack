@@ -219,6 +219,11 @@ describe('VideoStage pointer interactions', () => {
 
     const video = container.querySelector('video')!
     const pause = vi.spyOn(video, 'pause').mockImplementation(() => {})
+    const currentTimeRead = vi.fn(() => 1)
+    Object.defineProperty(video, 'currentTime', {
+      configurable: true,
+      get: currentTimeRead,
+    })
     video.getBoundingClientRect = () => DOMRect.fromRect({ width: 400, height: 200 })
 
     await act(async () => {
@@ -229,6 +234,9 @@ describe('VideoStage pointer interactions', () => {
       }))
     })
 
+    expect(pause.mock.invocationCallOrder[0]).toBeLessThan(
+      currentTimeRead.mock.invocationCallOrder[0],
+    )
     expect(pause.mock.invocationCallOrder[0]).toBeLessThan(
       onSourceClick.mock.invocationCallOrder[0],
     )
@@ -263,6 +271,11 @@ describe('VideoStage pointer interactions', () => {
 
     const video = container.querySelector('video')!
     const pause = vi.spyOn(video, 'pause').mockImplementation(() => {})
+    const currentTimeRead = vi.fn(() => 1)
+    Object.defineProperty(video, 'currentTime', {
+      configurable: true,
+      get: currentTimeRead,
+    })
     video.getBoundingClientRect = () => DOMRect.fromRect({ width: 400, height: 200 })
 
     await act(async () => {
@@ -273,6 +286,9 @@ describe('VideoStage pointer interactions', () => {
       }))
     })
 
+    expect(pause.mock.invocationCallOrder[0]).toBeLessThan(
+      currentTimeRead.mock.invocationCallOrder[0],
+    )
     expect(pause.mock.invocationCallOrder[0]).toBeLessThan(
       onCandidateConfirm.mock.invocationCallOrder[0],
     )

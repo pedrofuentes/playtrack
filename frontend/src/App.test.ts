@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const appMocks = vi.hoisted(() => ({
   pause: vi.fn(),
+  play: vi.fn(),
   playbackLocked: false,
   workspace: null as unknown,
 }))
@@ -25,7 +26,8 @@ vi.mock('./components/VideoStage', async () => {
       appMocks.playbackLocked = playbackLocked
       useImperativeHandle(ref, () => ({
         pause: appMocks.pause,
-        togglePlayback: vi.fn(),
+        play: appMocks.play,
+        togglePlayback: appMocks.play,
         seekToFrame: vi.fn(),
         stepFrames: vi.fn(),
       }))
@@ -84,9 +86,26 @@ function workspace(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function openedWorkspace(overrides: Record<string, unknown> = {}) {
+  return workspace({
+    video: {
+      videoId: 'video-1',
+      name: 'game.mp4',
+      width: 400,
+      height: 200,
+      fps: 30,
+      nbFrames: 90,
+      duration: 3,
+    },
+    videoName: 'game.mp4',
+    ...overrides,
+  })
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   appMocks.pause.mockClear()
+  appMocks.play.mockClear()
   appMocks.playbackLocked = false
   appMocks.workspace = workspace()
 })
@@ -146,17 +165,7 @@ it('renders the pro-editor shell without expanded secondary surfaces', () => {
 
 it('pauses the video before starting text selection', async () => {
   const selectByDescription = vi.fn()
-  appMocks.workspace = workspace({
-    video: {
-      videoId: 'video-1',
-      name: 'game.mp4',
-      width: 400,
-      height: 200,
-      fps: 30,
-      nbFrames: 90,
-      duration: 3,
-    },
-    videoName: 'game.mp4',
+  appMocks.workspace = openedWorkspace({
     features: { textSelection: { enabled: true, reason: '' } },
     selectByDescription,
   })
@@ -188,17 +197,7 @@ it.each([
   ['text candidates', { candidates: [{ box: [1, 2, 3, 4], score: 0.9 }] }],
   ['confirmed selection', { selection: { box: [1, 2, 3, 4], score: 0.9, maskPng: '' } }],
 ])('locks playback during %s', async (_label, selectionState) => {
-  appMocks.workspace = workspace({
-    video: {
-      videoId: 'video-1',
-      name: 'game.mp4',
-      width: 400,
-      height: 200,
-      fps: 30,
-      nbFrames: 90,
-      duration: 3,
-    },
-    videoName: 'game.mp4',
+  appMocks.workspace = openedWorkspace({
     ...selectionState,
   })
   const container = document.createElement('div')
@@ -207,5 +206,42 @@ it.each([
   await act(async () => root.render(createElement(App)))
 
   expect(appMocks.playbackLocked).toBe(true)
+  await act(async () => root.unmount())
+})
+
+it('unlocks reset selection without starting playback', async () => {
+  const resetSelection = vi.fn()
+  const selected = { box: [1, 2, 3, 4], score: 0.9, maskPng: '' }
+  appMocks.workspace = openedWorkspace({ selection: selected, resetSelection })
+  const container = document.createElement('div')
+  const root = createRoot(container)
+
+  await act(async () => root.render(createElement(App)))
+  expect(appMocks.playbackLocked).toBe(true)
+
+  const resetButton = Array.from(container.querySelectorAll('button')).find(
+    (button) => button.textContent === 'Choose a different player',
+  )!
+  await act(async () => resetButton.click())
+  appMocks.workspace = openedWorkspace({ resetSelection })
+  await act(async () => root.render(createElement(App)))
+
+  expect(resetSelection).toHaveBeenCalledOnce()
+  expect(appMocks.playbackLocked).toBe(false)
+  expect(appMocks.play).not.toHaveBeenCalled()
+  await act(async () => root.unmount())
+})
+
+it.each(['track', 'review', 'export'])('leaves %s playback unlocked', async (stage) => {
+  appMocks.workspace = openedWorkspace({
+    stage,
+    selection: { box: [1, 2, 3, 4], score: 0.9, maskPng: '' },
+  })
+  const container = document.createElement('div')
+  const root = createRoot(container)
+
+  await act(async () => root.render(createElement(App)))
+
+  expect(appMocks.playbackLocked).toBe(false)
   await act(async () => root.unmount())
 })
