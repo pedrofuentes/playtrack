@@ -8,6 +8,7 @@ describe('OpenVideoPanel', () => {
     const markup = renderToStaticMarkup(
       <OpenVideoPanel
         disabled={false}
+        variant="drawer"
         onUpload={vi.fn()}
         onOpenPath={vi.fn()}
       />,
@@ -17,5 +18,6 @@ describe('OpenVideoPanel', () => {
     expect(markup).toContain('accept="video/mp4,video/*"')
     expect(markup).toContain('placeholder="examples/example.mp4"')
     expect(markup).toContain('Open server path')
+    expect(markup).toContain('More options')
   })
 })

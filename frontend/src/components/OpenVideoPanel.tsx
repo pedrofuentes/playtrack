@@ -2,12 +2,14 @@ import { type ChangeEvent, type FormEvent, useState } from 'react'
 
 interface OpenVideoPanelProps {
   disabled: boolean
+  variant?: 'empty' | 'drawer'
   onUpload: (file: File) => Promise<void>
   onOpenPath: (path: string) => Promise<void>
 }
 
 export function OpenVideoPanel({
   disabled,
+  variant = 'empty',
   onUpload,
   onOpenPath,
 }: OpenVideoPanelProps) {
@@ -41,7 +43,7 @@ export function OpenVideoPanel({
   }
 
   return (
-    <section className="open-video-panel">
+    <section className={`open-video-panel ${variant}`}>
       <p className="label">Open video</p>
       <label className="file-upload">
         <span>Upload from this computer</span>
@@ -52,26 +54,56 @@ export function OpenVideoPanel({
           onChange={(event) => void chooseFile(event)}
         />
       </label>
-      <div className="panel-divider"><span>or</span></div>
-      <form onSubmit={(event) => void submitPath(event)}>
-        <label htmlFor="server-video-path">Path on the server</label>
-        <input
-          id="server-video-path"
-          type="text"
-          value={path}
-          disabled={unavailable}
-          placeholder="examples/example.mp4"
-          onChange={(event) => setPath(event.target.value)}
+      {variant === 'empty' && <div className="panel-divider"><span>or</span></div>}
+      {variant === 'drawer' ? (
+        <details className="open-path-options">
+          <summary>More options</summary>
+          <PathForm
+            path={path}
+            unavailable={unavailable}
+            onPathChange={setPath}
+            onSubmit={submitPath}
+          />
+        </details>
+      ) : (
+        <PathForm
+          path={path}
+          unavailable={unavailable}
+          onPathChange={setPath}
+          onSubmit={submitPath}
         />
-        <button type="submit" disabled={unavailable || !path.trim()}>
-          Open server path
-        </button>
-      </form>
+      )}
       {busy && (
         <p className="hint" role="status">
           {busy === 'upload' ? 'Uploading…' : 'Opening…'}
         </p>
       )}
     </section>
+  )
+}
+
+interface PathFormProps {
+  path: string
+  unavailable: boolean
+  onPathChange: (path: string) => void
+  onSubmit: (event: FormEvent) => Promise<void>
+}
+
+function PathForm({ path, unavailable, onPathChange, onSubmit }: PathFormProps) {
+  return (
+    <form onSubmit={(event) => void onSubmit(event)}>
+      <label htmlFor="server-video-path">Path on the server</label>
+      <input
+        id="server-video-path"
+        type="text"
+        value={path}
+        disabled={unavailable}
+        placeholder="examples/example.mp4"
+        onChange={(event) => onPathChange(event.target.value)}
+      />
+      <button type="submit" disabled={unavailable || !path.trim()}>
+        Open server path
+      </button>
+    </form>
   )
 }
