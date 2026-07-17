@@ -21,6 +21,11 @@ class Settings:
     ffprobe_binary: str = "ffprobe"
     frame_cache_max_dimension: int = 2048
     tracking_max_dimension: int = 2048
+    locate_model_id: str = "nvidia/LocateAnything-3B"
+    locate_max_input_dimension: int = 2500
+    locate_rescue_enabled: bool = True
+    locate_rescue_after: int = 15
+    locate_rescue_min_score: float = 0.5
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -64,6 +69,17 @@ def load_settings() -> Settings:
         ffmpeg_binary=os.environ.get("FINDME_FFMPEG", "ffmpeg"),
         ffprobe_binary=os.environ.get("FINDME_FFPROBE", "ffprobe"),
         tracking_max_dimension=int(os.environ.get("TRACKING_MAX_DIM", "2048")),
+        locate_model_id=os.environ.get(
+            "FINDME_LOCATE_MODEL", "nvidia/LocateAnything-3B"
+        ),
+        locate_max_input_dimension=int(
+            os.environ.get("LOCATE_MAX_INPUT_DIM", "2500")
+        ),
+        locate_rescue_enabled=_env_bool("LOCATE_RESCUE_ENABLED", True),
+        locate_rescue_after=int(os.environ.get("LOCATE_RESCUE_AFTER", "15")),
+        locate_rescue_min_score=float(
+            os.environ.get("LOCATE_RESCUE_MIN_SCORE", "0.5")
+        ),
     )
 
 

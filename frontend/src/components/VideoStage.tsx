@@ -14,7 +14,12 @@ import {
   type Point,
   sourcePointFromCanvas,
 } from '../geometry'
-import type { ClickSelection, CropWindow, TrackFrame } from '../api'
+import type {
+  ClickSelection,
+  CropWindow,
+  LocateCandidate,
+  TrackFrame,
+} from '../api'
 import { CropOverlay } from './CropOverlay'
 import { TrackOverlay } from './TrackOverlay'
 
@@ -27,7 +32,10 @@ interface VideoStageProps {
   selection: ClickSelection | null
   track: readonly TrackFrame[]
   cropWindows: readonly CropWindow[]
+  candidates: readonly LocateCandidate[]
   onSourceClick: (point: Point, frameIdx: number) => void
+  onCandidateConfirm: (candidate: LocateCandidate, frameIdx: number) => void
+  onFrameChange: (frameIdx: number) => void
 }
 
 export function VideoStage({
@@ -39,7 +47,10 @@ export function VideoStage({
   selection,
   track,
   cropWindows,
+  candidates,
   onSourceClick,
+  onCandidateConfirm,
+  onFrameChange,
 }: VideoStageProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -50,10 +61,11 @@ export function VideoStage({
       canvasRef,
       lastPoint,
       selection,
+      candidates,
       sourceWidth,
       sourceHeight,
     )
-  }, [lastPoint, selection, sourceHeight, sourceWidth])
+  }, [candidates, lastPoint, selection, sourceHeight, sourceWidth])
 
   useEffect(() => {
     const video = videoRef.current
@@ -72,12 +84,27 @@ export function VideoStage({
       { width: sourceWidth, height: sourceHeight },
     )
     if (!point) return
+    const frameIdx = displayedFrameIndex(
+      event.currentTarget.currentTime,
+      fps,
+      frameCount,
+    )
+    const candidate = candidateAtSourcePoint(candidates, point)
+    if (candidate) {
+      setLastPoint(null)
+      onCandidateConfirm(candidate, frameIdx)
+      return
+    }
     setLastPoint(point)
     console.info('FindMe source click', point)
-    onSourceClick(
-      point,
-      displayedFrameIndex(event.currentTarget.currentTime, fps, frameCount),
-    )
+    onSourceClick(point, frameIdx)
+  }
+
+  const reportFrame = () => {
+    const video = videoRef.current
+    if (video) {
+      onFrameChange(displayedFrameIndex(video.currentTime, fps, frameCount))
+    }
   }
 
   return (
@@ -89,10 +116,13 @@ export function VideoStage({
         playsInline
         preload="metadata"
         onClick={handleClick}
+        onLoadedMetadata={reportFrame}
+        onSeeked={reportFrame}
+        onTimeUpdate={reportFrame}
       >
         Your browser does not support HTML video.
       </video>
-      {selection && (
+      {selection?.maskPng && (
         <img
           className="selection-mask"
           src={`data:image/png;base64,${selection.maskPng}`}
@@ -125,6 +155,7 @@ function drawOverlayCanvas(
   canvasRef: RefObject<HTMLCanvasElement | null>,
   point: Point | null,
   selection: ClickSelection | null,
+  candidates: readonly LocateCandidate[],
   sourceWidth: number,
   sourceHeight: number,
 ) {
@@ -159,6 +190,23 @@ function drawOverlayCanvas(
     }
   }
 
+  candidates.forEach((candidate, index) => {
+    const box = canvasRectFromSourceBox(
+      candidate.box,
+      { width: bounds.width, height: bounds.height },
+      { width: sourceWidth, height: sourceHeight },
+    )
+    if (!box) return
+    context.strokeStyle = '#ff5f8f'
+    context.fillStyle = 'rgba(255, 95, 143, 0.16)'
+    context.lineWidth = 3
+    context.fillRect(box.left, box.top, box.width, box.height)
+    context.strokeRect(box.left, box.top, box.width, box.height)
+    context.fillStyle = '#ffedf3'
+    context.font = '700 13px system-ui'
+    context.fillText(String(index + 1), box.left + 5, box.top + 16)
+  })
+
   if (point) {
     const x = media.left + point.x * media.scale
     const y = media.top + point.y * media.scale
@@ -176,4 +224,16 @@ function drawOverlayCanvas(
     context.lineTo(x, y + 15)
     context.stroke()
   }
+}
+
+export function candidateAtSourcePoint(
+  candidates: readonly LocateCandidate[],
+  point: Point,
+): LocateCandidate | null {
+  return (
+    candidates.find(({ box }) => {
+      const [x1, y1, x2, y2] = box
+      return point.x >= x1 && point.x < x2 && point.y >= y1 && point.y < y2
+    }) ?? null
+  )
 }

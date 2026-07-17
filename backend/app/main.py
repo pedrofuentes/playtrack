@@ -20,6 +20,7 @@ from .crop_planner import (
 )
 from .exporter import export_video
 from .jobs import JobNotFoundError, JobRegistry
+from .models.locate_engine import get_locate_engine
 from .models.sam2_engine import get_sam2_engine, get_sam2_video_engine
 from .selection import (
     ClickSelection,
@@ -27,6 +28,8 @@ from .selection import (
     EmptySelectionError,
     SelectionInputError,
     SelectionUnavailableError,
+    TextSelectionUnavailableError,
+    TextSelector,
 )
 from .tracking import VideoTracker
 from .videos import (
@@ -65,6 +68,21 @@ class ClickSelectionResponse(BaseModel):
     score: float
 
 
+class TextSelectionRequest(BaseModel):
+    videoId: str
+    frameIdx: int = Field(ge=0)
+    prompt: str = Field(min_length=1, max_length=500)
+
+
+class LocateCandidateResponse(BaseModel):
+    box: tuple[int, int, int, int]
+    score: float
+
+
+class TextSelectionResponse(BaseModel):
+    candidates: list[LocateCandidateResponse]
+
+
 class TrackRequest(BaseModel):
     videoId: str
     frameIdx: int = Field(ge=0)
@@ -95,6 +113,7 @@ def create_app(
     *,
     frontend_dist: Path | None = None,
     click_selector: Any | None = None,
+    text_selector: Any | None = None,
     track_runner: Any | None = None,
     job_registry: JobRegistry | None = None,
     video_exporter: Any | None = None,
@@ -108,25 +127,41 @@ def create_app(
         frame_cache_max_dimension=settings.frame_cache_max_dimension,
         tracking_max_dimension=settings.tracking_max_dimension,
     )
+    sam_image_engine = get_sam2_engine(
+        settings.sam2_checkpoint, settings.sam2_model_config
+    )
+    sam_video_engine = get_sam2_video_engine(
+        settings.sam2_checkpoint,
+        settings.sam2_model_config,
+        offload_video_to_cpu=settings.sam2_offload_video_to_cpu,
+        offload_state_to_cpu=settings.sam2_offload_state_to_cpu,
+    )
     selector = click_selector
     if selector is None:
         selector = ClickSelector(
             store,
-            engine_provider=lambda: get_sam2_engine(
-                settings.sam2_checkpoint, settings.sam2_model_config
-            ),
+            engine_provider=lambda: sam_image_engine,
             crop_size=settings.sam2_crop_size,
+        )
+    locate_engine = get_locate_engine(settings.locate_model_id)
+    text_grounder = text_selector
+    if text_grounder is None:
+        text_grounder = TextSelector(
+            store,
+            engine_provider=lambda: locate_engine,
+            max_input_dimension=settings.locate_max_input_dimension,
         )
     tracker = track_runner
     if tracker is None:
         tracker = VideoTracker(
             store,
-            engine_provider=lambda: get_sam2_video_engine(
-                settings.sam2_checkpoint,
-                settings.sam2_model_config,
-                offload_video_to_cpu=settings.sam2_offload_video_to_cpu,
-                offload_state_to_cpu=settings.sam2_offload_state_to_cpu,
+            engine_provider=lambda: sam_video_engine,
+            rescue_engine_provider=(
+                (lambda: locate_engine) if settings.locate_rescue_enabled else None
             ),
+            rescue_after=settings.locate_rescue_after,
+            rescue_min_score=settings.locate_rescue_min_score,
+            rescue_max_input_dimension=settings.locate_max_input_dimension,
         )
     jobs = job_registry or JobRegistry()
     exporter = video_exporter or export_video
@@ -135,6 +170,7 @@ def create_app(
     app = FastAPI(title="FindMe", version="0.1.0")
     app.state.video_store = store
     app.state.click_selector = selector
+    app.state.text_selector = text_grounder
     app.state.track_runner = tracker
     app.state.job_registry = jobs
     app.state.video_exporter = exporter
@@ -150,6 +186,16 @@ def create_app(
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/features")
+    def features() -> dict[str, object]:
+        enabled, reason = text_grounder.availability
+        return {
+            "textSelection": {
+                "enabled": enabled,
+                "reason": reason,
+            }
+        }
 
     @app.post(
         "/api/videos",
@@ -237,6 +283,8 @@ def create_app(
     @app.post("/api/select/click", response_model=ClickSelectionResponse)
     def select_click(payload: ClickSelectionRequest) -> dict[str, object]:
         try:
+            if locate_engine.is_loaded:
+                locate_engine.unload()
             result: ClickSelection = selector.select_click(
                 payload.videoId,
                 payload.frameIdx,
@@ -253,6 +301,33 @@ def create_app(
             "box": result.box,
             "maskPng": result.mask_png,
             "score": result.score,
+        }
+
+    @app.post("/api/select/text", response_model=TextSelectionResponse)
+    def select_text(payload: TextSelectionRequest) -> dict[str, object]:
+        try:
+            if sam_image_engine.is_loaded:
+                sam_image_engine.unload()
+            if sam_video_engine.is_loaded:
+                sam_video_engine.unload()
+            candidates = text_grounder.select_text(
+                payload.videoId,
+                payload.frameIdx,
+                payload.prompt,
+            )
+        except VideoNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except (InvalidFrameError, SelectionInputError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except TextSelectionUnavailableError as exc:
+            raise HTTPException(501, str(exc)) from exc
+        except VideoToolError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        return {
+            "candidates": [
+                {"box": candidate.box, "score": candidate.score}
+                for candidate in candidates
+            ]
         }
 
     @app.post("/api/track", response_model=TrackJobResponse, status_code=202)
@@ -272,6 +347,10 @@ def create_app(
             and 0 <= y1 < y2 <= record.metadata.height
         ):
             raise HTTPException(422, "Track box must be inside the source frame")
+        if locate_engine.is_loaded:
+            locate_engine.unload()
+        if sam_image_engine.is_loaded:
+            sam_image_engine.unload()
         box = tuple(payload.box)
         job_id = jobs.submit(
             lambda report: tracker.track(

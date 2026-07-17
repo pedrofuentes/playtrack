@@ -15,6 +15,18 @@ export interface ClickSelection {
   score: number
 }
 
+export interface LocateCandidate {
+  box: SourceBox
+  score: number
+}
+
+export interface FeatureFlags {
+  textSelection: {
+    enabled: boolean
+    reason: string
+  }
+}
+
 export interface TrackFrame {
   frameIdx: number
   box: SourceBox | null
@@ -111,6 +123,33 @@ export async function selectByClick(
     throw new Error(message)
   }
   return (await response.json()) as ClickSelection
+}
+
+export async function getFeatures(): Promise<FeatureFlags> {
+  const response = await fetch('/api/features')
+  if (!response.ok) {
+    throw new Error(await responseError(response, 'Could not read feature flags'))
+  }
+  return (await response.json()) as FeatureFlags
+}
+
+export async function selectByText(
+  videoId: string,
+  frameIdx: number,
+  prompt: string,
+  signal?: AbortSignal,
+): Promise<LocateCandidate[]> {
+  const response = await fetch('/api/select/text', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ videoId, frameIdx, prompt }),
+    signal,
+  })
+  if (!response.ok) {
+    throw new Error(await responseError(response, 'Could not ground text prompt'))
+  }
+  const payload = (await response.json()) as { candidates: LocateCandidate[] }
+  return payload.candidates
 }
 
 export async function startTracking(

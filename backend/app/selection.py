@@ -6,6 +6,10 @@ import math
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
+from .models.locate_engine import (
+    LocateAnythingError,
+    LocateCandidate,
+)
 from .models.sam2_engine import SAM2EngineError, SAM2Prediction
 from .videos import VideoStore
 
@@ -27,6 +31,10 @@ class SelectionUnavailableError(SelectionError):
 
 class EmptySelectionError(SelectionError):
     """Raised when SAM 2 returns no foreground pixels."""
+
+
+class TextSelectionUnavailableError(SelectionError):
+    """Raised when CUDA-only text grounding cannot run on this host."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +134,85 @@ class ClickSelector:
             ),
             score=float(prediction.score),
         )
+
+
+class TextSelectionEngine(Protocol):
+    available: bool
+    unavailable_reason: str
+
+    def ground_text(self, image: object, prompt: str) -> list[LocateCandidate]: ...
+
+
+class TextSelector:
+    """Ground a text prompt on an exact source frame and map boxes to source space."""
+
+    def __init__(
+        self,
+        video_store: VideoStore,
+        *,
+        engine_provider: Callable[[], TextSelectionEngine],
+        max_input_dimension: int = 2500,
+    ) -> None:
+        if max_input_dimension <= 0:
+            raise ValueError("max_input_dimension must be positive")
+        self.video_store = video_store
+        self.engine_provider = engine_provider
+        self.max_input_dimension = max_input_dimension
+
+    @property
+    def availability(self) -> tuple[bool, str]:
+        engine = self.engine_provider()
+        return engine.available, engine.unavailable_reason
+
+    def select_text(
+        self, video_id: str, frame_idx: int, prompt: str
+    ) -> list[LocateCandidate]:
+        prompt = prompt.strip()
+        if not prompt:
+            raise SelectionInputError("Text prompt must not be empty")
+        record = self.video_store.get(video_id)
+        engine = self.engine_provider()
+        if not engine.available:
+            raise TextSelectionUnavailableError(engine.unavailable_reason)
+        extracted = self.video_store.extract_source_crop(
+            video_id,
+            frame_idx=frame_idx,
+            x=0,
+            y=0,
+            width=record.metadata.width,
+            height=record.metadata.height,
+        )
+        try:
+            from PIL import Image
+        except ModuleNotFoundError as exc:
+            raise TextSelectionUnavailableError(
+                "Pillow is required for text selection"
+            ) from exc
+        with Image.open(extracted.path) as source_image:
+            source = source_image.convert("RGB")
+            scale = min(
+                1.0,
+                self.max_input_dimension / max(source.width, source.height),
+            )
+            if scale < 1.0:
+                model_image = source.resize(
+                    (round(source.width * scale), round(source.height * scale)),
+                    Image.Resampling.LANCZOS,
+                )
+            else:
+                model_image = source.copy()
+        try:
+            candidates = engine.ground_text(model_image, prompt)
+        except LocateAnythingError as exc:
+            raise TextSelectionUnavailableError(str(exc)) from exc
+        inverse = 1.0 / scale
+        return [
+            LocateCandidate(
+                box=tuple(round(value * inverse) for value in candidate.box),
+                score=candidate.score,
+            )
+            for candidate in candidates
+        ]
 
 
 def compute_crop_window(

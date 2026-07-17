@@ -118,6 +118,43 @@ The supporting endpoints are:
 - `GET /api/exports/{jobId}.mp4` to download a completed result.
 - `WS /ws/jobs/{jobId}` for export progress, shared with tracking jobs.
 
+## M4: LocateAnything on Windows / RTX 2080 Ti
+
+Text-prompt selection and occlusion rescue use
+`nvidia/LocateAnything-3B`. The feature is CUDA-only: it is hidden in the UI
+and `POST /api/select/text` returns a clear `501` response on Mac/CPU hosts.
+On a Windows machine with an RTX 2080 Ti, create the environment and then
+replace the generic Torch install with NVIDIA's CUDA 12.1 wheels:
+
+```powershell
+uv sync --project backend --extra dev --extra locate
+uv pip install --python backend\.venv\Scripts\python.exe --reinstall `
+  "torch>=2.5.1,<3" "torchvision>=0.20.1,<1" `
+  --index-url https://download.pytorch.org/whl/cu121
+```
+
+The `locate` extra pins `transformers==4.57.1`; it is intentionally omitted
+from normal Mac installs. The first text-selection or rescue request downloads
+approximately 7.7 GB of model weights from Hugging Face. LocateAnything runs
+in fp16 with PyTorch SDPA on Turing cards such as the 2080 Ti (Ampere and newer
+use bf16).
+
+An 11 GB card cannot safely keep LocateAnything and SAM 2 resident together.
+The tracker therefore unloads LocateAnything before initial SAM propagation,
+unloads SAM before a rescue query, and unloads LocateAnything again before
+re-seeding SAM. `torch.cuda.empty_cache()` is called at each model handoff.
+Rescue behavior can be tuned with `LOCATE_RESCUE_AFTER` (default `15`) and
+`LOCATE_RESCUE_MIN_SCORE` (default `0.5`), or disabled with
+`LOCATE_RESCUE_ENABLED=false`. `LOCATE_MAX_INPUT_DIM` defaults to `2500`;
+larger source frames are resized for inference and returned boxes are mapped
+back to source pixels.
+
+LocateAnything weights are licensed by NVIDIA for non-commercial research use
+only. Review the model license before use or redistribution. NVIDIA also notes
+that the currently published base checkpoint does not yet provide supported
+visual-prompt inference; text grounding works with that checkpoint, while the
+rescue path requires visual-prompt-capable weights when NVIDIA releases them.
+
 ### Checks
 
 ```bash

@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   exportDownloadUrl,
   fetchCropPlan,
+  getFeatures,
   selectByClick,
+  selectByText,
   startExport,
   startTracking,
   trackJobWebSocketUrl,
@@ -40,6 +42,48 @@ describe('selectByClick', () => {
         y: 512,
       }),
       signal: controller.signal,
+    })
+  })
+})
+
+describe('LocateAnything API', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('reads the feature flag and posts a text prompt at the displayed frame', async () => {
+    const featureResult = {
+      textSelection: { enabled: true, reason: '' },
+    }
+    const selectionResult = {
+      candidates: [{ box: [10, 20, 40, 80], score: 1 }],
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: vi.fn().mockResolvedValue(featureResult),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: vi.fn().mockResolvedValue(selectionResult),
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(getFeatures()).resolves.toEqual(featureResult)
+    await expect(selectByText('video-1', 17, 'white jersey')).resolves.toEqual(
+      selectionResult.candidates,
+    )
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/features')
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/select/text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        videoId: 'video-1',
+        frameIdx: 17,
+        prompt: 'white jersey',
+      }),
+      signal: undefined,
     })
   })
 })

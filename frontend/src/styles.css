@@ -167,6 +167,38 @@ h1 {
   line-height: 1.4;
 }
 
+.text-selection-form {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.text-selection-form label {
+  color: #b9c1bc;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.text-selection-form > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.45rem;
+}
+
+.text-selection-form input {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid #46504c;
+  border-radius: 0.65rem;
+  padding: 0.55rem 0.65rem;
+  color: #f4f0e7;
+  background: #0d1218;
+  font: inherit;
+}
+
+.text-selection-form button {
+  padding-inline: 0.8rem;
+}
+
 .track-message {
   color: #c7d6ce;
 }

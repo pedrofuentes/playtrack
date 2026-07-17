@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import gc
 import threading
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -116,6 +117,15 @@ class SAM2Engine:
                 mask=np.asarray(masks_array[best_index], dtype=bool),
                 score=float(scores_array[best_index]),
             )
+
+    def unload(self) -> None:
+        """Release the image predictor before LocateAnything uses CUDA VRAM."""
+        with self._lock:
+            self._predictor = None
+            gc.collect()
+            torch = self._import_torch()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     def _ensure_predictor(self, torch: Any) -> Any:
         if self._predictor is not None:
@@ -268,6 +278,15 @@ class SAM2VideoEngine:
                         logits = logits.cpu()
                     mask = np.asarray(logits > 0, dtype=bool).squeeze()
                     yield int(output_frame_idx), mask
+
+    def unload(self) -> None:
+        """Release the predictor so LocateAnything can use constrained VRAM."""
+        with self._lock:
+            self._predictor = None
+            gc.collect()
+            torch = SAM2Engine._import_torch()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     def _ensure_predictor(self, torch: Any) -> Any:
         if self._predictor is not None:

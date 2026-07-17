@@ -21,6 +21,9 @@ dev = [
   "httpx>=0.28,<1",
   "pytest>=8.3,<9",
 ]
+locate = [
+  "transformers==4.57.1",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -36,4 +39,5 @@ allow-direct-references = true
 testpaths = ["tests"]
 markers = [
   "integration: requires downloaded model checkpoints and runtime model dependencies",
+  "requires_cuda: requires an NVIDIA CUDA GPU",
 ]
