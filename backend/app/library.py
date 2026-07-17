@@ -140,6 +140,20 @@ class LibraryStore:
     def remove_video(self, video_id: str) -> None:
         self._write_list(self.videos_path, [v for v in self.videos() if v.get("videoId") != video_id])
 
+    def rename_video(self, video_id: str, raw_name: str) -> str | None:
+        name = _clean_name(raw_name, label="Source name")
+        if name is None:
+            raise ValueError("Source name cannot be blank")
+        entries = self.videos()
+        entry = next(
+            (item for item in entries if item.get("videoId") == video_id), None
+        )
+        if entry is None:
+            return None
+        entry["name"] = name
+        self._write_list(self.videos_path, entries)
+        return name
+
     def save_track(
         self,
         video_id: str,
@@ -179,7 +193,7 @@ class LibraryStore:
                         box=tuple(int(value) for value in raw["box"]),  # type: ignore[arg-type]
                         track=frames,
                         created_at=str(raw["createdAt"]),
-                        name=_clean_name(raw.get("name")),
+                        name=_clean_name(raw.get("name"), label="Player name"),
                     )
                 )
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -187,9 +201,7 @@ class LibraryStore:
         return saved
 
     def resolve_player_name(self, video_id: str, requested: str | None) -> str:
-        cleaned = _clean_name(requested)
-        if requested is not None and len(requested.strip()) > 80:
-            raise ValueError("Player name must be 80 characters or fewer")
+        cleaned = _clean_name(requested, label="Player name")
         if cleaned is not None:
             return cleaned
         used = {
@@ -203,11 +215,9 @@ class LibraryStore:
         return f"Player {index}"
 
     def rename_track(self, job_id: str, raw_name: str) -> SavedTrack | None:
-        name = _clean_name(raw_name)
+        name = _clean_name(raw_name, label="Player name")
         if name is None:
             raise ValueError("Player name cannot be blank")
-        if len(name) > 80:
-            raise ValueError("Player name must be 80 characters or fewer")
         path = self.tracks_dir / f"{job_id}.json"
         if not path.is_file():
             return None
@@ -362,10 +372,14 @@ def _track_frame(value: Any) -> "TrackFrame":
     )
 
 
-def _clean_name(value: Any) -> str | None:
+def _clean_name(
+    value: Any, *, label: str, validate_length: bool = True
+) -> str | None:
     if not isinstance(value, str):
         return None
     cleaned = value.strip()
+    if validate_length and len(cleaned) > 80:
+        raise ValueError(f"{label} must be 80 characters or fewer")
     return cleaned or None
 
 

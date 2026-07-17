@@ -342,6 +342,56 @@ def test_library_uses_saved_upload_name_and_falls_back_for_legacy_catalogs(
     assert by_id[legacy.video_id]["name"] == tiny_video.name
 
 
+def test_library_video_rename_updates_memory_and_catalog(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    record = store.register_path(tiny_video)
+
+    with TestClient(create_app(store, job_registry=JobRegistry())) as client:
+        renamed = client.patch(
+            f"/api/library/videos/{record.video_id}",
+            json={"name": "  Championship / Game  "},
+        )
+        listing = client.get("/api/library")
+
+    assert renamed.status_code == 200
+    assert renamed.json() == {
+        "videoId": record.video_id,
+        "name": "Championship / Game",
+    }
+    assert listing.json()["videos"][0]["name"] == "Championship / Game"
+    assert store.get(record.video_id).name == "Championship / Game"
+    assert store.library.videos()[0]["name"] == "Championship / Game"
+
+
+@pytest.mark.parametrize("name", ["   ", "x" * 81])
+def test_library_video_rename_rejects_invalid_names(
+    tmp_path: Path, tiny_video: Path, name: str
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    record = store.register_path(tiny_video)
+
+    with TestClient(create_app(store, job_registry=JobRegistry())) as client:
+        response = client.patch(
+            f"/api/library/videos/{record.video_id}", json={"name": name}
+        )
+
+    assert response.status_code == 422
+    assert store.get(record.video_id).name == tiny_video.name
+
+
+def test_library_video_rename_returns_404_for_missing_source(tmp_path: Path) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+
+    with TestClient(create_app(store, job_registry=JobRegistry())) as client:
+        response = client.patch(
+            "/api/library/videos/missing", json={"name": "New name"}
+        )
+
+    assert response.status_code == 404
+
+
 def test_tracking_completion_helper_writes_the_completed_track(tmp_path: Path) -> None:
     library = LibraryStore(tmp_path / "data")
     persist_completed_track(

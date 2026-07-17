@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import posixpath
+import re
+import unicodedata
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +26,7 @@ from .crop_planner import (
 )
 from .exporter import export_video
 from .jobs import JobNotFoundError, JobRegistry
+from .library import _clean_name
 from .models.locate_engine import get_locate_engine
 from .models.sam2_engine import get_sam2_engine, get_sam2_video_engine
 from .selection import (
@@ -41,7 +46,6 @@ from .videos import (
     VideoStore,
     VideoToolError,
     metadata_dict,
-    sanitize_display_name,
 )
 
 
@@ -69,10 +73,12 @@ class SPAStaticFiles(StaticFiles):
 
 class VideoPathRequest(BaseModel):
     path: str
+    name: str | None = None
 
 
 class VideoResponse(BaseModel):
     videoId: str
+    name: str
     width: int
     height: int
     fps: float
@@ -151,6 +157,82 @@ class ExportRequest(BaseModel):
     outHeight: int = Field(ge=2)
     zoom: float = 1.0
     smoothing: SmoothingRequest = Field(default_factory=SmoothingRequest)
+
+
+def download_filename(
+    source_name: object,
+    player_name: object,
+    width: object,
+    height: object,
+    created_at: object,
+    export_id: object,
+) -> str:
+    source = _filename_segment(source_name, "source")
+    player = _filename_segment(player_name, "player")
+    resolution = _download_resolution(width, height)
+    timestamp = _download_timestamp(created_at)
+    short_id = _download_short_id(export_id)
+    suffix = f"-{resolution}-{timestamp}-{short_id}.mp4"
+    prefix = f"{source}-{player}"
+    prefix = prefix[: 180 - len(suffix)].rstrip("-")
+    return f"{prefix}{suffix}"
+
+
+def _filename_segment(value: object, fallback: str) -> str:
+    if not isinstance(value, str):
+        return fallback
+    ascii_value = (
+        unicodedata.normalize("NFKD", value)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .lower()
+    )
+    segment = re.sub(r"[^a-z0-9]+", "-", ascii_value).strip("-")
+    return segment or fallback
+
+
+def _download_resolution(width: object, height: object) -> str:
+    if isinstance(width, bool) or isinstance(height, bool):
+        return "video"
+    try:
+        parsed_width = int(width)  # type: ignore[arg-type]
+        parsed_height = int(height)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return "video"
+    if parsed_width <= 0 or parsed_height <= 0:
+        return "video"
+    resolution = f"{parsed_width}x{parsed_height}"
+    return resolution if len(resolution) <= 24 else "video"
+
+
+def _download_timestamp(value: object) -> str:
+    parsed = _parse_download_datetime(value)
+    if parsed is None:
+        return "19700101-000000"
+    return parsed.astimezone(UTC).strftime("%Y%m%d-%H%M%S")
+
+
+def _parse_download_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed
+    except (OverflowError, ValueError):
+        return None
+
+
+def _download_short_id(value: object) -> str:
+    if not isinstance(value, str):
+        return "export"
+    characters = "".join(re.findall(r"[A-Za-z0-9]", value)).lower()
+    if len(characters) >= 6:
+        return characters[-6:]
+    if not characters:
+        return "export"
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:6]
 
 
 def create_app(
@@ -260,14 +342,20 @@ def create_app(
                         "schema": {
                             "type": "object",
                             "required": ["path"],
-                            "properties": {"path": {"type": "string"}},
+                            "properties": {
+                                "path": {"type": "string"},
+                                "name": {"type": "string"},
+                            },
                         }
                     },
                     "multipart/form-data": {
                         "schema": {
                             "type": "object",
                             "required": ["file"],
-                            "properties": {"file": {"type": "string", "format": "binary"}},
+                            "properties": {
+                                "file": {"type": "string", "format": "binary"},
+                                "name": {"type": "string"},
+                            },
                         }
                     },
                 },
@@ -283,14 +371,16 @@ def create_app(
                 upload = form.get("file")
                 if not isinstance(upload, UploadFile):
                     raise HTTPException(422, "Multipart request must include a file")
+                raw_name = form.get("name")
+                name = raw_name if isinstance(raw_name, str) else None
                 await upload.seek(0)
-                record = store.register_upload(upload.file, upload.filename)
+                record = store.register_upload(upload.file, upload.filename, name)
             elif content_type.startswith("application/json"):
                 try:
                     payload = VideoPathRequest.model_validate(await request.json())
                 except (ValidationError, ValueError) as exc:
                     raise HTTPException(422, "JSON request must include a path") from exc
-                record = store.register_path(payload.path)
+                record = store.register_path(payload.path, payload.name)
             else:
                 raise HTTPException(
                     415, "Use application/json or multipart/form-data"
@@ -302,6 +392,8 @@ def create_app(
             raise HTTPException(422, str(exc)) from exc
         except VideoToolError as exc:
             raise HTTPException(503, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
 
     @app.get("/api/videos/{video_id}/file", response_class=FileResponse)
     def video_file(video_id: str) -> FileResponse:
@@ -573,10 +665,51 @@ def create_app(
         destination = export_root / f"{job_id}.mp4"
         if snapshot.state == "failed" or not destination.is_file():
             raise HTTPException(404, "Exported video not found")
+        exported = next(
+            (
+                item
+                for item in store.library.exports()
+                if item.get("exportId") == job_id
+            ),
+            {},
+        )
+        video_id = exported.get("videoId")
+        source = next(
+            (
+                item
+                for item in store.library.videos()
+                if item.get("videoId") == video_id
+            ),
+            {},
+        )
+        track_job_id = exported.get("trackJobId")
+        track = next(
+            (
+                saved
+                for saved in store.library.iter_tracks()
+                if saved.job_id == track_job_id
+            ),
+            None,
+        )
+        params = exported.get("params")
+        if not isinstance(params, dict):
+            params = {}
+        created_at = exported.get("createdAt")
+        if _parse_download_datetime(created_at) is None:
+            created_at = datetime.fromtimestamp(
+                destination.stat().st_mtime, UTC
+            ).isoformat()
         return FileResponse(
             destination,
             media_type="video/mp4",
-            filename=f"findme-{job_id}.mp4",
+            filename=download_filename(
+                source.get("name"),
+                track.name if track is not None else None,
+                params.get("outWidth"),
+                params.get("outHeight"),
+                created_at,
+                exported.get("exportId", job_id),
+            ),
         )
 
     @app.get("/api/library")
@@ -607,7 +740,11 @@ def create_app(
             "videos": [
                 {
                     "videoId": str(item["videoId"]),
-                    "name": sanitize_display_name(item.get("name"))
+                    "name": _clean_name(
+                        item.get("name"),
+                        label="Source name",
+                        validate_length=False,
+                    )
                     or Path(str(item.get("path", ""))).name,
                     "sourceKind": item.get("sourceKind", "path"),
                     "path": str(item.get("path", "")),
@@ -638,6 +775,18 @@ def create_app(
         if renamed is None or renamed.name is None:
             raise HTTPException(404, "Track not found")
         return {"jobId": renamed.job_id, "name": renamed.name}
+
+    @app.patch("/api/library/videos/{video_id}")
+    def rename_library_video(
+        video_id: str, payload: PlayerNameRequest
+    ) -> dict[str, str]:
+        try:
+            renamed = store.rename(video_id, payload.name)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except VideoNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return {"videoId": renamed.video_id, "name": renamed.name}
 
     @app.delete("/api/library/tracks/{job_id}", status_code=204)
     def delete_library_track(job_id: str) -> Response:

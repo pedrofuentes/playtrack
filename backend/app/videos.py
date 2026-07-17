@@ -6,12 +6,12 @@ import shutil
 import subprocess
 import threading
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from fractions import Fraction
 from pathlib import Path
 from typing import BinaryIO
 
-from .library import LibraryStore
+from .library import LibraryStore, _clean_name
 
 
 class VideoStoreError(Exception):
@@ -118,6 +118,7 @@ class VideoStore:
     def register_path(
         self, raw_path: str | Path, display_name: str | None = None
     ) -> VideoRecord:
+        name = _clean_name(display_name, label="Source name")
         requested_path = Path(raw_path).expanduser()
         path = requested_path if requested_path.is_absolute() else self.repo_root / requested_path
         path = path.resolve()
@@ -126,11 +127,13 @@ class VideoStore:
         source_key = _path_source_key(path)
         existing = self._record_for_source("path", source_key)
         if existing is not None:
+            if name is not None:
+                return self.rename(existing.video_id, name)
             return existing
         return self._register(
             path,
             source_kind="path",
-            display_name=sanitize_display_name(display_name),
+            display_name=name,
             source_key=source_key,
         )
 
@@ -140,6 +143,7 @@ class VideoStore:
         filename: str | None = None,
         display_name: str | None = None,
     ) -> VideoRecord:
+        name = _clean_name(display_name, label="Source name")
         suffix = Path(filename or "upload.mp4").suffix.lower() or ".mp4"
         upload_id = uuid.uuid4().hex
         self.upload_dir.mkdir(parents=True, exist_ok=True)
@@ -155,13 +159,15 @@ class VideoStore:
             existing = self._record_for_source("upload", source_key)
             if existing is not None:
                 temporary.unlink()
+                if name is not None:
+                    return self.rename(existing.video_id, name)
                 return existing
             temporary.replace(destination)
             return self._register(
                 destination,
                 source_kind="upload",
                 display_name=(
-                    sanitize_display_name(display_name)
+                    name
                     or sanitize_display_name(filename)
                 ),
                 source_key=source_key,
@@ -177,6 +183,16 @@ class VideoStore:
                 return self._records[video_id]
             except KeyError as exc:
                 raise VideoNotFoundError("Video not found") from exc
+
+    def rename(self, video_id: str, raw_name: str) -> VideoRecord:
+        with self._lock:
+            record = self.get(video_id)
+            name = self.library.rename_video(video_id, raw_name)
+            if name is None:
+                raise VideoNotFoundError("Video not found")
+            renamed = replace(record, display_name=name)
+            self._records[video_id] = renamed
+        return renamed
 
     def extract_frame(self, video_id: str, frame_idx: int) -> ExtractedFrame:
         record = self.get(video_id)
@@ -355,7 +371,11 @@ class VideoStore:
                     ),
                     frame_cache_dir=self.frame_cache_root / str(saved["videoId"]),
                     source_kind=str(saved.get("sourceKind", "path")),
-                    display_name=sanitize_display_name(saved.get("name")),
+                    display_name=_clean_name(
+                        saved.get("name"),
+                        label="Source name",
+                        validate_length=False,
+                    ),
                     source_key=str(saved.get("sourceKey", "")),
                 )
                 self._records[record.video_id] = record
@@ -700,6 +720,7 @@ def metadata_dict(record: VideoRecord) -> dict[str, int | float | str]:
     metadata = asdict(record.metadata)
     return {
         "videoId": record.video_id,
+        "name": record.name,
         "width": metadata["width"],
         "height": metadata["height"],
         "fps": metadata["fps"],
