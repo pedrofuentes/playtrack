@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -508,3 +510,93 @@ def test_export_rejects_incomplete_track_and_odd_output_dimensions(
 
     assert odd.status_code == 422
     assert missing_file.status_code in (404, 409)
+
+
+def test_export_route_serializes_submission_and_persistence_against_deletion(
+    tmp_path: Path, tiny_video: Path, monkeypatch: object
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    record = store.register_path(tiny_video)
+    track_id = "export-barrier-track"
+    frames = [
+        TrackFrame(index, (80, 50, 120, 110), (100.0, 80.0), False)
+        for index in range(record.metadata.nb_frames)
+    ]
+    store.library.save_track(
+        record.video_id,
+        track_id,
+        0,
+        frames[0].box,
+        frames,
+        start_frame_idx=0,
+        end_frame_exclusive=record.metadata.nb_frames,
+    )
+    jobs = JobRegistry()
+    submit_entered = threading.Event()
+    allow_submit = threading.Event()
+    export_release = threading.Event()
+    persistence_entered = threading.Event()
+    persistence_release = threading.Event()
+    real_submit = jobs.submit_progress
+    real_save_export = store.library.save_export
+
+    def delayed_submit(worker: object, **kwargs: object) -> str:
+        submit_entered.set()
+        assert allow_submit.wait(timeout=2)
+        return real_submit(worker, **kwargs)
+
+    def blocked_export(
+        _source: Path, destination: Path, _windows: object, **kwargs: object
+    ) -> Path:
+        assert export_release.wait(timeout=2)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"fake-mp4")
+        kwargs["on_progress"](1.0, "Export complete")
+        return destination
+
+    def blocked_save_export(*args: object, **kwargs: object) -> None:
+        persistence_entered.set()
+        assert persistence_release.wait(timeout=2)
+        real_save_export(*args, **kwargs)
+
+    monkeypatch.setattr(jobs, "submit_progress", delayed_submit)
+    monkeypatch.setattr(store.library, "save_export", blocked_save_export)
+    app = create_app(
+        store,
+        job_registry=jobs,
+        video_exporter=blocked_export,
+        exports_dir=tmp_path / "exports",
+    )
+    request = {
+        "videoId": record.video_id,
+        "trackJobId": track_id,
+        "outWidth": 128,
+        "outHeight": 72,
+        "smoothing": {},
+    }
+
+    with TestClient(app) as client, ThreadPoolExecutor(max_workers=3) as pool:
+        started_future = pool.submit(client.post, "/api/export", json=request)
+        assert submit_entered.wait(timeout=2)
+        source_delete = pool.submit(
+            client.delete, f"/api/library/videos/{record.video_id}"
+        )
+        track_delete = pool.submit(
+            client.delete, f"/api/library/tracks/{track_id}"
+        )
+        assert not source_delete.done()
+        assert not track_delete.done()
+        allow_submit.set()
+        started = started_future.result(timeout=2)
+        assert started.status_code == 202
+        assert source_delete.result(timeout=2).status_code == 409
+        assert track_delete.result(timeout=2).status_code == 409
+
+        export_release.set()
+        assert persistence_entered.wait(timeout=2)
+        assert client.delete(f"/api/library/videos/{record.video_id}").status_code == 409
+        assert client.delete(f"/api/library/tracks/{track_id}").status_code == 409
+        persistence_release.set()
+        assert jobs.wait_until_terminal(started.json()["jobId"], timeout=2).state == "completed"
+        assert client.delete(f"/api/library/tracks/{track_id}").status_code == 204
+        assert client.delete(f"/api/library/videos/{record.video_id}").status_code == 204
