@@ -303,8 +303,8 @@ class VideoStore:
     def remove(self, video_id: str) -> VideoRecord:
         with self._lock:
             record = self.get(video_id)
+            self.library.remove_video(video_id)
             self._records.pop(video_id)
-        self.library.remove_video(video_id)
         for cache in (
             record.frame_cache_dir,
             self.tracking_frame_root / video_id,
