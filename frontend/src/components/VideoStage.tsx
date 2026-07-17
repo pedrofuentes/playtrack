@@ -27,7 +27,7 @@ import type {
 } from '../api'
 import { PlaybackOverlay } from './PlaybackOverlay'
 
-interface VideoStageProps {
+export interface VideoStageProps {
   src: string
   sourceWidth: number
   sourceHeight: number
@@ -37,12 +37,14 @@ interface VideoStageProps {
   track: readonly TrackFrame[]
   cropWindows: readonly CropWindow[]
   candidates: readonly LocateCandidate[]
+  playbackLocked: boolean
   onSourceClick: (point: Point, frameIdx: number) => void
   onCandidateConfirm: (candidate: LocateCandidate, frameIdx: number) => void
   onFrameChange: (frameIdx: number) => void
 }
 
 export interface VideoStageHandle {
+  pause(): void
   togglePlayback(): void
   seekToFrame(frameIdx: number): void
   stepFrames(delta: number): void
@@ -119,6 +121,7 @@ export const VideoStage = forwardRef<VideoStageHandle, VideoStageProps>(function
   track,
   cropWindows,
   candidates,
+  playbackLocked,
   onSourceClick,
   onCandidateConfirm,
   onFrameChange,
@@ -141,9 +144,12 @@ export const VideoStage = forwardRef<VideoStageHandle, VideoStageProps>(function
   }, [fps, frameCount, onFrameChange])
 
   useImperativeHandle(forwardedRef, () => ({
+    pause() {
+      videoRef.current?.pause()
+    },
     togglePlayback() {
       const video = videoRef.current
-      if (!video) return
+      if (!video || playbackLocked) return
       if (video.paused) void video.play()
       else video.pause()
     },
@@ -153,7 +159,7 @@ export const VideoStage = forwardRef<VideoStageHandle, VideoStageProps>(function
       if (!video) return
       seekToFrame(Math.round(video.currentTime * fps) + delta)
     },
-  }), [fps, seekToFrame])
+  }), [fps, playbackLocked, seekToFrame])
 
   const drawOverlay = useCallback(() => {
     drawOverlayCanvas(
@@ -206,6 +212,7 @@ export const VideoStage = forwardRef<VideoStageHandle, VideoStageProps>(function
       suppressNextClickRef.current = false
       return
     }
+    event.currentTarget.pause()
     const bounds = event.currentTarget.getBoundingClientRect()
     const point = sourcePointFromCanvas(
       { x: event.clientX - bounds.left, y: event.clientY - bounds.top },
@@ -317,6 +324,9 @@ export const VideoStage = forwardRef<VideoStageHandle, VideoStageProps>(function
           playsInline
           preload="metadata"
           onClick={handleClick}
+          onPlay={() => {
+            if (playbackLocked) videoRef.current?.pause()
+          }}
           onLoadedMetadata={reportFrame}
           onSeeked={reportFrame}
           onTimeUpdate={reportFrame}

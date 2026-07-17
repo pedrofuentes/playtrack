@@ -1,9 +1,100 @@
-import { describe, expect, it } from 'vitest'
-import { createElement } from 'react'
+// @vitest-environment jsdom
+
+import { act, createElement } from 'react'
+import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const appMocks = vi.hoisted(() => ({
+  pause: vi.fn(),
+  playbackLocked: false,
+  workspace: null as unknown,
+}))
+
+vi.mock('./hooks/useWorkspace', () => ({
+  useWorkspace: () => appMocks.workspace,
+}))
+
+vi.mock('./components/VideoStage', async () => {
+  const { createElement, forwardRef, useImperativeHandle } = await import('react')
+  return {
+    VideoStage: forwardRef(function MockVideoStage(
+      { playbackLocked }: { playbackLocked: boolean },
+      ref,
+    ) {
+      appMocks.playbackLocked = playbackLocked
+      useImperativeHandle(ref, () => ({
+        pause: appMocks.pause,
+        togglePlayback: vi.fn(),
+        seekToFrame: vi.fn(),
+        stepFrames: vi.fn(),
+      }))
+      return createElement('div', { 'data-testid': 'video-stage' })
+    }),
+  }
+})
 
 import App, { libraryVideoName } from './App'
 import { workspaceStage } from './workflow'
+
+function workspace(overrides: Record<string, unknown> = {}) {
+  return {
+    video: null,
+    videoName: null,
+    currentFrame: 0,
+    selection: null,
+    selectionKind: 'click',
+    selectionLoading: false,
+    selectionError: null,
+    candidates: [],
+    playerName: '',
+    features: { textSelection: { enabled: false, reason: '' } },
+    library: { videos: [], cacheBytes: 0 },
+    trackJob: null,
+    trackMessage: null,
+    trackError: null,
+    trackStarting: false,
+    trackStartedAt: null,
+    cropWindows: [],
+    loading: false,
+    loadingLabel: '',
+    openError: null,
+    framing: false,
+    exportJob: null,
+    stage: 'select',
+    videoSwitchLocked: false,
+    openUpload: vi.fn(),
+    openPath: vi.fn(),
+    openLibraryVideo: vi.fn(),
+    openLibraryPlayer: vi.fn(),
+    refreshLibrary: vi.fn(),
+    selectAt: vi.fn(),
+    selectByDescription: vi.fn(),
+    confirmCandidate: vi.fn(),
+    setPlayerName: vi.fn(),
+    setCurrentFrame: vi.fn(),
+    startTrack: vi.fn(),
+    retryTrack: vi.fn(),
+    beginFraming: vi.fn(),
+    setCropWindows: vi.fn(),
+    setExportJob: vi.fn(),
+    resetSelection: vi.fn(),
+    clearCaches: vi.fn(),
+    ...overrides,
+  }
+}
+
+beforeEach(() => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  appMocks.pause.mockClear()
+  appMocks.playbackLocked = false
+  appMocks.workspace = workspace()
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+  document.body.innerHTML = ''
+})
 
 describe('workspaceStage', () => {
   it('advances from selection to tracking to review', () => {
@@ -51,4 +142,70 @@ it('renders the pro-editor shell without expanded secondary surfaces', () => {
   expect(markup).not.toContain('Recent videos')
   expect(markup).not.toContain('Virtual camera export')
   expect(markup).not.toContain('Last source click')
+})
+
+it('pauses the video before starting text selection', async () => {
+  const selectByDescription = vi.fn()
+  appMocks.workspace = workspace({
+    video: {
+      videoId: 'video-1',
+      name: 'game.mp4',
+      width: 400,
+      height: 200,
+      fps: 30,
+      nbFrames: 90,
+      duration: 3,
+    },
+    videoName: 'game.mp4',
+    features: { textSelection: { enabled: true, reason: '' } },
+    selectByDescription,
+  })
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+
+  await act(async () => root.render(createElement(App)))
+  const describeButton = container.querySelector<HTMLButtonElement>('[data-method="describe"]')!
+  await act(async () => describeButton.click())
+  const input = container.querySelector<HTMLInputElement>('#player-description')!
+  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+  await act(async () => {
+    setValue.call(input, 'white jersey')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  const form = container.querySelector<HTMLFormElement>('.text-selection-form')!
+  await act(async () => form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true })))
+
+  expect(appMocks.pause.mock.invocationCallOrder[0]).toBeLessThan(
+    selectByDescription.mock.invocationCallOrder[0],
+  )
+  await act(async () => root.unmount())
+  container.remove()
+})
+
+it.each([
+  ['selection loading', { selectionLoading: true }],
+  ['text candidates', { candidates: [{ box: [1, 2, 3, 4], score: 0.9 }] }],
+  ['confirmed selection', { selection: { box: [1, 2, 3, 4], score: 0.9, maskPng: '' } }],
+])('locks playback during %s', async (_label, selectionState) => {
+  appMocks.workspace = workspace({
+    video: {
+      videoId: 'video-1',
+      name: 'game.mp4',
+      width: 400,
+      height: 200,
+      fps: 30,
+      nbFrames: 90,
+      duration: 3,
+    },
+    videoName: 'game.mp4',
+    ...selectionState,
+  })
+  const container = document.createElement('div')
+  const root = createRoot(container)
+
+  await act(async () => root.render(createElement(App)))
+
+  expect(appMocks.playbackLocked).toBe(true)
+  await act(async () => root.unmount())
 })

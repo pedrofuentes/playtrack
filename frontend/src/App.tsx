@@ -48,6 +48,11 @@ export default function App() {
   })
 
   const seekToFrame = (frameIdx: number) => videoStageRef.current?.seekToFrame(frameIdx)
+  const playbackLocked = workspace.stage === 'select' && (
+    workspace.selectionLoading ||
+    workspace.candidates.length > 0 ||
+    workspace.selection !== null
+  )
   const exportPanel = workspace.video && workspace.trackJob?.state === 'completed' ? (
     <ExportPanel
       key={`${workspace.video.videoId}:${workspace.trackJob.jobId}`}
@@ -72,6 +77,7 @@ export default function App() {
       track={workspace.trackJob?.track ?? []}
       cropWindows={workspace.cropWindows}
       candidates={workspace.candidates}
+      playbackLocked={playbackLocked}
       onSourceClick={workspace.selectAt}
       onCandidateConfirm={workspace.confirmCandidate}
       onFrameChange={workspace.setCurrentFrame}
@@ -103,7 +109,10 @@ export default function App() {
       trackError={workspace.trackError}
       trackStartedAt={workspace.trackStartedAt}
       health={health}
-      onTextSelect={workspace.selectByDescription}
+      onTextSelect={(prompt) => {
+        videoStageRef.current?.pause()
+        workspace.selectByDescription(prompt)
+      }}
       onPlayerNameChange={workspace.setPlayerName}
       onTrack={() => void workspace.startTrack()}
       onRetryTrack={() => void workspace.retryTrack()}

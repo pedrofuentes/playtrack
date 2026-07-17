@@ -34,6 +34,7 @@ describe('VideoStage pointer interactions', () => {
       value: vi.fn().mockReturnValue(true),
     })
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
     vi.spyOn(console, 'info').mockImplementation(() => {})
   })
 
@@ -61,6 +62,7 @@ describe('VideoStage pointer interactions', () => {
           track={[]}
           cropWindows={[]}
           candidates={[]}
+          playbackLocked={false}
           onSourceClick={onSourceClick}
           onCandidateConfirm={vi.fn()}
           onFrameChange={vi.fn()}
@@ -111,6 +113,7 @@ describe('VideoStage pointer interactions', () => {
           track={[]}
           cropWindows={[]}
           candidates={[]}
+          playbackLocked={false}
           onSourceClick={onSourceClick}
           onCandidateConfirm={vi.fn()}
           onFrameChange={vi.fn()}
@@ -162,6 +165,7 @@ describe('VideoStage pointer interactions', () => {
           track={[]}
           cropWindows={[]}
           candidates={[]}
+          playbackLocked={false}
           onSourceClick={vi.fn()}
           onCandidateConfirm={vi.fn()}
           onFrameChange={vi.fn()}
@@ -183,6 +187,165 @@ describe('VideoStage pointer interactions', () => {
     expect(play).toHaveBeenCalledOnce()
     Object.defineProperty(video, 'paused', { configurable: true, value: false })
     await act(async () => stageRef.current?.togglePlayback())
+    expect(pause).toHaveBeenCalledOnce()
+    await act(async () => root.unmount())
+  })
+
+  it('pauses before reporting a source click', async () => {
+    const onSourceClick = vi.fn()
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+
+    await act(async () => {
+      root.render(
+        <VideoStage
+          src="/video.mp4"
+          sourceWidth={400}
+          sourceHeight={200}
+          fps={30}
+          frameCount={90}
+          selection={null}
+          track={[]}
+          cropWindows={[]}
+          candidates={[]}
+          playbackLocked={false}
+          onSourceClick={onSourceClick}
+          onCandidateConfirm={vi.fn()}
+          onFrameChange={vi.fn()}
+        />,
+      )
+    })
+
+    const video = container.querySelector('video')!
+    const pause = vi.spyOn(video, 'pause').mockImplementation(() => {})
+    video.getBoundingClientRect = () => DOMRect.fromRect({ width: 400, height: 200 })
+
+    await act(async () => {
+      video.dispatchEvent(new MouseEvent('click', {
+        bubbles: true,
+        clientX: 100,
+        clientY: 50,
+      }))
+    })
+
+    expect(pause.mock.invocationCallOrder[0]).toBeLessThan(
+      onSourceClick.mock.invocationCallOrder[0],
+    )
+    await act(async () => root.unmount())
+  })
+
+  it('pauses before confirming a candidate', async () => {
+    const onCandidateConfirm = vi.fn()
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+
+    await act(async () => {
+      root.render(
+        <VideoStage
+          src="/video.mp4"
+          sourceWidth={400}
+          sourceHeight={200}
+          fps={30}
+          frameCount={90}
+          selection={null}
+          track={[]}
+          cropWindows={[]}
+          candidates={[{ box: [50, 25, 150, 75], score: 0.9 }]}
+          playbackLocked={true}
+          onSourceClick={vi.fn()}
+          onCandidateConfirm={onCandidateConfirm}
+          onFrameChange={vi.fn()}
+        />,
+      )
+    })
+
+    const video = container.querySelector('video')!
+    const pause = vi.spyOn(video, 'pause').mockImplementation(() => {})
+    video.getBoundingClientRect = () => DOMRect.fromRect({ width: 400, height: 200 })
+
+    await act(async () => {
+      video.dispatchEvent(new MouseEvent('click', {
+        bubbles: true,
+        clientX: 100,
+        clientY: 50,
+      }))
+    })
+
+    expect(pause.mock.invocationCallOrder[0]).toBeLessThan(
+      onCandidateConfirm.mock.invocationCallOrder[0],
+    )
+    await act(async () => root.unmount())
+  })
+
+  it('blocks imperative playback while locked', async () => {
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    const stageRef = createRef<VideoStageHandle>()
+
+    await act(async () => {
+      root.render(
+        <VideoStage
+          ref={stageRef}
+          src="/video.mp4"
+          sourceWidth={400}
+          sourceHeight={200}
+          fps={30}
+          frameCount={90}
+          selection={null}
+          track={[]}
+          cropWindows={[]}
+          candidates={[]}
+          playbackLocked
+          onSourceClick={vi.fn()}
+          onCandidateConfirm={vi.fn()}
+          onFrameChange={vi.fn()}
+        />,
+      )
+    })
+
+    const video = container.querySelector('video')!
+    const play = vi.spyOn(video, 'play').mockResolvedValue()
+    Object.defineProperty(video, 'paused', { configurable: true, value: true })
+
+    await act(async () => stageRef.current?.togglePlayback())
+
+    expect(play).not.toHaveBeenCalled()
+    await act(async () => root.unmount())
+  })
+
+  it('immediately pauses native playback while locked', async () => {
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+
+    await act(async () => {
+      root.render(
+        <VideoStage
+          src="/video.mp4"
+          sourceWidth={400}
+          sourceHeight={200}
+          fps={30}
+          frameCount={90}
+          selection={null}
+          track={[]}
+          cropWindows={[]}
+          candidates={[]}
+          playbackLocked
+          onSourceClick={vi.fn()}
+          onCandidateConfirm={vi.fn()}
+          onFrameChange={vi.fn()}
+        />,
+      )
+    })
+
+    const video = container.querySelector('video')!
+    const pause = vi.spyOn(video, 'pause').mockImplementation(() => {})
+
+    await act(async () => video.dispatchEvent(new Event('play', { bubbles: true })))
+
     expect(pause).toHaveBeenCalledOnce()
     await act(async () => root.unmount())
   })
