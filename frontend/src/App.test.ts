@@ -1,25 +1,37 @@
 import { describe, expect, it } from 'vitest'
 
-import { currentWorkflowStep, libraryVideoName } from './App'
+import { libraryVideoName } from './App'
+import { workspaceStage } from './workflow'
 
-describe('currentWorkflowStep', () => {
-  it('advances from selection to tracking to export', () => {
-    expect(currentWorkflowStep(null, null)).toBe(1)
+describe('workspaceStage', () => {
+  it('advances from selection to tracking to review', () => {
+    expect(workspaceStage(null, null, false)).toBe('select')
     expect(
-      currentWorkflowStep(
+      workspaceStage(
         { box: [1, 2, 3, 4], maskPng: '', score: 0.9 },
-        null,
+        {
+          jobId: 'track-1',
+          state: 'running',
+          progress: 0.5,
+          message: 'tracking',
+          track: [],
+        },
+        false,
       ),
-    ).toBe(2)
+    ).toBe('track')
     expect(
-      currentWorkflowStep(null, {
-        jobId: 'track-1',
-        state: 'completed',
-        progress: 1,
-        message: 'done',
-        track: [],
-      }),
-    ).toBe(3)
+      workspaceStage(
+        null,
+        {
+          jobId: 'track-1',
+          state: 'completed',
+          progress: 1,
+          message: 'done',
+          track: [],
+        },
+        false,
+      ),
+    ).toBe('review')
   })
 })
 
