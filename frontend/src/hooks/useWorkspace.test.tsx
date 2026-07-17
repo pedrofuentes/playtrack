@@ -415,6 +415,108 @@ describe('useWorkspace', () => {
     await act(async () => root.unmount())
   })
 
+  it('blocks tracking and selection mutations while a saved-player restore is pending', async () => {
+    const restore = deferred<TrackJobUpdate>()
+    const { player, saved, track } = savedPlayerFixture()
+    const root = await mountController()
+    await act(async () => {
+      controller?.selectAt({ x: 10, y: 20 }, 20)
+      await Promise.resolve()
+    })
+    act(() => controller?.setPlayerName('Current player'))
+    apiMocks.getTrack.mockReturnValueOnce(restore.promise)
+    apiMocks.selectByClick.mockClear()
+    apiMocks.selectByText.mockClear()
+    apiMocks.startTracking.mockClear()
+
+    let playerOpen: Promise<boolean> | undefined
+    act(() => {
+      playerOpen = controller?.openLibraryPlayer(saved, player)
+      void controller?.startTrack()
+      controller?.setRange({ startFrameIdx: 10, endFrameExclusive: 100 })
+      controller?.resetSelection()
+      controller?.selectAt({ x: 30, y: 40 }, 30)
+      controller?.selectByDescription('white jersey')
+      controller?.confirmCandidate({ box: [8, 9, 10, 11], score: 1 }, 20)
+      controller?.setPlayerName('Changed while opening')
+    })
+
+    expect(controller?.loading).toBe(true)
+    expect(apiMocks.startTracking).not.toHaveBeenCalled()
+    expect(apiMocks.selectByClick).not.toHaveBeenCalled()
+    expect(apiMocks.selectByText).not.toHaveBeenCalled()
+    expect(controller?.selection?.box).toEqual([1, 2, 3, 4])
+    expect(controller?.playerName).toBe('Current player')
+    expect(controller?.range).toEqual({ startFrameIdx: 0, endFrameExclusive: 930 })
+
+    await act(async () => {
+      restore.resolve(track)
+      await expect(playerOpen).resolves.toBe(true)
+    })
+    expect(controller?.trackJob).toEqual(track)
+    expect(controller?.loading).toBe(false)
+    await act(async () => root.unmount())
+  })
+
+  it('unlocks tracking after a saved-player restore fails', async () => {
+    const restore = deferred<TrackJobUpdate>()
+    const { player, saved } = savedPlayerFixture()
+    const root = await mountController()
+    await act(async () => {
+      controller?.selectAt({ x: 10, y: 20 }, 20)
+      await Promise.resolve()
+    })
+    apiMocks.getTrack.mockReturnValueOnce(restore.promise)
+    apiMocks.startTracking.mockClear()
+
+    let playerOpen: Promise<boolean> | undefined
+    act(() => {
+      playerOpen = controller?.openLibraryPlayer(saved, player)
+      void controller?.startTrack()
+    })
+    expect(apiMocks.startTracking).not.toHaveBeenCalled()
+
+    await act(async () => {
+      restore.reject(new Error('Track missing'))
+      await expect(playerOpen).rejects.toThrow('Track missing')
+    })
+    expect(controller?.loading).toBe(false)
+    expect(controller?.selection).not.toBeNull()
+
+    await act(async () => { await controller?.startTrack() })
+    expect(apiMocks.startTracking).toHaveBeenCalledOnce()
+    await act(async () => root.unmount())
+  })
+
+  it('preserves the prior open error until a saved-player restore commits', async () => {
+    const { player, saved, track } = savedPlayerFixture()
+    const root = await mountController()
+    apiMocks.registerVideo.mockRejectedValueOnce(new Error('Existing open error'))
+    await act(async () => { await controller?.openPath('/missing.mp4') })
+    expect(controller?.openError).toBe('Existing open error')
+
+    apiMocks.getTrack.mockRejectedValueOnce(new Error('Track missing'))
+    await act(async () => {
+      await expect(controller?.openLibraryPlayer(saved, player)).rejects.toThrow('Track missing')
+    })
+    expect(controller?.openError).toBe('Existing open error')
+
+    apiMocks.getTrack.mockResolvedValueOnce({ ...track, state: 'running' })
+    await act(async () => {
+      await expect(controller?.openLibraryPlayer(saved, player)).rejects.toThrow(
+        'Saved player track is not complete',
+      )
+    })
+    expect(controller?.openError).toBe('Existing open error')
+
+    apiMocks.getTrack.mockResolvedValueOnce(track)
+    await act(async () => {
+      await expect(controller?.openLibraryPlayer(saved, player)).resolves.toBe(true)
+    })
+    expect(controller?.openError).toBeNull()
+    await act(async () => root.unmount())
+  })
+
   it('forwards optional names and uses the source name returned by registration', async () => {
     const root = await mountController()
     const file = new File(['video'], 'filename.mp4', { type: 'video/mp4' })

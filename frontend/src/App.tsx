@@ -34,7 +34,10 @@ export default function App() {
   ), [workspace.range, workspace.trackJob, workspace.video])
 
   const primaryAction = () => {
-    if (workspace.stage === 'select' && workspace.selection) void workspace.startTrack()
+    if (
+      workspace.stage === 'select' && workspace.selection
+      && !workspace.loading && !workspace.trackStarting
+    ) void workspace.startTrack()
     else if (workspace.stage === 'track' && workspace.trackJob?.state === 'failed') void workspace.retryTrack()
     else if (workspace.stage === 'review') workspace.beginFraming()
     else if (workspace.stage === 'export') exportPanelRef.current?.triggerExport()
@@ -54,7 +57,8 @@ export default function App() {
     workspace.candidates.length > 0 ||
     workspace.selection !== null
   )
-  const selectionLocked = workspace.trackStarting || workspace.stage !== 'select'
+  const selectionMutationLocked = workspace.loading || workspace.trackStarting
+  const selectionLocked = selectionMutationLocked || workspace.stage !== 'select'
     || !containsFrame(workspace.range, workspace.currentFrame)
   const exportPanel = workspace.video && workspace.trackJob?.state === 'completed' ? (
     <ExportPanel
@@ -112,6 +116,7 @@ export default function App() {
       trackMessage={workspace.trackMessage}
       trackError={workspace.trackError}
       trackStarting={workspace.trackStarting}
+      selectionLocked={selectionMutationLocked}
       trackStartedAt={workspace.trackStartedAt}
       trackFrameCount={frameRangeCount(workspace.range)}
       health={health}
@@ -141,7 +146,7 @@ export default function App() {
       frameCount={workspace.video.nbFrames}
       fps={workspace.video.fps}
       range={workspace.range}
-      rangeEditable={workspace.stage === 'select' && !workspace.trackStarting}
+      rangeEditable={workspace.stage === 'select' && !selectionMutationLocked}
       jobProgress={workspace.trackJob?.progress ?? null}
       health={health}
       onRangeChange={workspace.setRange}

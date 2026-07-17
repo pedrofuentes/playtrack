@@ -23,6 +23,7 @@ const common = {
   trackMessage: null,
   trackError: null,
   trackStarting: false,
+  selectionLocked: false,
   trackStartedAt: null,
   trackFrameCount: 930,
   health: null,
@@ -108,6 +109,20 @@ describe('WorkflowInspector', () => {
     expect(starting).toMatch(/<input[^>]*type="text"[^>]*disabled=""/)
     expect(starting).toMatch(/<button[^>]*disabled=""[^>]*>Track player<\/button>/)
     expect(starting).toMatch(/<button[^>]*disabled=""[^>]*>Choose a different player<\/button>/)
+  })
+
+  it('disables selection mutation controls while the workspace is opening', () => {
+    const opening = renderToStaticMarkup(
+      <WorkflowInspector
+        {...common}
+        stage="select"
+        selection={selection}
+        selectionLocked
+      />,
+    )
+    expect(opening).toMatch(/<input[^>]*type="text"[^>]*disabled=""/)
+    expect(opening).toMatch(/<button[^>]*disabled=""[^>]*>Track player<\/button>/)
+    expect(opening).toMatch(/<button[^>]*disabled=""[^>]*>Choose a different player<\/button>/)
   })
 
   it('summarizes review ranges and renders export alone in export state', () => {

@@ -24,6 +24,7 @@ interface WorkflowInspectorProps {
   trackMessage: string | null
   trackError: string | null
   trackStarting: boolean
+  selectionLocked: boolean
   trackStartedAt: number | null
   trackFrameCount: number
   health: TrackHealthSummary | null
@@ -74,12 +75,13 @@ function SelectionInspector({
   onTrack,
   onResetSelection,
   trackStarting,
+  selectionLocked,
 }: WorkflowInspectorProps) {
   const [prompt, setPrompt] = useState('')
   const [method, setMethod] = useState<'click' | 'describe'>('click')
   const submitPrompt = (event: FormEvent) => {
     event.preventDefault()
-    if (prompt.trim()) onTextSelect(prompt)
+    if (!selectionLocked && !trackStarting && prompt.trim()) onTextSelect(prompt)
   }
 
   return (
@@ -91,6 +93,7 @@ function SelectionInspector({
             data-method="click"
             className={method === 'click' ? 'is-active' : ''}
             aria-pressed={method === 'click'}
+            disabled={selectionLocked || trackStarting}
             onClick={() => setMethod('click')}
           >Click</button>
           <button
@@ -98,6 +101,7 @@ function SelectionInspector({
             data-method="describe"
             className={method === 'describe' ? 'is-active' : ''}
             aria-pressed={method === 'describe'}
+            disabled={selectionLocked || trackStarting}
             onClick={() => setMethod('describe')}
           >Describe</button>
         </div>
@@ -117,10 +121,15 @@ function SelectionInspector({
               id="player-description"
               value={prompt}
               maxLength={500}
+              disabled={selectionLocked || trackStarting}
               placeholder="the player in the white jersey"
               onChange={(event) => setPrompt(event.target.value)}
             />
-            <button type="submit" className="secondary" disabled={selectionLoading || !prompt.trim()}>
+            <button
+              type="submit"
+              className="secondary"
+              disabled={selectionLocked || trackStarting || selectionLoading || !prompt.trim()}
+            >
               Find
             </button>
           </div>
@@ -148,13 +157,13 @@ function SelectionInspector({
               type="text"
               maxLength={80}
               value={playerName}
-              disabled={trackStarting}
+              disabled={selectionLocked || trackStarting}
               placeholder="Player 1"
               onChange={(event) => onPlayerNameChange(event.target.value)}
             />
           </label>
-          <button type="button" className="primary-action" disabled={trackStarting} onClick={onTrack}>Track player</button>
-          <button type="button" className="secondary-action" disabled={trackStarting} onClick={onResetSelection}>Choose a different player</button>
+          <button type="button" className="primary-action" disabled={selectionLocked || trackStarting} onClick={onTrack}>Track player</button>
+          <button type="button" className="secondary-action" disabled={selectionLocked || trackStarting} onClick={onResetSelection}>Choose a different player</button>
         </>
       )}
     </div>

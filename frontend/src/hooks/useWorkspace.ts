@@ -94,7 +94,7 @@ export function useWorkspace(): WorkspaceController {
   const [selectionLoading, setSelectionLoading] = useState(false)
   const [selectionError, setSelectionError] = useState<string | null>(null)
   const [candidates, setCandidates] = useState<LocateCandidate[]>([])
-  const [playerName, setPlayerName] = useState('')
+  const [playerName, setPlayerNameState] = useState('')
   const [candidateFrame, setCandidateFrame] = useState<number | null>(null)
   const [features, setFeatures] = useState<FeatureFlags>({
     textSelection: { enabled: false, reason: '' },
@@ -118,6 +118,8 @@ export function useWorkspace(): WorkspaceController {
   rangeRef.current = range
   const trackStartingRef = useRef(trackStarting)
   trackStartingRef.current = trackStarting
+  const loadingRef = useRef(loading)
+  loadingRef.current = loading
 
   const stage = workspaceStage(selection, trackJob, framing)
   const videoSwitchLocked = trackStarting || isJobActive(trackJob) || isJobActive(exportJob)
@@ -148,7 +150,7 @@ export function useWorkspace(): WorkspaceController {
     setSelectionLoading(false)
     setSelectionError(null)
     setCandidates([])
-    setPlayerName('')
+    setPlayerNameState('')
     setCandidateFrame(null)
   }, [])
 
@@ -160,6 +162,7 @@ export function useWorkspace(): WorkspaceController {
   ) => {
     if (trackStartingRef.current || videoSwitchLockedRef.current) return
     const generation = ++openGeneration.current
+    loadingRef.current = true
     selectionRequest.current?.abort()
     selectionRequest.current = null
     clearDownstreamState()
@@ -173,7 +176,7 @@ export function useWorkspace(): WorkspaceController {
     setSelectionLoading(false)
     setSelectionError(null)
     setCandidates([])
-    setPlayerName('')
+    setPlayerNameState('')
     setCandidateFrame(null)
     try {
       const registered = await register()
@@ -187,7 +190,10 @@ export function useWorkspace(): WorkspaceController {
       setVideoName(null)
       setOpenError(reason instanceof Error ? reason.message : `Could not open ${fallbackName}`)
     } finally {
-      if (generation === openGeneration.current) setLoading(false)
+      if (generation === openGeneration.current) {
+        loadingRef.current = false
+        setLoading(false)
+      }
     }
   }, [clearDownstreamState])
 
@@ -221,9 +227,9 @@ export function useWorkspace(): WorkspaceController {
     if (trackStartingRef.current || videoSwitchLockedRef.current) return false
     if (!saved.sourceExists) throw new Error('Source video is missing')
     const generation = ++openGeneration.current
+    loadingRef.current = true
     setLoading(true)
     setLoadingLabel(`Opening ${player.name}…`)
-    setOpenError(null)
     try {
       const restored = await getTrack(player.jobId)
       if (generation !== openGeneration.current) return false
@@ -241,6 +247,7 @@ export function useWorkspace(): WorkspaceController {
       selectionRequest.current?.abort()
       selectionRequest.current = null
       clearDownstreamState()
+      setOpenError(null)
       setVideo(saved.metadata)
       setVideoName(saved.name)
       setCurrentFrameState(player.anchorFrameIdx)
@@ -252,7 +259,7 @@ export function useWorkspace(): WorkspaceController {
       setSelectionError(null)
       setCandidates([])
       setCandidateFrame(null)
-      setPlayerName(player.name)
+      setPlayerNameState(player.name)
       setTrackJob(restored)
       setTrackMessage(restored.message)
       setTrackError(null)
@@ -265,7 +272,10 @@ export function useWorkspace(): WorkspaceController {
       if (generation !== openGeneration.current) return false
       throw reason
     } finally {
-      if (generation === openGeneration.current) setLoading(false)
+      if (generation === openGeneration.current) {
+        loadingRef.current = false
+        setLoading(false)
+      }
     }
   }, [clearDownstreamState])
 
@@ -292,7 +302,7 @@ export function useWorkspace(): WorkspaceController {
     setSelection(null)
     setSelectionKind(kind)
     setCandidates([])
-    setPlayerName('')
+    setPlayerNameState('')
     setCandidateFrame(null)
     setSelectionError(null)
     clearDownstreamState()
@@ -300,7 +310,7 @@ export function useWorkspace(): WorkspaceController {
   }, [clearDownstreamState])
 
   const selectAt = useCallback((point: Point, frameIdx: number) => {
-    if (!video) return
+    if (loadingRef.current || trackStartingRef.current || !video) return
     if (!containsFrame(rangeRef.current, frameIdx)) {
       setSelectionError('Choose a frame inside the selected range')
       return
@@ -327,7 +337,7 @@ export function useWorkspace(): WorkspaceController {
 
   const selectByDescription = useCallback((rawPrompt: string) => {
     const prompt = rawPrompt.trim()
-    if (!video || !prompt) return
+    if (loadingRef.current || trackStartingRef.current || !video || !prompt) return
     if (!containsFrame(rangeRef.current, currentFrame)) {
       setSelectionError('Choose a frame inside the selected range')
       return
@@ -356,6 +366,7 @@ export function useWorkspace(): WorkspaceController {
   }, [currentFrame, prepareSelection, video])
 
   const confirmCandidate = useCallback((candidate: LocateCandidate, frameIdx: number) => {
+    if (loadingRef.current || trackStartingRef.current) return
     if (!containsFrame(rangeRef.current, frameIdx)) {
       setSelectionError('Choose a frame inside the selected range')
       return
@@ -377,7 +388,10 @@ export function useWorkspace(): WorkspaceController {
   }, [candidateFrame])
 
   const setRange = useCallback((nextRange: FrameRange) => {
-    if (!video || stageRef.current !== 'select' || trackStartingRef.current) return
+    if (
+      loadingRef.current || trackStartingRef.current
+      || !video || stageRef.current !== 'select'
+    ) return
     const normalized = normalizeFrameRange(nextRange, video.nbFrames)
     const current = rangeRef.current
     if (
@@ -404,7 +418,7 @@ export function useWorkspace(): WorkspaceController {
 
   const startTrack = useCallback(async () => {
     if (
-      trackStartingRef.current || !video || !selection || anchorFrame === null
+      loadingRef.current || trackStartingRef.current || !video || !selection || anchorFrame === null
       || !containsFrame(rangeRef.current, anchorFrame)
     ) return
     trackSocket.current?.close()
@@ -422,7 +436,7 @@ export function useWorkspace(): WorkspaceController {
       const { jobId, playerName: resolvedName } = await startTracking(
         video.videoId, anchorFrame, selection.box, playerName, rangeRef.current,
       )
-      setPlayerName(resolvedName)
+      setPlayerNameState(resolvedName)
       setTrackJob({
         jobId,
         state: 'queued',
@@ -459,10 +473,15 @@ export function useWorkspace(): WorkspaceController {
   }, [anchorFrame, playerName, refreshLibrary, selection, video])
 
   const resetSelection = useCallback(() => {
-    if (trackStartingRef.current) return
+    if (loadingRef.current || trackStartingRef.current) return
     clearSelectionState()
     clearDownstreamState()
   }, [clearDownstreamState, clearSelectionState])
+
+  const setPlayerName = useCallback((name: string) => {
+    if (loadingRef.current || trackStartingRef.current) return
+    setPlayerNameState(name)
+  }, [])
 
   const clearCaches = useCallback(async () => {
     await clearFrameCaches()
@@ -521,7 +540,7 @@ export function useWorkspace(): WorkspaceController {
     features, framing, library, loading, loadingLabel, openError, openLibraryPlayer,
     openLibraryVideo, openPath, openUpload, range, refreshLibrary, resetRange, resetSelection,
     playerName, selectAt, selectByDescription, selection, selectionError, selectionKind,
-    selectionLoading, setRange, setRangeIn, setRangeOut, stage, startTrack, trackError, trackJob, trackMessage,
+    selectionLoading, setPlayerName, setRange, setRangeIn, setRangeOut, stage, startTrack, trackError, trackJob, trackMessage,
     trackStartedAt, trackStarting, video, videoName, videoSwitchLocked,
   ])
 }

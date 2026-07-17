@@ -32,6 +32,7 @@ it('switches between click and description selection methods', async () => {
       trackMessage={null}
       trackError={null}
       trackStarting={false}
+      selectionLocked={false}
       trackStartedAt={null}
       trackFrameCount={930}
       health={null}

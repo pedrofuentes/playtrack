@@ -309,6 +309,33 @@ it('wires editable ranges to the timeline only during Select', async () => {
   await act(async () => root.unmount())
 })
 
+it('locks selection, range editing, and Enter tracking while an open is pending', async () => {
+  const startTrack = vi.fn()
+  appMocks.workspace = openedWorkspace({
+    loading: true,
+    selection: { box: [1, 2, 3, 4], score: 0.9, maskPng: '' },
+    startTrack,
+  })
+  const container = document.createElement('div')
+  const root = createRoot(container)
+
+  await act(async () => root.render(createElement(App)))
+
+  const button = (label: string) => [...container.querySelectorAll('button')]
+    .find((item) => item.textContent === label)
+  expect(appMocks.selectionLocked).toBe(true)
+  expect(button('Set In')?.disabled).toBe(true)
+  expect(button('Track player')?.disabled).toBe(true)
+  expect(button('Choose a different player')?.disabled).toBe(true)
+  expect(container.querySelector<HTMLInputElement>('.player-name-field input')?.disabled).toBe(true)
+
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  })
+  expect(startTrack).not.toHaveBeenCalled()
+  await act(async () => root.unmount())
+})
+
 it('calculates track coverage over the selected range', async () => {
   appMocks.workspace = openedWorkspace({
     range: { startFrameIdx: 10, endFrameExclusive: 20 },
