@@ -77,7 +77,9 @@ to reach the running app; there is no hot reload in production mode.
 
 | Var | Default | Meaning |
 |---|---|---|
-| `FINDME_HOST` | `127.0.0.1` | bind host in dev.sh/run.ps1; `0.0.0.0` exposes on LAN (no auth!) |
+| `FINDME_HOST` | `127.0.0.1` | bind host in dev.sh/run.ps1; `0.0.0.0` exposes on LAN (origin/host checks, but no authentication) |
+| `FINDME_ALLOWED_HOSTS` | empty | comma-separated extra Host header names accepted by the API boundary |
+| `FINDME_MAX_UPLOAD_BYTES` | `21474836480` (20 GiB) | maximum multipart video upload size, enforced while streaming |
 | `FINDME_DATA_DIR` | `<repo>/data` | uploads, frame caches, library persistence |
 | `FINDME_CHECKPOINTS_DIR` | `<repo>/checkpoints` | SAM2 weights dir |
 | `FINDME_SAM2_CHECKPOINT` / `FINDME_SAM2_CONFIG` | base-plus | checkpoint/config override |
@@ -85,9 +87,12 @@ to reach the running app; there is no hot reload in production mode.
 | `SAM2_OFFLOAD_VIDEO_TO_CPU` / `SAM2_OFFLOAD_STATE_TO_CPU` | `0` | forced on automatically on MPS |
 | `TRACKING_MAX_DIM` | `2048` | tracking frame-cache resolution (4096 ≈ 2× slower, no accuracy gain — measured) |
 | `FINDME_LOCATE_MODEL` | `nvidia/LocateAnything-3B` | HF model id |
+| `FINDME_LOCATE_REVISION` | pinned commit | exact trusted model-code/weight revision passed to Transformers |
 | `LOCATE_MAX_INPUT_DIM` | `2500` | downscale bound for text grounding |
 | `LOCATE_RESCUE_ENABLED` / `LOCATE_RESCUE_AFTER` / `LOCATE_RESCUE_MIN_SCORE` | `1` / `15` / `0.5` | occlusion-rescue tuning |
 | `FINDME_FFMPEG` / `FINDME_FFPROBE` | `ffmpeg`/`ffprobe` | binary paths |
+| `FINDME_MAX_EXPORT_WIDTH` / `FINDME_MAX_EXPORT_HEIGHT` | `4096` / `2160` | maximum output dimensions |
+| `FINDME_MAX_EXPORT_PIXELS` | `8847360` | maximum output pixels per frame |
 
 ## Device matrix
 

@@ -7,7 +7,7 @@ Set-StrictMode -Version Latest
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $BackendDir = Join-Path $RepoRoot 'backend'
 $FrontendDir = Join-Path $RepoRoot 'frontend'
-# FINDME_HOST=0.0.0.0 exposes the app to the local network (no auth — trusted networks only).
+# FINDME_HOST=0.0.0.0 exposes the app to the local network (origin/host checks, no authentication).
 $BindHost = if ($env:FINDME_HOST) { $env:FINDME_HOST } else { '127.0.0.1' }
 $BrowseHost = if ($BindHost -eq '0.0.0.0') { '127.0.0.1' } else { $BindHost }
 $AppUrl = "http://${BrowseHost}:8000"

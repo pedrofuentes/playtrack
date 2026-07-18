@@ -56,7 +56,7 @@ def test_path_registration_runs_outside_the_async_event_loop(
     async def register() -> httpx.Response:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
+            transport=transport, base_url="http://localhost"
         ) as client:
             return await client.post("/api/videos", json={"path": "ignored.mp4"})
 
@@ -81,6 +81,62 @@ def test_registers_multipart_upload(
     assert record.display_name == "Opening Match.mp4"
     assert record.path.name != record.display_name
     assert video_store.library.videos()[0]["name"] == "Opening Match.mp4"
+
+
+def test_upload_accepts_exact_file_limit_and_rejects_one_byte_over(
+    tmp_path: Path, tiny_video: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    record = store.register_path(tiny_video)
+    observed_sizes: list[int] = []
+
+    def register_upload(source: object, _filename: str | None, _name: str | None) -> object:
+        payload = source.read()
+        observed_sizes.append(len(payload))
+        return record
+
+    monkeypatch.setattr(store, "register_upload", register_upload)
+    with TestClient(create_app(store, max_upload_bytes=10)) as client:
+        exact = client.post(
+            "/api/videos",
+            files={"file": ("exact.mp4", b"0123456789", "video/mp4")},
+        )
+        oversized = client.post(
+            "/api/videos",
+            files={"file": ("large.mp4", b"01234567890", "video/mp4")},
+        )
+
+    assert exact.status_code == 201
+    assert oversized.status_code == 413
+    assert oversized.json() == {"detail": "Upload exceeds the 10-byte limit"}
+    assert observed_sizes == [10]
+
+
+def test_upload_rejects_impossible_content_length_before_parsing(
+    tmp_path: Path, tiny_video: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    record = store.register_path(tiny_video)
+    called = False
+
+    def register_upload(*_args: object, **_kwargs: object) -> object:
+        nonlocal called
+        called = True
+        return record
+
+    monkeypatch.setattr(store, "register_upload", register_upload)
+    with TestClient(create_app(store, max_upload_bytes=10)) as client:
+        response = client.post(
+            "/api/videos",
+            headers={
+                "Content-Type": "multipart/form-data; boundary=findme",
+                "Content-Length": str(10 + 64 * 1024 + 1),
+            },
+            content=b"",
+        )
+
+    assert response.status_code == 413
+    assert called is False
 
 
 def test_registration_accepts_source_names_and_blank_names_use_filenames(

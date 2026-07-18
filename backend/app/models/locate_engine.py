@@ -10,6 +10,7 @@ from typing import Any, Sequence
 
 
 DEFAULT_MODEL_ID = "nvidia/LocateAnything-3B"
+DEFAULT_MODEL_REVISION = "c32291ca5e996f5a7a485845b4f57a233936bba0"
 
 
 class LocateAnythingError(RuntimeError):
@@ -84,8 +85,14 @@ def parse_boxes(
 class LocateAnythingEngine:
     """Serialized, lazy LocateAnything worker with explicit VRAM release."""
 
-    def __init__(self, model_id: str = DEFAULT_MODEL_ID) -> None:
+    def __init__(
+        self,
+        model_id: str = DEFAULT_MODEL_ID,
+        *,
+        revision: str = DEFAULT_MODEL_REVISION,
+    ) -> None:
         self.model_id = model_id
+        self.revision = revision
         self._model: Any | None = None
         self._tokenizer: Any | None = None
         self._processor: Any | None = None
@@ -224,13 +231,18 @@ class LocateAnythingEngine:
         dtype = getattr(torch, profile.dtype)
         try:
             self._tokenizer = AutoTokenizer.from_pretrained(
-                self.model_id, trust_remote_code=True
+                self.model_id,
+                revision=self.revision,
+                trust_remote_code=True,
             )
             self._processor = AutoProcessor.from_pretrained(
-                self.model_id, trust_remote_code=True
+                self.model_id,
+                revision=self.revision,
+                trust_remote_code=True,
             )
             self._model = AutoModel.from_pretrained(
                 self.model_id,
+                revision=self.revision,
                 trust_remote_code=True,
                 torch_dtype=dtype,
                 attn_implementation=profile.attention,
@@ -273,6 +285,9 @@ class LocateAnythingEngine:
 
 
 @lru_cache(maxsize=None)
-def get_locate_engine(model_id: str = DEFAULT_MODEL_ID) -> LocateAnythingEngine:
+def get_locate_engine(
+    model_id: str = DEFAULT_MODEL_ID,
+    revision: str = DEFAULT_MODEL_REVISION,
+) -> LocateAnythingEngine:
     """Return the process-wide lazy LocateAnything worker."""
-    return LocateAnythingEngine(model_id)
+    return LocateAnythingEngine(model_id, revision=revision)

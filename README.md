@@ -186,6 +186,19 @@ native-Windows setup, but NVIDIA primarily documents Linux environments. If
 the remote model code fails on native Windows, run the same backend under
 WSL2; the browser UI and local API contract are unchanged.
 
+## Runtime boundaries
+
+FindMe rejects cross-site browser requests and unexpected Host headers. The default
+20 GiB multipart upload limit is enforced while streaming, and exports are limited to
+4096×2160 (8,847,360 pixels), zoom 1–4, smoothing responsiveness 0–10 seconds, and
+maximum acceleration 0.1–10,000 px/frame². Override the byte and dimension limits with
+`FINDME_MAX_UPLOAD_BYTES`, `FINDME_MAX_EXPORT_WIDTH`,
+`FINDME_MAX_EXPORT_HEIGHT`, and `FINDME_MAX_EXPORT_PIXELS`. Add non-IP LAN hostnames
+with the comma-separated `FINDME_ALLOWED_HOSTS` setting.
+
+Unexpected API failures return a stable error code and an `X-Request-ID`; the matching
+identifier is written to the backend log with the full diagnostic traceback.
+
 ## Known limitations
 
 - The UI currently opens `examples/example.mp4`; it does not yet expose the
@@ -197,8 +210,9 @@ WSL2; the browser UI and local API contract are unchanged.
   recovery currently requires a new click and track job.
 - Jobs and their progress are held in memory, so restarting the backend loses
   job history. Video/frame/export caches remain on disk.
-- FindMe is a local, single-user application with no authentication or remote
-  deployment hardening.
+- FindMe is a local, single-user application with no authentication. Host/origin
+  checks reduce browser-based cross-site requests but do not make LAN deployment a
+  multi-user security boundary.
 
 ## Verification
 

@@ -2,7 +2,12 @@ import { createRef } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 
-import { type ExportPanelHandle, EXPORT_PRESETS, ExportPanel } from './ExportPanel'
+import {
+  type ExportPanelHandle,
+  EXPORT_PRESETS,
+  ExportPanel,
+  isValidExportDimensions,
+} from './ExportPanel'
 
 describe('EXPORT_PRESETS', () => {
   it('keeps 720p as the default and supports 1080p and custom output', () => {
@@ -11,6 +16,20 @@ describe('EXPORT_PRESETS', () => {
       { key: '1280x720', label: '720p', detail: '1280 × 720', width: 1280, height: 720 },
       { key: 'custom', label: 'Custom', detail: 'Even dimensions', width: null, height: null },
     ])
+  })
+})
+
+describe('isValidExportDimensions', () => {
+  it.each([
+    [1280, 720, true],
+    [4096, 2160, true],
+    [4096, 2162, false],
+    [4098, 2160, false],
+    [4096, 4096, false],
+    [1279, 720, false],
+    [Number.NaN, 720, false],
+  ])('validates %s × %s against the backend admission limits', (width, height, expected) => {
+    expect(isValidExportDimensions(width, height)).toBe(expected)
   })
 })
 

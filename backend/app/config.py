@@ -26,6 +26,12 @@ class Settings:
     locate_rescue_enabled: bool = True
     locate_rescue_after: int = 15
     locate_rescue_min_score: float = 0.5
+    locate_revision: str = "c32291ca5e996f5a7a485845b4f57a233936bba0"
+    allowed_hosts: tuple[str, ...] = ()
+    max_upload_bytes: int = 20 * 1024**3
+    max_export_width: int = 4096
+    max_export_height: int = 2160
+    max_export_pixels: int = 4096 * 2160
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -38,6 +44,21 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     raise ValueError(f"{name} must be a boolean value")
+
+
+def _env_positive_int(name: str, default: int) -> int:
+    value = int(os.environ.get(name, str(default)))
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _env_csv(name: str) -> tuple[str, ...]:
+    return tuple(
+        item.strip().lower().rstrip(".")
+        for item in os.environ.get(name, "").split(",")
+        if item.strip()
+    )
 
 
 def load_settings() -> Settings:
@@ -79,6 +100,19 @@ def load_settings() -> Settings:
         locate_rescue_after=int(os.environ.get("LOCATE_RESCUE_AFTER", "15")),
         locate_rescue_min_score=float(
             os.environ.get("LOCATE_RESCUE_MIN_SCORE", "0.5")
+        ),
+        locate_revision=os.environ.get(
+            "FINDME_LOCATE_REVISION",
+            "c32291ca5e996f5a7a485845b4f57a233936bba0",
+        ),
+        allowed_hosts=_env_csv("FINDME_ALLOWED_HOSTS"),
+        max_upload_bytes=_env_positive_int(
+            "FINDME_MAX_UPLOAD_BYTES", 20 * 1024**3
+        ),
+        max_export_width=_env_positive_int("FINDME_MAX_EXPORT_WIDTH", 4096),
+        max_export_height=_env_positive_int("FINDME_MAX_EXPORT_HEIGHT", 2160),
+        max_export_pixels=_env_positive_int(
+            "FINDME_MAX_EXPORT_PIXELS", 4096 * 2160
         ),
     )
 

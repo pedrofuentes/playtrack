@@ -24,6 +24,24 @@ export const EXPORT_PRESETS = [
   { key: 'custom', label: 'Custom', detail: 'Even dimensions', width: null, height: null },
 ] as const
 
+const MAX_EXPORT_WIDTH = 4096
+const MAX_EXPORT_HEIGHT = 2160
+const MAX_EXPORT_PIXELS = 4096 * 2160
+
+export function isValidExportDimensions(width: number, height: number): boolean {
+  return (
+    Number.isFinite(width)
+    && Number.isFinite(height)
+    && width >= 2
+    && height >= 2
+    && width % 2 === 0
+    && height % 2 === 0
+    && width <= MAX_EXPORT_WIDTH
+    && height <= MAX_EXPORT_HEIGHT
+    && width * height <= MAX_EXPORT_PIXELS
+  )
+}
+
 export interface ExportPanelHandle {
   triggerExport(): void
 }
@@ -71,7 +89,7 @@ export const ExportPanel = forwardRef<ExportPanelHandle, ExportPanelProps>(funct
     zoom,
     smoothing: { responsiveness, maxAccelPxPerFrame2 },
   }), [maxAccelPxPerFrame2, outHeight, outWidth, responsiveness, zoom])
-  const validDimensions = outWidth >= 2 && outHeight >= 2 && outWidth % 2 === 0 && outHeight % 2 === 0
+  const validDimensions = isValidExportDimensions(outWidth, outHeight)
 
   useEffect(() => {
     if (disabled || !videoId || !trackJobId || !validDimensions) {
@@ -248,9 +266,9 @@ export const ExportPanel = forwardRef<ExportPanelHandle, ExportPanelProps>(funct
             <summary>Advanced settings</summary>
             {preset === 'custom' && (
               <div className="dimension-inputs">
-                <label>Width<input type="number" min={2} step={2} value={outWidth} onChange={(event) => setOutWidth(Number(event.target.value))} /></label>
+                <label>Width<input type="number" min={2} max={MAX_EXPORT_WIDTH} step={2} value={outWidth} onChange={(event) => setOutWidth(Number(event.target.value))} /></label>
                 <span>×</span>
-                <label>Height<input type="number" min={2} step={2} value={outHeight} onChange={(event) => setOutHeight(Number(event.target.value))} /></label>
+                <label>Height<input type="number" min={2} max={MAX_EXPORT_HEIGHT} step={2} value={outHeight} onChange={(event) => setOutHeight(Number(event.target.value))} /></label>
               </div>
             )}
             <label>
@@ -258,7 +276,7 @@ export const ExportPanel = forwardRef<ExportPanelHandle, ExportPanelProps>(funct
               <input type="number" min={0.1} step={1} value={maxAccelPxPerFrame2} onChange={(event) => setMaxAccelPxPerFrame2(Number(event.target.value))} />
             </label>
           </details>
-          {!validDimensions && <p className="inline-error">Dimensions must be positive even numbers.</p>}
+          {!validDimensions && <p className="inline-error">Dimensions must be even and no larger than 4096 × 2160.</p>}
           {previewLoading && <p className="operation-status">Updating crop preview…</p>}
           <button type="button" className="primary-action" disabled={!validDimensions || previewLoading || exporting} onClick={() => void beginExport()}>
             {exporting ? 'Exporting…' : 'Export MP4'}

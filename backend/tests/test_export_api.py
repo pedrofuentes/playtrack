@@ -9,6 +9,7 @@ from pathlib import Path
 
 import app.library as library_module
 import app.main as main_module
+import pytest
 from fastapi.testclient import TestClient
 
 from app.crop_planner import CropWindow
@@ -671,3 +672,101 @@ def test_export_catalog_failure_removes_unpublished_output(
 
     assert snapshot.state == "failed"
     assert not (exports_dir / f"{export_id}.mp4").exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("outWidth", 4098),
+        ("outHeight", 2162),
+        ("zoom", 0.9),
+        ("zoom", 4.1),
+    ],
+)
+def test_export_preview_and_submission_share_hard_limits(
+    tmp_path: Path,
+    tiny_video: Path,
+    field: str,
+    value: float,
+) -> None:
+    client, video_id, track_job_id, _jobs, _exporter, _exports_dir = make_client(
+        tmp_path, tiny_video
+    )
+    payload: dict[str, object] = {
+        "videoId": video_id,
+        "trackJobId": track_job_id,
+        "outWidth": 128,
+        "outHeight": 72,
+        "zoom": 1,
+        "smoothing": {},
+    }
+    payload[field] = value
+    query = {
+        "videoId": video_id,
+        "trackJobId": track_job_id,
+        "outWidth": payload["outWidth"],
+        "outHeight": payload["outHeight"],
+        "zoom": payload["zoom"],
+    }
+
+    with client:
+        submitted = client.post("/api/export", json=payload)
+        previewed = client.get("/api/export/plan", params=query)
+
+    assert submitted.status_code == 422
+    assert previewed.status_code == 422
+
+
+def test_export_accepts_balanced_4k_boundary(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    client, video_id, track_job_id, _jobs, _exporter, _exports_dir = make_client(
+        tmp_path, tiny_video
+    )
+
+    with client:
+        response = client.post(
+            "/api/export",
+            json={
+                "videoId": video_id,
+                "trackJobId": track_job_id,
+                "outWidth": 4096,
+                "outHeight": 2160,
+                "zoom": 4,
+                "smoothing": {
+                    "responsiveness": 10,
+                    "maxAccelPxPerFrame2": 10_000,
+                },
+            },
+        )
+
+    assert response.status_code == 202
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        {"responsiveness": "nan"},
+        {"responsiveness": "11"},
+        {"maxAccelPxPerFrame2": "inf"},
+        {"maxAccelPxPerFrame2": "0.05"},
+    ],
+)
+def test_export_preview_rejects_non_finite_or_unbounded_smoothing(
+    tmp_path: Path, tiny_video: Path, query: dict[str, str]
+) -> None:
+    client, video_id, track_job_id, _jobs, _exporter, _exports_dir = make_client(
+        tmp_path, tiny_video
+    )
+    params = {
+        "videoId": video_id,
+        "trackJobId": track_job_id,
+        "outWidth": "128",
+        "outHeight": "72",
+        **query,
+    }
+
+    with client:
+        response = client.get("/api/export/plan", params=params)
+
+    assert response.status_code == 422

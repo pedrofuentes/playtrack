@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 from starlette.datastructures import UploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.formparsers import MultiPartException
 
 from .config import settings
 from .crop_planner import (
@@ -40,6 +41,12 @@ from .selection import (
     SelectionUnavailableError,
     TextSelectionUnavailableError,
     TextSelector,
+)
+from .security import (
+    ErrorCorrelationMiddleware,
+    RequestBoundaryMiddleware,
+    UploadLimitExceeded,
+    parse_limited_upload_form,
 )
 from .tracking import VideoTracker, persist_completed_track
 from .videos import (
@@ -269,6 +276,8 @@ def create_app(
     job_registry: JobRegistry | None = None,
     video_exporter: Any | None = None,
     exports_dir: Path | None = None,
+    allowed_hosts: tuple[str, ...] | None = None,
+    max_upload_bytes: int | None = None,
 ) -> FastAPI:
     store = video_store or VideoStore(
         repo_root=settings.repo_root,
@@ -294,7 +303,9 @@ def create_app(
             engine_provider=lambda: sam_image_engine,
             crop_size=settings.sam2_crop_size,
         )
-    locate_engine = get_locate_engine(settings.locate_model_id)
+    locate_engine = get_locate_engine(
+        settings.locate_model_id, settings.locate_revision
+    )
     text_grounder = text_selector
     if text_grounder is None:
         text_grounder = TextSelector(
@@ -356,6 +367,11 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(
+        RequestBoundaryMiddleware,
+        allowed_hosts=settings.allowed_hosts if allowed_hosts is None else allowed_hosts,
+    )
+    app.add_middleware(ErrorCorrelationMiddleware)
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
@@ -404,10 +420,23 @@ def create_app(
         },
     )
     async def register_video(request: Request) -> dict[str, Any]:
+        form = None
         try:
             content_type = request.headers.get("content-type", "").lower()
             if content_type.startswith("multipart/form-data"):
-                form = await request.form()
+                try:
+                    form = await parse_limited_upload_form(
+                        request,
+                        max_file_bytes=(
+                            settings.max_upload_bytes
+                            if max_upload_bytes is None
+                            else max_upload_bytes
+                        ),
+                    )
+                except UploadLimitExceeded as exc:
+                    raise HTTPException(413, str(exc)) from exc
+                except MultiPartException as exc:
+                    raise HTTPException(422, str(exc)) from exc
                 upload = form.get("file")
                 if not isinstance(upload, UploadFile):
                     raise HTTPException(422, "Multipart request must include a file")
@@ -438,6 +467,9 @@ def create_app(
             raise HTTPException(503, str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
+        finally:
+            if form is not None:
+                await form.close()
 
     @app.get("/api/videos/{video_id}/file", response_class=FileResponse)
     def video_file(video_id: str) -> FileResponse:
@@ -600,6 +632,33 @@ def create_app(
         responsiveness: float,
         max_acceleration: float,
     ) -> tuple[Any, list[CropWindow], int]:
+        if out_width % 2 or out_height % 2:
+            raise HTTPException(422, "Output dimensions must be even")
+        if (
+            out_width < 2
+            or out_height < 2
+            or out_width > settings.max_export_width
+            or out_height > settings.max_export_height
+            or out_width * out_height > settings.max_export_pixels
+        ):
+            raise HTTPException(
+                422,
+                "Output dimensions exceed the configured export limit",
+            )
+        if not math.isfinite(zoom) or not 1.0 <= zoom <= 4.0:
+            raise HTTPException(422, "Zoom must be between 1 and 4")
+        if not math.isfinite(responsiveness) or not 0.0 <= responsiveness <= 10.0:
+            raise HTTPException(
+                422, "Smoothing responsiveness must be between 0 and 10 seconds"
+            )
+        if (
+            not math.isfinite(max_acceleration)
+            or not 0.1 <= max_acceleration <= 10_000.0
+        ):
+            raise HTTPException(
+                422,
+                "Maximum acceleration must be between 0.1 and 10000 pixels per frame squared",
+            )
         try:
             record = store.get(video_id)
         except VideoNotFoundError as exc:
@@ -610,9 +669,6 @@ def create_app(
             raise HTTPException(404, str(exc)) from exc
         if track_snapshot.state != "completed":
             raise HTTPException(409, "Tracking job is not complete")
-        if out_width % 2 or out_height % 2:
-            raise HTTPException(422, "Output dimensions must be even")
-
         saved_track = next(
             (
                 track
