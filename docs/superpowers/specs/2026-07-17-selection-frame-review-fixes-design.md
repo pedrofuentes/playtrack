@@ -49,6 +49,7 @@ Regression coverage includes media time ahead of React state, click callback
 frame identity, keyboard and imperative navigation, native seeking events, an
 outside-range click reaching inline validation, low-fps inclusive Out labels,
 and a Library response fixture whose nested metadata omits `name`. Run the
-focused Task 7 frontend tests, full frontend suite, production build, and diff
-checks. Backend code is not expected to change, so the backend gate is not
-required unless implementation scope expands.
+focused frontend tests specified in implementation Tasks 1–4, full frontend
+suite, production build, and diff checks, and record the results in the
+verification report. Backend code is not expected to change, so the backend
+gate is not required unless implementation scope expands.

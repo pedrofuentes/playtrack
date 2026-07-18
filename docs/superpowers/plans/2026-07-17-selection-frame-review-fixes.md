@@ -190,10 +190,10 @@ Expected: all pass.
 
 ### Task 5: Verification and handoff
 
-- [ ] Run the focused Task 7 tests and record exact counts.
+- [ ] Run the focused frontend tests specified in Tasks 1–4 and record exact counts.
 - [ ] Run `npm test` and `npm run build` from `frontend`; require zero failures/errors.
 - [ ] Run `git diff --check`, inspect `git status --short`, confirm `sourceStartFrame`
   remains in API/backend/export wiring, and confirm the `loadingRef` and
   `trackStartingRef` guards remain in `useWorkspace`.
-- [ ] Record RED/GREEN and verification evidence in the ignored Task 7 report,
-  stage only Task 7 frontend/doc files, and commit with an imperative subject.
+- [ ] Record RED/GREEN and verification evidence in the verification report,
+  stage only the frontend/doc files from this plan, and commit with an imperative subject.

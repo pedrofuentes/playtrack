@@ -46,6 +46,48 @@ if (errors.length === 0) {
     if (!html.includes(text)) errors.push(`missing required content: ${text}`)
   }
 
+  const normalizedHtml = html.toLowerCase()
+  const forbiddenText = [
+    [
+      'text',
+      'selection',
+    ].join(' '),
+    [
+      'optional',
+      'model',
+      'license',
+    ].join(' '),
+    [
+      'research',
+      'license',
+    ].join(' '),
+    [
+      'text',
+      'grounding',
+    ].join(' '),
+    [
+      'non',
+      'commercial',
+    ].join('-'),
+  ]
+  for (const text of forbiddenText) {
+    if (normalizedHtml.includes(text)) errors.push(`retired website content remains: ${text}`)
+  }
+
+  const hardwareSection = html.match(/<section\b[^>]*\bid=["']hardware["'][^>]*>[\s\S]*?<\/section>/)?.[0]
+  if (!hardwareSection) {
+    errors.push('hardware section is unavailable for table validation')
+  } else {
+    const hardwareRows = [...hardwareSection.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)]
+    if (hardwareRows.length === 0) errors.push('hardware table must contain rows')
+    for (const [index, row] of hardwareRows.entries()) {
+      const cellCount = [...row[1].matchAll(/<t[hd]\b/g)].length
+      if (cellCount !== 3) {
+        errors.push(`hardware table row ${index + 1} must contain exactly three cells`)
+      }
+    }
+  }
+
   const imageTags = [...html.matchAll(/<img\b[^>]*>/g)].map((match) => match[0])
   if (imageTags.length < 4) errors.push('expected logo and three product screenshots')
   for (const tag of imageTags) {
