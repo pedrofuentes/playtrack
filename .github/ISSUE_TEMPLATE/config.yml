@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/pedrofuentes/playtrack/security/advisories/new
+    about: Report security issues privately instead of opening a public issue.
+  - name: PlayTrack website
+    url: https://pf.run/playtrack/
+    about: Read the product overview, setup guidance, and known limitations.

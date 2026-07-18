@@ -1,2 +1,1 @@
-"""Lazy model integrations for FindMe."""
-
+"""Lazy model integrations for PlayTrack."""

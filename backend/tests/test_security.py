@@ -74,15 +74,15 @@ def test_allows_loopback_private_and_test_hosts(tmp_path: Path, host: str) -> No
 
 
 def test_allows_explicit_dns_host(tmp_path: Path) -> None:
-    with make_client(tmp_path, allowed_hosts=("findme.lan",)) as client:
-        response = client.get("/api/health", headers={"Host": "findme.lan:8000"})
+    with make_client(tmp_path, allowed_hosts=("playtrack.lan",)) as client:
+        response = client.get("/api/health", headers={"Host": "playtrack.lan:8000"})
 
     assert response.status_code == 200
 
 
 @pytest.mark.parametrize(
     "host",
-    ["attacker.example", "findme.lan.attacker.example", "8.8.8.8", "bad host"],
+    ["attacker.example", "playtrack.lan.attacker.example", "8.8.8.8", "bad host"],
 )
 def test_rejects_public_or_malformed_hosts(tmp_path: Path, host: str) -> None:
     with make_client(tmp_path) as client:

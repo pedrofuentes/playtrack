@@ -17,7 +17,41 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _SCHEMA_VERSION = 1
+_CANONICAL_DATABASE = "playtrack.sqlite3"
+_LEGACY_DATABASE = "findme.sqlite3"
+_MIGRATION_SUFFIX = ".migrating"
 _T = TypeVar("_T")
+
+
+def _backup_database(
+    source: sqlite3.Connection, target: sqlite3.Connection
+) -> None:
+    source.backup(target)
+
+
+def _migrate_legacy_database(root: Path) -> None:
+    canonical = root / _CANONICAL_DATABASE
+    legacy = root / _LEGACY_DATABASE
+    if canonical.exists() or not legacy.exists():
+        return
+
+    partial = root / f"{_CANONICAL_DATABASE}{_MIGRATION_SUFFIX}"
+    partial.unlink(missing_ok=True)
+    try:
+        source_uri = f"{legacy.resolve().as_uri()}?mode=ro"
+        with sqlite3.connect(source_uri, uri=True, timeout=5.0) as source:
+            with sqlite3.connect(partial, timeout=5.0) as target:
+                _backup_database(source, target)
+        with sqlite3.connect(partial, timeout=5.0) as migrated:
+            result = migrated.execute("PRAGMA integrity_check").fetchone()
+        if result is None or result[0] != "ok":
+            detail = "no result" if result is None else str(result[0])
+            raise RuntimeError(f"Legacy library migration failed integrity check: {detail}")
+        partial.replace(canonical)
+        logger.info("Migrated legacy library database to %s", canonical)
+    except Exception:
+        partial.unlink(missing_ok=True)
+        raise
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,7 +98,9 @@ class LibraryStore:
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = Path(data_dir)
         self.root = self.data_dir / "library"
-        self.database_path = self.root / "findme.sqlite3"
+        self.root.mkdir(parents=True, exist_ok=True)
+        _migrate_legacy_database(self.root)
+        self.database_path = self.root / _CANONICAL_DATABASE
         self._initialize_database()
 
     def _connect(self) -> sqlite3.Connection:

@@ -89,7 +89,10 @@ export function WorkspaceShell({
   return (
     <main className="workspace-shell">
       <header className="workspace-topbar">
-        <div className="findme-mark" aria-label="FindMe">F</div>
+        <div className="playtrack-mark">
+          <img src="/brand/playtrack-mark.svg" alt="" aria-hidden="true" />
+          <span className="sr-only" aria-label="PlayTrack home">PlayTrack</span>
+        </div>
         <div className="active-video">
           <strong>{videoName ?? 'No video open'}</strong>
           {saved && <span className="status-pill">Saved</span>}

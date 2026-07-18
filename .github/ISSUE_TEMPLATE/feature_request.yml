@@ -1,0 +1,42 @@
+name: Feature request
+description: Propose a focused PlayTrack improvement
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: Describe the editing or tracking outcome first. Concrete sports-video workflows are especially helpful.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: What is difficult or impossible in PlayTrack today?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the user-visible behavior, not only an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Example workflow
+      description: Include the sport, source format, frame range, hardware, and where this fits select → track → export.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Project constraints
+      options:
+        - label: This proposal preserves local-first processing and user-data boundaries.
+          required: true
+        - label: I understand model-dependent features may vary by hardware and upstream licensing.
+          required: true

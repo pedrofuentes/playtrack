@@ -76,6 +76,7 @@ function workspace(overrides: Record<string, unknown> = {}) {
     loading: false,
     loadingLabel: '',
     openError: null,
+    backendUnavailable: false,
     framing: false,
     exportJob: null,
     exportStarting: false,
@@ -189,6 +190,21 @@ it('renders the pro-editor shell without expanded secondary surfaces', () => {
   expect(markup).not.toContain('Recent videos')
   expect(markup).not.toContain('Virtual camera export')
   expect(markup).not.toContain('Last source click')
+})
+
+it('renders cached-shell guidance and retry when the local backend is offline', () => {
+  const retry = vi.fn()
+  appMocks.workspace = workspace({
+    backendUnavailable: true,
+    openError: 'The PlayTrack server is not responding.',
+    openPath: retry,
+  })
+
+  const markup = renderToStaticMarkup(createElement(App))
+
+  expect(markup).toContain('PlayTrack server is offline')
+  expect(markup).toContain('Start the local PlayTrack server')
+  expect(markup).toContain('Retry connection')
 })
 
 it('pauses the video before starting text selection', async () => {

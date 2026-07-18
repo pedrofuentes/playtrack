@@ -63,13 +63,13 @@ def _env_csv(name: str) -> tuple[str, ...]:
 
 def load_settings() -> Settings:
     repo_root = Path(__file__).resolve().parents[2]
-    data_dir = Path(os.environ.get("FINDME_DATA_DIR", repo_root / "data"))
+    data_dir = Path(os.environ.get("PLAYTRACK_DATA_DIR", repo_root / "data"))
     checkpoints_dir = Path(
-        os.environ.get("FINDME_CHECKPOINTS_DIR", repo_root / "checkpoints")
+        os.environ.get("PLAYTRACK_CHECKPOINTS_DIR", repo_root / "checkpoints")
     )
     sam2_checkpoint = Path(
         os.environ.get(
-            "FINDME_SAM2_CHECKPOINT",
+            "PLAYTRACK_SAM2_CHECKPOINT",
             checkpoints_dir / "sam2.1_hiera_base_plus.pt",
         )
     )
@@ -81,17 +81,17 @@ def load_settings() -> Settings:
         exports_dir=repo_root / "exports",
         sam2_checkpoint=sam2_checkpoint,
         sam2_model_config=os.environ.get(
-            "FINDME_SAM2_CONFIG",
+            "PLAYTRACK_SAM2_CONFIG",
             "configs/sam2.1/sam2.1_hiera_b+.yaml",
         ),
-        sam2_crop_size=int(os.environ.get("FINDME_SAM2_CROP_SIZE", "1024")),
+        sam2_crop_size=int(os.environ.get("PLAYTRACK_SAM2_CROP_SIZE", "1024")),
         sam2_offload_video_to_cpu=_env_bool("SAM2_OFFLOAD_VIDEO_TO_CPU"),
         sam2_offload_state_to_cpu=_env_bool("SAM2_OFFLOAD_STATE_TO_CPU"),
-        ffmpeg_binary=os.environ.get("FINDME_FFMPEG", "ffmpeg"),
-        ffprobe_binary=os.environ.get("FINDME_FFPROBE", "ffprobe"),
+        ffmpeg_binary=os.environ.get("PLAYTRACK_FFMPEG", "ffmpeg"),
+        ffprobe_binary=os.environ.get("PLAYTRACK_FFPROBE", "ffprobe"),
         tracking_max_dimension=int(os.environ.get("TRACKING_MAX_DIM", "2048")),
         locate_model_id=os.environ.get(
-            "FINDME_LOCATE_MODEL", "nvidia/LocateAnything-3B"
+            "PLAYTRACK_LOCATE_MODEL", "nvidia/LocateAnything-3B"
         ),
         locate_max_input_dimension=int(
             os.environ.get("LOCATE_MAX_INPUT_DIM", "2500")
@@ -102,17 +102,17 @@ def load_settings() -> Settings:
             os.environ.get("LOCATE_RESCUE_MIN_SCORE", "0.5")
         ),
         locate_revision=os.environ.get(
-            "FINDME_LOCATE_REVISION",
+            "PLAYTRACK_LOCATE_REVISION",
             "c32291ca5e996f5a7a485845b4f57a233936bba0",
         ),
-        allowed_hosts=_env_csv("FINDME_ALLOWED_HOSTS"),
+        allowed_hosts=_env_csv("PLAYTRACK_ALLOWED_HOSTS"),
         max_upload_bytes=_env_positive_int(
-            "FINDME_MAX_UPLOAD_BYTES", 20 * 1024**3
+            "PLAYTRACK_MAX_UPLOAD_BYTES", 20 * 1024**3
         ),
-        max_export_width=_env_positive_int("FINDME_MAX_EXPORT_WIDTH", 4096),
-        max_export_height=_env_positive_int("FINDME_MAX_EXPORT_HEIGHT", 2160),
+        max_export_width=_env_positive_int("PLAYTRACK_MAX_EXPORT_WIDTH", 4096),
+        max_export_height=_env_positive_int("PLAYTRACK_MAX_EXPORT_HEIGHT", 2160),
         max_export_pixels=_env_positive_int(
-            "FINDME_MAX_EXPORT_PIXELS", 4096 * 2160
+            "PLAYTRACK_MAX_EXPORT_PIXELS", 4096 * 2160
         ),
     )
 

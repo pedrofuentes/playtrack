@@ -27,6 +27,9 @@ def test_run_script_checks_tools_builds_stale_frontend_and_opens_browser() -> No
     assert "'--no-sync'" in script
     assert "127.0.0.1" in script
     assert "Start-Process $AppUrl" in script
+    assert "PLAYTRACK_HOST" in script
+    assert "FINDME_HOST" not in script
+    assert "PlayTrack" in script
 
 
 def test_dev_script_starts_reload_backend_and_vite_and_cleans_up() -> None:
@@ -44,3 +47,12 @@ def test_dev_script_starts_reload_backend_and_vite_and_cleans_up() -> None:
     assert "5173" in script and "8000" in script
     assert "Stop-ProcessTree" in script
     assert "finally" in script
+    assert "PlayTrack" in script
+
+
+def test_unix_dev_script_uses_playtrack_host_and_branding() -> None:
+    script = script_text("dev.sh")
+
+    assert "PLAYTRACK_HOST" in script
+    assert "FINDME_HOST" not in script
+    assert "PlayTrack backend" in script

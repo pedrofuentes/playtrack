@@ -326,7 +326,7 @@ class JobRegistry:
         worker = threading.Thread(
             target=self._worker_loop,
             args=(kind,),
-            name=f"findme-{kind}-worker",
+            name=f"playtrack-{kind}-worker",
             daemon=True,
         )
         self._workers[kind] = worker

@@ -149,7 +149,7 @@ try {
         }
     }
 
-    Write-Host 'Starting the FindMe backend and Vite development server...'
+    Write-Host 'Starting the PlayTrack backend and Vite development server...'
     $backendProcess = Start-Process `
         -FilePath $uv.Source `
         -ArgumentList @('run', '--no-sync', '--extra', 'dev', '--extra', 'locate', 'uvicorn', 'app.main:app', '--reload', '--host', '127.0.0.1', '--port', '8000') `
@@ -166,8 +166,8 @@ try {
     Wait-ForHttp -Url "$BackendUrl/api/health" -Process $backendProcess -ProcessName 'Backend'
     Wait-ForHttp -Url $FrontendUrl -Process $frontendProcess -ProcessName 'Vite'
 
-    Write-Host "FindMe backend: $BackendUrl"
-    Write-Host "FindMe frontend: $FrontendUrl"
+    Write-Host "PlayTrack backend: $BackendUrl"
+    Write-Host "PlayTrack frontend: $FrontendUrl"
     Write-Host 'Press Ctrl+C to stop both development servers.'
     Start-Process $FrontendUrl
 
@@ -184,7 +184,7 @@ try {
     }
 }
 catch {
-    Write-Host "FindMe development mode stopped: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "PlayTrack development mode stopped: $($_.Exception.Message)" -ForegroundColor Red
     exit 1
 }
 finally {

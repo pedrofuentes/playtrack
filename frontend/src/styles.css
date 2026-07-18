@@ -104,13 +104,15 @@ progress { width: 100%; height: 0.45rem; accent-color: var(--mint); }
   backdrop-filter: blur(14px);
 }
 
-.findme-mark {
+.playtrack-mark {
   align-self: stretch;
   display: grid; place-items: center;
   border-right: 1px solid var(--border);
   color: var(--amber);
   font-size: 1.08rem; font-weight: 900; letter-spacing: -0.04em;
 }
+
+.playtrack-mark img { width: 34px; height: 34px; display: block; }
 
 .active-video { min-width: 0; display: flex; align-items: center; gap: 0.65rem; padding: 0 1rem; }
 .active-video strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.84rem; }
@@ -385,7 +387,7 @@ progress { width: 100%; height: 0.45rem; accent-color: var(--mint); }
     overflow: visible;
   }
   .workspace-topbar { position: sticky; top: 0; grid-column: 1; grid-row: 1; grid-template-columns: 46px minmax(0, 1fr) auto; }
-  .findme-mark { border-right: 0; }
+  .playtrack-mark { border-right: 0; }
   .active-video { padding-left: 0.4rem; }
   .active-video > span:not(.status-pill), .status-pill, .shortcut-hint { display: none; }
   .topbar-actions { padding-right: 0.4rem; }

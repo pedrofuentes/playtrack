@@ -1,4 +1,8 @@
-# FindMe — Player-Tracking Virtual Camera App
+# PlayTrack — Player-Tracking Virtual Camera App
+
+> Historical roadmap, rebranded from the project's original FindMe plan. It records the
+> M0–M5 design decisions that led to the current implementation; `README.md` and
+> `AGENTS.md` are authoritative for current commands, configuration, and architecture.
 
 ## Context
 
@@ -35,7 +39,7 @@ Single-user localhost app. One command starts the backend, which serves the buil
 ### Repo layout
 
 ```
-FindMe/
+PlayTrack/
 ├── docs/plan.md                  # this spec (committed for Codex)
 ├── examples/example.mp4          # moved from repo-root `example`
 ├── backend/

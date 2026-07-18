@@ -1,2 +1,1 @@
-"""FindMe backend application package."""
-
+"""PlayTrack backend application package."""

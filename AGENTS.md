@@ -1,7 +1,9 @@
-# FindMe — Agent Guide
+# PlayTrack — Agent Guide
 
 Read this first. It is the canonical agent-facing doc; `CLAUDE.md` just imports it.
-Human docs: `README.md` (setup + user guide), `docs/plan.md` (original spec, M0–M5 roadmap).
+Human docs: `README.md` (setup + user guide), `docs/plan.md` (rebranded original
+M0–M5 roadmap). Dated documents under `docs/superpowers/` retain the old FindMe name
+as historical implementation records; do not treat their branding/config names as current.
 
 ## What this is
 
@@ -28,6 +30,8 @@ frontend/  React + Vite + TypeScript SPA
     PlaybackOverlay.tsx       tracked box + crop window synced to currentTime
     ExportPanel.tsx           dimensions, camera-smoothness slider, export job
     LibraryPanel.tsx          persisted videos/tracks/exports; delete; re-export
+  vite.config.ts              Vite + generateSW PWA config; app-shell-only precache
+  public/brand/               canonical lockup, mark, and install icons
 
 backend/   FastAPI (Python 3.12, uv-managed)
   app/main.py                 routes, WS /ws/jobs/{id} (legacy + delta-v1), serves frontend/dist + SPA fallback
@@ -38,11 +42,19 @@ backend/   FastAPI (Python 3.12, uv-managed)
   app/crop_planner.py         pure NumPy: gap fill, spring smoothing, subpixel crop windows
   app/exporter.py             PyAV decode → cv2.getRectSubPix crop → Lanczos resize → h264+audio
   app/jobs.py                 bounded track/export queues, cancellation, leases, durable state
-  app/library.py              SQLite persistence: data/library/findme.sqlite3 (WAL + FULL sync)
+  app/library.py              SQLite persistence: data/library/playtrack.sqlite3 (WAL + FULL sync)
   app/models/sam2_engine.py   lazy SAM2 image/video engines, device autodetect
   app/models/locate_engine.py LocateAnything-3B (CUDA only), lazy load/unload
 
 scripts/   dev.sh (Mac dev), dev.ps1 + run.ps1 (Windows), fetch_models.py (SAM2 checkpoints)
+
+website/  dependency-free GitHub Pages product site
+  index.html                  semantic product/install/limitations/community content
+  styles.css / site.js        responsive cinematic UI; focus/reduced-motion behavior
+  assets/                     real WebP editor captures + lockup + social preview
+  test-site.mjs               dependency-free structural/link/asset validator
+
+.github/workflows/pages.yml   deploys website/ with official Pages actions
 ```
 
 Runtime dirs (gitignored, never commit): `data/` (uploads, frame caches, library SQLite),
@@ -61,7 +73,12 @@ uv sync --extra dev --extra locate                    # adds transformers for Lo
 
 # Frontend
 cd frontend
-npm install && npm test && npm run build              # vitest + production bundle
+npm install && npm test && npm run typecheck && npm run build
+npm run test:pwa
+
+# Static website
+cd ..
+node website/test-site.mjs
 
 # Run the app
 scripts/dev.sh          # Mac dev: uvicorn --reload :8000 + Vite :5173
@@ -72,26 +89,31 @@ scripts/run.ps1         # Windows: single process serving frontend/dist on :8000
 The backend serves `frontend/dist` when it exists — rebuild the frontend for UI changes
 to reach the running app; there is no hot reload in production mode.
 
+The PWA uses `vite-plugin-pwa@1.3.0`, `generateSW`, and automatic updates. Precache is
+limited to compiled UI and local brand assets. Never add runtime caching for `/api`,
+`/ws`, source video formats, `exports/`, or `data/`; the cached shell must explain that
+the local FastAPI server is required and offer retry when it is unreachable.
+
 ## Configuration (env vars, defaults in `backend/app/config.py`)
 
 | Var | Default | Meaning |
 |---|---|---|
-| `FINDME_HOST` | `127.0.0.1` | bind host in dev.sh/run.ps1; `0.0.0.0` exposes on LAN (origin/host checks, but no authentication) |
-| `FINDME_ALLOWED_HOSTS` | empty | comma-separated extra Host header names accepted by the API boundary |
-| `FINDME_MAX_UPLOAD_BYTES` | `21474836480` (20 GiB) | maximum multipart video upload size, enforced while streaming |
-| `FINDME_DATA_DIR` | `<repo>/data` | uploads, frame caches, library persistence |
-| `FINDME_CHECKPOINTS_DIR` | `<repo>/checkpoints` | SAM2 weights dir |
-| `FINDME_SAM2_CHECKPOINT` / `FINDME_SAM2_CONFIG` | base-plus | checkpoint/config override |
-| `FINDME_SAM2_CROP_SIZE` | `1024` | click-select high-res crop size (source px) |
+| `PLAYTRACK_HOST` | `127.0.0.1` | bind host in dev.sh/run.ps1; `0.0.0.0` exposes on LAN (origin/host checks, but no authentication) |
+| `PLAYTRACK_ALLOWED_HOSTS` | empty | comma-separated extra Host header names accepted by the API boundary |
+| `PLAYTRACK_MAX_UPLOAD_BYTES` | `21474836480` (20 GiB) | maximum multipart video upload size, enforced while streaming |
+| `PLAYTRACK_DATA_DIR` | `<repo>/data` | uploads, frame caches, library persistence |
+| `PLAYTRACK_CHECKPOINTS_DIR` | `<repo>/checkpoints` | SAM2 weights dir |
+| `PLAYTRACK_SAM2_CHECKPOINT` / `PLAYTRACK_SAM2_CONFIG` | base-plus | checkpoint/config override |
+| `PLAYTRACK_SAM2_CROP_SIZE` | `1024` | click-select high-res crop size (source px) |
 | `SAM2_OFFLOAD_VIDEO_TO_CPU` / `SAM2_OFFLOAD_STATE_TO_CPU` | `0` | forced on automatically on MPS |
 | `TRACKING_MAX_DIM` | `2048` | tracking frame-cache resolution (4096 ≈ 2× slower, no accuracy gain — measured) |
-| `FINDME_LOCATE_MODEL` | `nvidia/LocateAnything-3B` | HF model id |
-| `FINDME_LOCATE_REVISION` | pinned commit | exact trusted model-code/weight revision passed to Transformers |
+| `PLAYTRACK_LOCATE_MODEL` | `nvidia/LocateAnything-3B` | HF model id |
+| `PLAYTRACK_LOCATE_REVISION` | pinned commit | exact trusted model-code/weight revision passed to Transformers |
 | `LOCATE_MAX_INPUT_DIM` | `2500` | downscale bound for text grounding |
 | `LOCATE_RESCUE_ENABLED` / `LOCATE_RESCUE_AFTER` / `LOCATE_RESCUE_MIN_SCORE` | `1` / `15` / `0.5` | occlusion-rescue tuning |
-| `FINDME_FFMPEG` / `FINDME_FFPROBE` | `ffmpeg`/`ffprobe` | binary paths |
-| `FINDME_MAX_EXPORT_WIDTH` / `FINDME_MAX_EXPORT_HEIGHT` | `4096` / `2160` | maximum output dimensions |
-| `FINDME_MAX_EXPORT_PIXELS` | `8847360` | maximum output pixels per frame |
+| `PLAYTRACK_FFMPEG` / `PLAYTRACK_FFPROBE` | `ffmpeg`/`ffprobe` | binary paths |
+| `PLAYTRACK_MAX_EXPORT_WIDTH` / `PLAYTRACK_MAX_EXPORT_HEIGHT` | `4096` / `2160` | maximum output dimensions |
+| `PLAYTRACK_MAX_EXPORT_PIXELS` | `8847360` | maximum output pixels per frame |
 
 ## Device matrix
 
@@ -120,9 +142,11 @@ are **non-commercial** (NVIDIA research license) — keep this app personal-use.
   dependency; `[tool.hatch.metadata] allow-direct-references = true` is required.
 - Smoothing API accepts legacy keys (`windowSec`→tau; `deadZonePx`/`maxVelPxPerFrame`
   ignored) — preserve that compatibility.
-- Library persistence is a clean-break SQLite format. Legacy `videos.json`,
-  `exports.json`, and `tracks/*.json` files are intentionally ignored and must not be
-  imported implicitly.
+- The canonical library is `data/library/playtrack.sqlite3`. If it is absent and only
+  `findme.sqlite3` exists, startup copies the legacy database with SQLite's backup API,
+  checks integrity, and atomically installs the canonical copy. Preserve the legacy
+  database and WAL/SHM sidecars as recovery backups; canonical wins on later starts.
+  Legacy `videos.json`, `exports.json`, and `tracks/*.json` remain intentionally ignored.
 - Tracking and export each have one daemon worker and two queued slots. Queue overload
   is a retryable HTTP 429. Queued/running jobs hold resource leases through their
   durable-save callback; deletion must continue to honor those leases.
@@ -137,7 +161,7 @@ are **non-commercial** (NVIDIA research license) — keep this app personal-use.
 
 - **MPS long-video crash**: SAM2's stacked video tensor exceeds MPSGraph's INT_MAX above
   ~750 frames; `sam2_engine.py` force-enables CPU offload on MPS. Don't remove it.
-- **Small players**: click-select runs SAM2 on a `FINDME_SAM2_CROP_SIZE` window around
+- **Small players**: click-select runs SAM2 on a `PLAYTRACK_SAM2_CROP_SIZE` window around
   the click, not the full panorama (a 4096-wide frame resized to SAM2's internal 1024²
   leaves a player ~15 px). Don't "simplify" it to full-frame.
 - **Identity switch**: when players physically collide, SAM2 can exit the collision
@@ -160,15 +184,29 @@ M0–M7 are complete and committed (git log is authoritative). Not yet done:
    select→track→export, CUDA tracking speed.
 2. **Multi-anchor track splicing** (proposed, top priority for contact sports): re-anchor
    the track after an identity switch and merge segments into one exportable track.
-3. Track-health summary UI (lost-segment ranges, jump-to-frame).
-4. Network-exposure hardening (auth token, restrict path registration) if LAN use
+3. Network-exposure hardening (auth token, restrict path registration) if LAN use
    becomes permanent.
-5. PyInstaller one-folder packaging (deferred stretch goal).
+4. PyInstaller one-folder packaging (deferred stretch goal).
+
+## Website and release assets
+
+- `website/` is deployed as-is at `https://pf.run/playtrack/`; all runtime assets must
+  remain relative and local. No analytics, cookies, remote fonts, or third-party runtime
+  resources. Do not add a `CNAME`; Pages is already configured for the project path.
+- Product screenshots are authorized frames from `examples/example.mp4`, captured on
+  2026-07-18 at 1440×960 against an alternate-port backend and a temporary SQLite-backup
+  copy of the library. They show frame 602 selection, the saved 117-frame completed track,
+  and output framing. WebP files in `website/assets/` are the committed canonical captures.
+- After site changes run `node website/test-site.mjs`, preview desktop and mobile widths,
+  and check keyboard focus, reduced motion, asset loading, overflow, and `404.html`.
+- Pages deploys only from `.github/workflows/pages.yml` using configure/upload/deploy
+  Pages actions. Release verification must wait for that workflow and smoke-test the live
+  HTTPS URL, its relative assets, GitHub links, issue-form links, and mobile layout.
 
 ## Verification expectations
 
-Before claiming work done: run both suites (backend weight-free + frontend) and
-`npm run build`. For behavior changes, exercise the real flow against
+Before claiming work done: run the backend weight-free suite, frontend tests/typecheck/
+build, and `node website/test-site.mjs`. For behavior changes, exercise the real flow against
 `examples/example.mp4` through the HTTP API (register → select → track → export), check
 outputs with `ffprobe`, and inspect frames/overlays visually where relevant. Report
 what was actually run and observed.

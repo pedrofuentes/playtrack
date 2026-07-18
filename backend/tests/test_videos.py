@@ -15,6 +15,12 @@ from app.main import create_app
 from app.videos import InvalidVideoError, VideoStore
 
 
+def test_api_metadata_uses_playtrack_name(video_store: VideoStore) -> None:
+    app = create_app(video_store)
+
+    assert app.title == "PlayTrack"
+
+
 def test_registers_local_video_and_returns_metadata(
     client: TestClient, tiny_video: Path
 ) -> None:
@@ -185,7 +191,7 @@ def test_upload_rejects_impossible_content_length_before_parsing(
         response = client.post(
             "/api/videos",
             headers={
-                "Content-Type": "multipart/form-data; boundary=findme",
+                "Content-Type": "multipart/form-data; boundary=playtrack",
                 "Content-Length": str(10 + 64 * 1024 + 1),
             },
             content=b"",

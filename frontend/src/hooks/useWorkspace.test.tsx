@@ -133,6 +133,16 @@ afterEach(() => {
 })
 
 describe('useWorkspace', () => {
+  it('reports a distinct backend-unavailable state for network startup failures', async () => {
+    apiMocks.registerVideo.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+
+    const root = await mountController()
+
+    expect(controller?.backendUnavailable).toBe(true)
+    expect(controller?.openError).toBe('The PlayTrack server is not responding.')
+    await act(async () => root.unmount())
+  })
+
   it('advances selection through tracking, review, framing, and export locking', async () => {
     let onTrackUpdate: ((update: TrackJobUpdate) => void) | null = null
     apiMocks.watchTrackJob.mockImplementation((_id, onUpdate) => {

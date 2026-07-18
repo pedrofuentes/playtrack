@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PlayTrack — A local virtual camera for panoramic sports video</title>
+    <meta name="description" content="Select a player, track them with SAM 2, and export a smooth conventional crop from panoramic sports footage—locally on your computer.">
+    <meta name="theme-color" content="#080b0f">
+    <link rel="canonical" href="https://pf.run/playtrack/">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="PlayTrack — Your player. Your camera.">
+    <meta property="og:description" content="Turn panoramic sports footage into a smooth player-following video, locally.">
+    <meta property="og:url" content="https://pf.run/playtrack/">
+    <meta property="og:image" content="https://pf.run/playtrack/assets/social-preview.jpg">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="PlayTrack framing a hockey player inside panoramic rink footage">
+    <meta name="twitter:card" content="summary_large_image">
+    <link rel="icon" href="assets/playtrack-lockup.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="styles.css">
+    <script src="site.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <a class="brand" href="./" aria-label="PlayTrack home">
+        <img src="assets/playtrack-lockup.svg" alt="PlayTrack">
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+      <nav id="site-nav" aria-label="Main navigation">
+        <a href="#workflow">How it works</a>
+        <a href="#install">Install</a>
+        <a href="#limitations">Limits</a>
+        <a class="nav-cta" href="https://github.com/pedrofuentes/playtrack">View on GitHub</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy reveal">
+          <p class="eyebrow">Open source · local first · built for panoramic footage</p>
+          <h1 id="hero-title">Your player.<br><span>Your camera.</span></h1>
+          <p class="hero-lede">PlayTrack turns a fixed panoramic sports recording into a smooth, conventional video that follows the player you choose.</p>
+          <div class="hero-actions">
+            <a class="button primary" href="https://github.com/pedrofuentes/playtrack">Get PlayTrack</a>
+            <a class="button secondary" href="#workflow">See the workflow</a>
+          </div>
+          <ul class="hero-notes" aria-label="Key product traits">
+            <li>Footage stays local</li>
+            <li>Click-based selection on Windows and macOS</li>
+            <li>Exports standard H.264 MP4</li>
+          </ul>
+        </div>
+        <div class="hero-visual reveal">
+          <div class="hero-glow" aria-hidden="true"></div>
+          <img src="assets/export-framing.webp" alt="PlayTrack output framing controls following a hockey player in panoramic rink footage" width="1440" height="960">
+          <div class="visual-badge"><span></span> Local processing</div>
+        </div>
+      </section>
+
+      <section id="problem" class="section problem reveal" aria-labelledby="problem-title">
+        <p class="eyebrow">The wide-angle problem</p>
+        <div class="split-heading">
+          <h2 id="problem-title">The whole rink is useful.<br>The whole rink is not a highlight.</h2>
+          <p>Panoramic cameras capture every play, but leave the subject tiny and the viewer doing the searching. PlayTrack keeps the source wide and makes the final cut intentional.</p>
+        </div>
+        <div class="problem-strip" aria-label="Panorama transformed into focused output">
+          <span>4096 × 1024 source</span><i aria-hidden="true"></i><span>player-aware crop</span><i aria-hidden="true"></i><strong>1080p or 720p output</strong>
+        </div>
+      </section>
+
+      <section id="workflow" class="section workflow" aria-labelledby="workflow-title">
+        <div class="section-heading reveal">
+          <p class="eyebrow">Three deliberate steps</p>
+          <h2 id="workflow-title">Select. Track. Export.</h2>
+          <p>PlayTrack keeps the model work visible and the camera choices in your hands.</p>
+        </div>
+        <ol class="step-grid">
+          <li class="reveal"><span>01</span><h3>Select the player</h3><p>Scrub to a clear frame and click the player. On a CUDA machine, optional text grounding can find candidates from a description.</p></li>
+          <li class="reveal"><span>02</span><h3>Track the movement</h3><p>SAM 2 propagates the selection through your chosen range. Review coverage and lost frames before framing.</p></li>
+          <li class="reveal"><span>03</span><h3>Shape the camera</h3><p>Choose dimensions, zoom, and smoothness. Preview the crop path, then export an H.264 MP4 with source audio.</p></li>
+        </ol>
+      </section>
+
+      <section id="screenshots" class="section product" aria-labelledby="screenshots-title">
+        <div class="section-heading reveal">
+          <p class="eyebrow">The real editor</p>
+          <h2 id="screenshots-title">Built around the footage.</h2>
+          <p>These screens come from the included development clip at frame 602 and a real completed track—no mock data.</p>
+        </div>
+        <div class="shot-stack">
+          <figure class="reveal">
+            <img src="assets/editor-selection.webp" alt="PlayTrack editor after click-selecting a hockey player and naming the selection White 19" width="1440" height="960" loading="lazy">
+            <figcaption><span>01 · Select</span><strong>A high-resolution local crop keeps small players selectable.</strong></figcaption>
+          </figure>
+          <figure class="reveal">
+            <img src="assets/track-review.webp" alt="PlayTrack track review showing Pedro at 100 percent coverage with zero lost frames" width="1440" height="960" loading="lazy">
+            <figcaption><span>02 · Review</span><strong>Coverage and lost-frame health stay visible before export.</strong></figcaption>
+          </figure>
+          <figure class="reveal">
+            <img src="assets/export-framing.webp" alt="PlayTrack output framing view with 720p, zoom, smoothness, and crop-window controls" width="1440" height="960" loading="lazy">
+            <figcaption><span>03 · Frame</span><strong>The crop window responds before you spend time exporting.</strong></figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section id="benefits" class="section benefits" aria-labelledby="benefits-title">
+        <div class="section-heading reveal">
+          <p class="eyebrow">Why PlayTrack</p>
+          <h2 id="benefits-title">A focused tool, not a cloud platform.</h2>
+        </div>
+        <div class="benefit-grid">
+          <article class="reveal"><span aria-hidden="true">⌂</span><h3>Private by architecture</h3><p>Videos, frame caches, tracks, and exports stay on the machine running PlayTrack.</p></article>
+          <article class="reveal"><span aria-hidden="true">◎</span><h3>Made for small subjects</h3><p>Click selection uses a high-resolution source crop instead of shrinking the whole panorama first.</p></article>
+          <article class="reveal"><span aria-hidden="true">⌁</span><h3>Camera motion with restraint</h3><p>Gap filling, spring smoothing, and acceleration limits produce a usable crop path—not a box that jitters frame to frame.</p></article>
+          <article class="reveal"><span aria-hidden="true">↗</span><h3>Normal output</h3><p>PyAV and subpixel OpenCV crops produce a standard H.264 MP4 ready for editing or sharing.</p></article>
+        </div>
+      </section>
+
+      <section id="hardware" class="section hardware" aria-labelledby="hardware-title">
+        <div class="section-heading reveal">
+          <p class="eyebrow">Where it runs</p>
+          <h2 id="hardware-title">Local models need local hardware.</h2>
+          <p>Windows with NVIDIA CUDA is the primary target. macOS is supported for click-based use and development.</p>
+        </div>
+        <div class="table-wrap reveal">
+          <table>
+            <thead><tr><th>System</th><th>SAM 2 tracking</th><th>Text selection</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><th>Windows + NVIDIA CUDA</th><td><span class="status good">Primary</span></td><td>Optional</td><td>CUDA Turing uses base-plus/fp16; Ampere+ can use large/bf16.</td></tr>
+              <tr><th>macOS + Apple Silicon</th><td><span class="status good">Supported</span></td><td>Unavailable</td><td>MPS with automatic CPU offload for long videos.</td></tr>
+              <tr><th>CPU only</th><td><span class="status slow">Slow</span></td><td>Unavailable</td><td>Small SAM 2 model; useful for compatibility, not fast turnaround.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="hardware-note reveal">RTX 2080 Ti support is implemented but still awaiting real-hardware verification; PlayTrack does not claim a measured 11 GB VRAM ceiling yet.</p>
+      </section>
+
+      <section id="install" class="section install" aria-labelledby="install-title">
+        <div class="section-heading reveal">
+          <p class="eyebrow">Install from source</p>
+          <h2 id="install-title">One local app. Two supported paths.</h2>
+          <p>PlayTrack is currently a developer-friendly source install. You will need Git, Python 3.12, uv, Node.js, and FFmpeg.</p>
+        </div>
+        <div class="install-grid">
+          <article class="code-card reveal">
+            <div><span class="platform">Windows</span><span>PowerShell</span></div>
+            <pre><code>git clone https://github.com/pedrofuentes/playtrack
+cd playtrack
+python scripts/fetch_models.py
+.\scripts\run.ps1</code></pre>
+            <p>The launcher checks tools, creates the backend environment, builds the frontend when needed, and opens PlayTrack.</p>
+          </article>
+          <article class="code-card reveal">
+            <div><span class="platform">macOS</span><span>Terminal</span></div>
+            <pre><code>git clone https://github.com/pedrofuentes/playtrack
+cd playtrack
+(cd backend &amp;&amp; uv sync --extra dev)
+(cd frontend &amp;&amp; npm install)
+python3 scripts/fetch_models.py
+scripts/dev.sh</code></pre>
+            <p>The development launcher runs FastAPI on port 8000 and Vite on port 5173.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="usage" class="section usage" aria-labelledby="usage-title">
+        <div class="section-heading reveal">
+          <p class="eyebrow">First run</p>
+          <h2 id="usage-title">From panorama to player cut.</h2>
+        </div>
+        <ol class="usage-list reveal">
+          <li><span>1</span><div><h3>Open footage</h3><p>Upload an MP4 or register a path already on the local server.</p></div></li>
+          <li><span>2</span><div><h3>Set a useful range</h3><p>Mark in/out points so the model only tracks the segment you need.</p></div></li>
+          <li><span>3</span><div><h3>Choose and track</h3><p>Pause on a clear frame, click the player, give the track a name, and start SAM 2.</p></div></li>
+          <li><span>4</span><div><h3>Review and export</h3><p>Check track health, tune the camera, and download the finished MP4.</p></div></li>
+        </ol>
+      </section>
+
+      <section id="limitations" class="section limitations" aria-labelledby="limitations-title">
+        <div class="section-heading reveal">
+          <p class="eyebrow">Know before you run</p>
+          <h2 id="limitations-title">Honest constraints beat surprise failures.</h2>
+        </div>
+        <div class="limit-grid">
+          <article class="reveal"><h3>Tracking is compute-heavy</h3><p>The 930-frame example takes about 20 minutes on Apple Silicon. Short ranges are the fastest way to iterate.</p></article>
+          <article class="reveal"><h3>Collisions can switch identity</h3><p>When players overlap, SAM 2 can emerge following the wrong person without reporting lost frames. Multi-anchor splicing is the planned fix.</p></article>
+          <article class="reveal"><h3>Local means unauthenticated</h3><p>The default binds to localhost. LAN exposure has origin and host checks but no login; do not expose it to the public internet.</p></article>
+          <article class="reveal"><h3>Optional model license</h3><p>LocateAnything weights are covered by NVIDIA’s research license and are non-commercial. Text grounding is for personal/research use.</p></article>
+        </div>
+      </section>
+
+      <section id="community" class="section community reveal" aria-labelledby="community-title">
+        <div>
+          <p class="eyebrow">Build the camera you wanted</p>
+          <h2 id="community-title">PlayTrack is MIT licensed and open to careful contributions.</h2>
+          <p>Found a reproducible tracking edge case? Have an idea for the next editing pass? Bring the clip details and hardware context.</p>
+        </div>
+        <div class="community-actions">
+          <a class="button primary" href="https://github.com/pedrofuentes/playtrack">Explore the repository</a>
+          <a href="https://github.com/pedrofuentes/playtrack/issues/new?template=bug_report.yml">Report a bug ↗</a>
+          <a href="https://github.com/pedrofuentes/playtrack/issues/new?template=feature_request.yml">Request a feature ↗</a>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <img src="assets/playtrack-lockup.svg" alt="PlayTrack" width="194" height="46">
+      <p>Created by Pedro Fuentes · 2026 · MIT License</p>
+      <nav aria-label="Footer navigation"><a href="https://github.com/pedrofuentes/playtrack">GitHub</a><a href="https://github.com/pedrofuentes/playtrack/issues">Issues</a><a href="#main">Back to top</a></nav>
+    </footer>
+  </body>
+</html>

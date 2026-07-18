@@ -13,9 +13,9 @@ def make_frontend_dist(tmp_path: Path) -> Path:
     assets = frontend_dist / "assets"
     assets.mkdir(parents=True)
     (frontend_dist / "index.html").write_text(
-        "<!doctype html><title>FindMe SPA</title>", encoding="utf-8"
+        "<!doctype html><title>PlayTrack SPA</title>", encoding="utf-8"
     )
-    (assets / "app.js").write_text("console.log('FindMe')", encoding="utf-8")
+    (assets / "app.js").write_text("console.log('PlayTrack')", encoding="utf-8")
     return frontend_dist
 
 
@@ -29,9 +29,9 @@ def test_built_frontend_serves_assets_and_spa_deep_links(tmp_path: Path) -> None
         deep_link = client.get("/tracks/example")
 
     assert root.status_code == 200
-    assert "FindMe SPA" in root.text
+    assert "PlayTrack SPA" in root.text
     assert asset.status_code == 200
-    assert asset.text == "console.log('FindMe')"
+    assert asset.text == "console.log('PlayTrack')"
     assert deep_link.status_code == 200
     assert deep_link.text == root.text
 

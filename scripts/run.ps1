@@ -7,8 +7,8 @@ Set-StrictMode -Version Latest
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $BackendDir = Join-Path $RepoRoot 'backend'
 $FrontendDir = Join-Path $RepoRoot 'frontend'
-# FINDME_HOST=0.0.0.0 exposes the app to the local network (origin/host checks, no authentication).
-$BindHost = if ($env:FINDME_HOST) { $env:FINDME_HOST } else { '127.0.0.1' }
+# PLAYTRACK_HOST=0.0.0.0 exposes the app to the local network (origin/host checks, no authentication).
+$BindHost = if ($env:PLAYTRACK_HOST) { $env:PLAYTRACK_HOST } else { '127.0.0.1' }
 $BrowseHost = if ($BindHost -eq '0.0.0.0') { '127.0.0.1' } else { $BindHost }
 $AppUrl = "http://${BrowseHost}:8000"
 $backendProcess = $null
@@ -207,7 +207,7 @@ try {
         Write-Host 'Using the current frontend/dist build.'
     }
 
-    Write-Host "Starting FindMe at $AppUrl ..."
+    Write-Host "Starting PlayTrack at $AppUrl ..."
     $backendProcess = Start-Process `
         -FilePath $uv.Source `
         -ArgumentList @('run', '--no-sync', '--extra', 'locate', 'uvicorn', 'app.main:app', '--host', $BindHost, '--port', '8000') `
@@ -216,9 +216,9 @@ try {
         -NoNewWindow
 
     Wait-ForHttp -Url "$AppUrl/api/health" -Process $backendProcess
-    Write-Host 'FindMe is ready. Opening your default browser.'
+    Write-Host 'PlayTrack is ready. Opening your default browser.'
     Start-Process $AppUrl
-    Write-Host 'Press Ctrl+C to stop FindMe.'
+    Write-Host 'Press Ctrl+C to stop PlayTrack.'
 
     Wait-Process -Id $backendProcess.Id
     $backendProcess.Refresh()
@@ -227,7 +227,7 @@ try {
     }
 }
 catch {
-    Write-Host "FindMe could not start: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "PlayTrack could not start: $($_.Exception.Message)" -ForegroundColor Red
     exit 1
 }
 finally {

@@ -104,7 +104,7 @@ def _verify_checksum(path: Path, expected: str) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Download official Meta SAM 2.1 checkpoints for FindMe."
+        description="Download official Meta SAM 2.1 checkpoints for PlayTrack."
     )
     parser.add_argument(
         "--model",

@@ -1,89 +1,71 @@
-# FindMe
+<p align="center">
+  <img src="frontend/public/brand/playtrack-lockup.svg" width="360" alt="PlayTrack">
+</p>
 
-FindMe turns panoramic sports footage into a conventional cropped video that
-follows one player. Select the player by clicking them, or use a text prompt on
-a CUDA machine; SAM 2 tracks the selection, FindMe previews a smoothed crop,
-and PyAV exports an H.264 MP4 with audio.
+<p align="center">
+  A local virtual camera for panoramic sports footage.<br>
+  Select a player, track them with SAM 2, and export a smooth H.264 crop.
+</p>
 
-The primary deployment target is Windows with an NVIDIA RTX 2080 Ti. macOS is
-supported for development and click-to-select/tracking through MPS;
-LocateAnything text selection is CUDA-only.
+<p align="center">
+  <a href="https://pf.run/playtrack/">Website</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="https://github.com/pedrofuentes/playtrack/issues">Issues</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a>
+</p>
 
-Working on this repo with a coding agent (Claude Code, Codex, or others)? Start
-with [AGENTS.md](AGENTS.md) — architecture map, commands, conventions, and
-known pitfalls.
+## What PlayTrack does
 
-## Windows quick start (RTX 2080 Ti)
+PlayTrack turns a fixed panoramic recording into a conventional video that follows
+one player. Click a player on a clear frame—or describe them on a CUDA machine—then
+let SAM 2 propagate the selection through a chosen range. Review track health, tune
+the crop dimensions, zoom, and camera smoothness, and export an H.264 MP4 with audio.
+
+The application is single-user and local-first. Videos, frame caches, tracks, and
+exports stay on the computer running FastAPI. The installable PWA caches only the
+compiled UI and brand assets; video processing still requires the local backend.
+
+Windows with NVIDIA CUDA is the primary target. macOS/Apple Silicon supports click
+selection and tracking through MPS. Optional LocateAnything text grounding is
+CUDA-only and its weights are non-commercial under NVIDIA's research license.
+
+## Quick start
+
+### Windows + NVIDIA CUDA
 
 Requirements:
 
-- Windows 10 or newer and a current NVIDIA driver.
-- [Node.js 20 or newer](https://nodejs.org/en/download) with npm.
-- `ffmpeg` and `ffprobe` on `PATH`; start at the
-  [official FFmpeg download page](https://ffmpeg.org/download.html).
-- Git, to install the official SAM 2 dependency referenced by the backend.
+- Windows 10 or newer with a current NVIDIA driver.
+- [uv](https://docs.astral.sh/uv/getting-started/installation/), Git, and Node.js 20+.
+- `ffmpeg` and `ffprobe` on `PATH`.
 
-Open PowerShell in the repository root. Install
-[uv](https://docs.astral.sh/uv/getting-started/installation/) if necessary,
-then restart PowerShell so the updated `PATH` is visible:
-
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-
-Let uv install Python 3.12 and create the backend environment with development
-and LocateAnything dependencies:
+From PowerShell in the repository root:
 
 ```powershell
 uv python install 3.12
 uv sync --project backend --python 3.12 --extra dev --extra locate
-```
 
-Replace the generic Torch packages in that environment with the official CUDA
-12.1 wheels. PyTorch also publishes newer CUDA indexes; use one supported by
-your installed driver if you intentionally move beyond the versions pinned by
-this project.
-
-```powershell
 uv pip install --python backend\.venv\Scripts\python.exe --reinstall `
   torch==2.5.1 torchvision==0.20.1 `
   --index-url https://download.pytorch.org/whl/cu121
-```
 
-Download the default SAM 2.1 base-plus checkpoint, then launch FindMe:
-
-```powershell
 backend\.venv\Scripts\python.exe scripts\fetch_models.py
 powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1
 ```
 
-`run.ps1` checks uv, Node, and npm; installs frontend packages when necessary;
-rebuilds `frontend/dist` only when it is missing or older than its inputs;
-starts the backend at <http://127.0.0.1:8000>; waits for its health endpoint;
-and opens the default browser. Press Ctrl+C in its PowerShell window to stop
-the process tree it started.
+`run.ps1` checks the toolchain, installs/builds the frontend when needed, starts
+PlayTrack at <http://127.0.0.1:8000>, waits for health, and opens the browser.
+The first text-selection request downloads roughly 7.7 GB of LocateAnything weights.
 
-The first text-selection request downloads approximately 7.7 GB of
-`nvidia/LocateAnything-3B` weights from Hugging Face. SAM 2 works without its
-optional compiled CUDA extension, so this setup does not require a Visual
-Studio C++ build toolchain.
-
-### Windows development mode
-
-After completing the setup above, run:
+For development with FastAPI reload and Vite hot reload:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\dev.ps1
 ```
 
-This starts uvicorn with reload at <http://127.0.0.1:8000> and Vite at
-<http://127.0.0.1:5173>, opens the Vite URL, and stops both process trees when
-either server exits or the script is interrupted.
+### macOS + Apple Silicon
 
-## macOS development quick start
-
-Install uv, Node.js 20+, and FFmpeg using your preferred package manager, then
-from the repository root run:
+Install uv, Node.js 20+, Git, and FFmpeg, then run:
 
 ```bash
 uv python install 3.12
@@ -93,141 +75,124 @@ backend/.venv/bin/python scripts/fetch_models.py
 ./scripts/dev.sh
 ```
 
-Open <http://127.0.0.1:5173>. SAM 2 uses MPS
-when available. LocateAnything is intentionally not installed, its prompt UI
-is hidden, and `POST /api/select/text` returns 501 on non-CUDA hosts.
+Open <http://127.0.0.1:5173>. LocateAnything is intentionally omitted: the text
+selection UI is hidden and `POST /api/select/text` returns 501 on non-CUDA hosts.
 
-## User guide
+## Use PlayTrack
 
-1. Put a source video at `examples/example.mp4` before launch (no example clip
-   ships with the repo — `examples/*.mp4` is gitignored). The UI opens that path
-   automatically when present, and you can also upload a video or open any
-   server path from the Open video panel. Sources must use a constant frame rate;
-   variable-frame-rate clips are rejected at registration so frame-indexed tracking
-   and export cannot silently drift.
-2. Scrub to a clear frame. Click the player for a SAM 2 mask. On CUDA, you can
-   instead describe the player—for example, “the player in the white jersey”—
-   and click one of the pink candidate boxes to confirm it.
-3. Choose **Track this player**. The overlay fills in while forward and backward
-   SAM 2 propagation runs, and stays synchronized while you play or scrub.
-4. When tracking completes, choose 1920×1080, 1280×720, or custom even output
-   dimensions. Adjust zoom and smoothing while previewing the crop rectangle.
-5. Choose **Export video**, wait for the progress bar, then use the download
-   link. Completed MP4 files are also stored in the ignored `exports/` folder.
+1. Open a constant-frame-rate sports video by upload or server path. If
+   `examples/example.mp4` exists, PlayTrack opens it automatically. No footage ships
+   with the repository; `examples/*.mp4` is gitignored.
+2. Mark a useful in/out range, scrub to a clear frame, and click the player. On CUDA,
+   you can instead enter a description and confirm one of the candidate boxes.
+3. Name the player and start tracking. The overlay fills as SAM 2 propagates forward
+   and backward from the anchor.
+4. Review coverage and lost-frame ranges. Choose **Set framing** when the track is ready.
+5. Select 1080p, 720p, or custom even dimensions; adjust zoom and camera smoothness;
+   preview the crop window; then export and download the MP4.
 
-If the tracker switches to another player, scrub to a later frame where the
-correct player is distinct, click that player again, and start a new track from
-that anchor.
+The library persists sources, named player tracks, jobs, and exports across restarts.
+Registered source files are never deleted by PlayTrack. Uploaded copies are deleted
+only through the library and only from `data/uploads/`.
 
-## Runtime configuration
+## Install the PWA
+
+Build the frontend and run the single-process backend:
+
+```bash
+cd frontend && npm run build
+cd ../backend && uv run uvicorn app.main:app --port 8000
+```
+
+Open <http://127.0.0.1:8000> in a PWA-capable browser and use its install action.
+The installed shell updates automatically. If FastAPI is stopped, the cached shell
+explains how to restart the server and provides a retry action. The service worker
+does not runtime-cache `/api`, `/ws`, source videos, exports, or tracking data.
+
+## Configuration
+
+Defaults live in `backend/app/config.py`.
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `TRACKING_MAX_DIM` | `2048` | Maximum dimension of SAM 2 tracking-cache frames. |
-| `SAM2_OFFLOAD_VIDEO_TO_CPU` | `false` | Keep decoded tracking frames in system memory. |
-| `SAM2_OFFLOAD_STATE_TO_CPU` | `false` | Keep SAM 2 propagation state in system memory. |
-| `LOCATE_MAX_INPUT_DIM` | `2500` | Maximum LocateAnything input dimension before rescaling. |
-| `LOCATE_RESCUE_ENABLED` | `true` | Enable CUDA occlusion rescue when compatible weights exist. |
-| `LOCATE_RESCUE_AFTER` | `15` | Consecutive lost frames before rescue is attempted. |
-| `LOCATE_RESCUE_MIN_SCORE` | `0.5` | Minimum rescue-candidate score. |
+| `PLAYTRACK_HOST` | `127.0.0.1` | Launcher bind host; `0.0.0.0` exposes PlayTrack on the LAN without authentication. |
+| `PLAYTRACK_ALLOWED_HOSTS` | empty | Comma-separated extra Host header names. |
+| `PLAYTRACK_DATA_DIR` | `<repo>/data` | Uploads, frame caches, and SQLite library. |
+| `PLAYTRACK_CHECKPOINTS_DIR` | `<repo>/checkpoints` | SAM 2 checkpoint directory. |
+| `PLAYTRACK_SAM2_CHECKPOINT` | base-plus checkpoint | Checkpoint override. |
+| `PLAYTRACK_SAM2_CONFIG` | base-plus config | SAM 2 model config override. |
+| `PLAYTRACK_SAM2_CROP_SIZE` | `1024` | High-resolution click-selection crop in source pixels. |
+| `PLAYTRACK_LOCATE_MODEL` | `nvidia/LocateAnything-3B` | Optional text-grounding model ID. |
+| `PLAYTRACK_LOCATE_REVISION` | pinned commit | Trusted model-code/weight revision. |
+| `PLAYTRACK_FFMPEG` / `PLAYTRACK_FFPROBE` | `ffmpeg` / `ffprobe` | Video tool binaries. |
+| `PLAYTRACK_MAX_UPLOAD_BYTES` | `21474836480` | Streaming upload limit (20 GiB). |
+| `PLAYTRACK_MAX_EXPORT_WIDTH` / `PLAYTRACK_MAX_EXPORT_HEIGHT` | `4096` / `2160` | Output dimension bounds. |
+| `PLAYTRACK_MAX_EXPORT_PIXELS` | `8847360` | Output pixels per frame. |
+| `TRACKING_MAX_DIM` | `2048` | Maximum tracking-cache frame dimension. |
+| `SAM2_OFFLOAD_VIDEO_TO_CPU` / `SAM2_OFFLOAD_STATE_TO_CPU` | `0` | SAM 2 memory offload; forced on MPS. |
+| `LOCATE_MAX_INPUT_DIM` | `2500` | Text-grounding downscale bound. |
+| `LOCATE_RESCUE_ENABLED` / `LOCATE_RESCUE_AFTER` / `LOCATE_RESCUE_MIN_SCORE` | `1` / `15` / `0.5` | Occlusion-rescue controls. |
 
-In PowerShell, set a value for the current session before starting FindMe:
+This release is a clean environment-variable rename: obsolete `FINDME_*` settings are
+not accepted. Unbranded `SAM2_*`, `LOCATE_*`, and `TRACKING_MAX_DIM` settings remain.
 
-```powershell
-$env:TRACKING_MAX_DIM = '4096'
-.\scripts\run.ps1
+### Library migration
+
+The canonical library is `data/library/playtrack.sqlite3` with WAL journaling and full
+synchronous writes. On first startup, when only `findme.sqlite3` exists, PlayTrack:
+
+1. copies it with SQLite's backup API (including committed WAL records),
+2. validates the copy with `PRAGMA integrity_check`, and
+3. atomically installs `playtrack.sqlite3`.
+
+The legacy database and sidecars are retained as recovery backups. Later starts always
+prefer the canonical database. Legacy JSON catalogs remain intentionally ignored.
+
+## Architecture
+
+```text
+frontend/   React + Vite + TypeScript editor + generateSW PWA
+backend/    FastAPI + SAM 2 + LocateAnything + PyAV/OpenCV
+website/    Dependency-free static product site for GitHub Pages
+scripts/    macOS/Windows launchers and model fetcher
 ```
 
-## Troubleshooting
-
-### Long videos on Apple MPS
-
-The SAM 2 video wrapper automatically offloads video frames and propagation
-state to CPU on MPS, even when the two offload environment variables are not
-set. This avoids the tensor-size limit that otherwise appears on longer clips;
-tracking will use more system memory and can take several minutes.
-
-### Small players or tracking memory pressure
-
-`TRACKING_MAX_DIM=2048` halves a 4096×1024 panorama before SAM 2 sees it. Raise
-the value to `4096` when small players need more detail. Higher values improve
-subject resolution but increase frame-cache size, system RAM, GPU/MPS memory,
-and propagation time. Lower it if tracking runs out of memory.
-
-### The box switches to another player
-
-SAM 2 can switch identity when players overlap, collide, or wear very similar
-uniforms. Find a clean frame after the collision, click the intended player,
-and run **Track this player** again to re-anchor. FindMe does not yet splice a
-manual correction into an existing completed track.
-
-### LocateAnything is hidden or returns 501
-
-LocateAnything is disabled without NVIDIA CUDA or when the `locate` extra is
-not installed. Re-run `uv sync --project backend --extra dev --extra locate`
-on the Windows machine, then reinstall the cu121 Torch wheels as shown above.
-On an 11 GB 2080 Ti, FindMe unloads LocateAnything before SAM 2 propagation
-and unloads SAM 2 before a rescue query so both models are not resident at the
-same time.
-
-NVIDIA licenses the LocateAnything weights for non-commercial research use
-only. FindMe's text selection is therefore intended for personal/research use;
-review NVIDIA's model license before using or redistributing the weights.
-
-### Occlusion rescue does not activate
-
-NVIDIA's currently published `nvidia/LocateAnything-3B` checkpoint does not
-support visual-prompt inference. The rescue plumbing is implemented but remains
-dormant until NVIDIA releases visual-prompt-capable weights. Text-prompt player
-selection works independently of rescue.
-
-### Native Windows model loading fails
-
-LocateAnything's lightweight Transformers inference path is the intended
-native-Windows setup, but NVIDIA primarily documents Linux environments. If
-the remote model code fails on native Windows, run the same backend under
-WSL2; the browser UI and local API contract are unchanged.
-
-## Runtime boundaries
-
-FindMe rejects cross-site browser requests and unexpected Host headers. The default
-20 GiB multipart upload limit is enforced while streaming, and exports are limited to
-4096×2160 (8,847,360 pixels), zoom 1–4, smoothing responsiveness 0–10 seconds, and
-maximum acceleration 0.1–10,000 px/frame². Override the byte and dimension limits with
-`FINDME_MAX_UPLOAD_BYTES`, `FINDME_MAX_EXPORT_WIDTH`,
-`FINDME_MAX_EXPORT_HEIGHT`, and `FINDME_MAX_EXPORT_PIXELS`. Add non-IP LAN hostnames
-with the comma-separated `FINDME_ALLOWED_HOSTS` setting.
-
-Unexpected API failures return a stable error code and an `X-Request-ID`; the matching
-identifier is written to the backend log with the full diagnostic traceback.
-
-The reusable library is stored transactionally in
-`data/library/findme.sqlite3` with SQLite WAL journaling and full synchronous writes.
-This is a clean persistence-format break: legacy `videos.json`, `exports.json`, and
-per-track JSON files are left untouched but are not imported.
+HTTP routes, payloads, WebSocket protocols, smoothing compatibility keys, and runtime
+directory boundaries are documented for coding agents in [AGENTS.md](AGENTS.md).
+The original M0–M5 architecture roadmap is in [docs/plan.md](docs/plan.md); dated
+FindMe specs under `docs/superpowers/` are historical records from before the rename.
 
 ## Known limitations
 
-- Text selection requires NVIDIA CUDA. macOS and CPU hosts support click
-  selection, tracking, crop planning, and export only.
-- Visual-prompt occlusion rescue awaits compatible public weights.
-- Tracking is single-player and can change identity during close interactions;
-  recovery currently requires a new click and track job.
-- Tracking and export each run through one worker with at most two queued jobs. A full
-  queue returns HTTP 429, and `POST /api/jobs/{jobId}/cancel` cooperatively cancels a
-  queued or running job.
-- Job state is persisted in SQLite. Completed history is bounded; saved library tracks
-  and exports remain available after history pruning, while work interrupted by a
-  backend restart is reported as failed.
-- FindMe is a local, single-user application with no authentication. Host/origin
-  checks reduce browser-based cross-site requests but do not make LAN deployment a
-  multi-user security boundary.
+- Full 930-frame tracking takes about 20 minutes on Apple Silicon. Use short ranges to iterate.
+- SAM 2 can switch identity when players overlap without producing lost frames. Re-anchor
+  after the collision; multi-anchor splicing is the planned fix.
+- LocateAnything visual-prompt rescue remains dormant because compatible public weights
+  are not available. Text grounding works independently on CUDA.
+- Tracking/export each have one worker and two queue slots. Overload returns retryable HTTP 429.
+- Variable-frame-rate sources are rejected so frame-indexed tracking and export cannot drift.
+- RTX 2080 Ti support exists in code but the real 11 GB VRAM ceiling and speed remain unverified.
+- PlayTrack has no authentication. Do not expose it to the public internet.
+
+## Contributing and security
+
+PlayTrack source code is available under the [MIT License](LICENSE). Third-party
+dependencies and model weights keep their upstream licenses.
+
+- [Contributing guide](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [Report a bug](https://github.com/pedrofuentes/playtrack/issues/new?template=bug_report.yml)
+- [Request a feature](https://github.com/pedrofuentes/playtrack/issues/new?template=feature_request.yml)
 
 ## Verification
 
 ```bash
-cd backend && uv run --extra dev pytest -m 'not integration'
-cd frontend && npm test && npm run typecheck && npm run build
+cd backend && uv run --extra dev pytest -m "not integration"
+cd ../frontend && npm test && npm run typecheck && npm run build
+npm run test:pwa
+cd .. && node website/test-site.mjs
 ```
 
-See [docs/plan.md](docs/plan.md) for the architecture and milestone history.
+Behavior changes should also exercise register → select → track → crop plan → export
+against an authorized real clip, inspect the MP4 with `ffprobe`, and visually review
+editor overlays and exported frames.

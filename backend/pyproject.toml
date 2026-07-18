@@ -1,7 +1,7 @@
 [project]
-name = "findme-backend"
+name = "playtrack-backend"
 version = "0.1.0"
-description = "FindMe local video API"
+description = "PlayTrack local video API"
 requires-python = ">=3.11,<3.13"
 dependencies = [
   "av>=14,<17",

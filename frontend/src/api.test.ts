@@ -203,9 +203,9 @@ describe('trackJobWebSocketUrl', () => {
     expect(
       trackJobWebSocketUrl('job/one', {
         protocol: 'https:',
-        host: 'findme.local',
+        host: 'playtrack.local',
       }),
-    ).toBe('wss://findme.local/ws/jobs/job%2Fone?protocol=delta-v1')
+    ).toBe('wss://playtrack.local/ws/jobs/job%2Fone?protocol=delta-v1')
   })
 })
 

@@ -56,6 +56,7 @@ export interface WorkspaceController {
   loading: boolean
   loadingLabel: string
   openError: string | null
+  backendUnavailable: boolean
   framing: boolean
   exportJob: TrackJobUpdate | null
   stage: WorkspaceStage
@@ -116,6 +117,7 @@ export function useWorkspace(): WorkspaceController {
   const [loading, setLoading] = useState(true)
   const [loadingLabel, setLoadingLabel] = useState(`Opening ${EXAMPLE_PATH}…`)
   const [openError, setOpenError] = useState<string | null>(null)
+  const [backendUnavailable, setBackendUnavailable] = useState(false)
   const [framing, setFraming] = useState(false)
   const [exportJob, setExportJobState] = useState<TrackJobUpdate | null>(null)
   const selectionRequest = useRef<AbortController | null>(null)
@@ -201,6 +203,7 @@ export function useWorkspace(): WorkspaceController {
     setLoading(true)
     setLoadingLabel(activity)
     setOpenError(null)
+    setBackendUnavailable(false)
     setCurrentFrameState(0)
     setAnchorFrame(null)
     setSelection(null)
@@ -220,7 +223,13 @@ export function useWorkspace(): WorkspaceController {
       if (generation !== openGeneration.current) return
       setVideo(null)
       setVideoName(null)
-      setOpenError(reason instanceof Error ? reason.message : `Could not open ${fallbackName}`)
+      const unavailable = isNetworkFailure(reason)
+      setBackendUnavailable(unavailable)
+      setOpenError(
+        unavailable
+          ? 'The PlayTrack server is not responding.'
+          : reason instanceof Error ? reason.message : `Could not open ${fallbackName}`,
+      )
     } finally {
       if (generation === openGeneration.current) {
         loadingRef.current = false
@@ -574,6 +583,7 @@ export function useWorkspace(): WorkspaceController {
     loading,
     loadingLabel,
     openError,
+    backendUnavailable,
     framing,
     exportJob,
     stage,
@@ -611,6 +621,12 @@ export function useWorkspace(): WorkspaceController {
     selectionLoading, setPlayerName, setRange, setRangeIn, setRangeOut, stage, startTrack, cancelTrack, trackError, trackJob, trackMessage,
     trackStartedAt, trackStarting, video, videoName, videoSwitchLocked,
   ])
+}
+
+function isNetworkFailure(reason: unknown): boolean {
+  if (reason instanceof TypeError) return true
+  if (!(reason instanceof Error)) return false
+  return /failed to fetch|networkerror|network request failed|load failed/i.test(reason.message)
 }
 
 function filenameFromPath(path: string): string {

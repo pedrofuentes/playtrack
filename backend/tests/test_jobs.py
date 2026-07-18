@@ -38,6 +38,27 @@ def test_registry_runs_worker_and_keeps_sorted_partial_track() -> None:
     assert snapshot.version >= 4
 
 
+def test_registry_uses_playtrack_worker_names() -> None:
+    registry = JobRegistry()
+    started = threading.Event()
+    release = threading.Event()
+
+    def worker(_report: object) -> list[TrackFrame]:
+        started.set()
+        assert release.wait(timeout=2)
+        return []
+
+    job_id = registry.submit(worker)
+    assert started.wait(timeout=2)
+    try:
+        names = {thread.name for thread in threading.enumerate()}
+        assert "playtrack-track-worker" in names
+        assert "findme-track-worker" not in names
+    finally:
+        release.set()
+        registry.wait_until_terminal(job_id, timeout=2)
+
+
 def test_registry_exposes_failure_without_losing_partial_results() -> None:
     registry = JobRegistry()
 

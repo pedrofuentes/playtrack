@@ -261,7 +261,7 @@ export const VideoStage = forwardRef<VideoStageHandle, VideoStageProps>(function
       return
     }
     setLastPoint(point)
-    console.info('FindMe source click', point)
+    console.info('PlayTrack source click', point)
     onSourceClick(point, frameIdx)
   }
 

@@ -376,7 +376,7 @@ def create_app(
             if owns_job_registry:
                 jobs.close()
 
-    app = FastAPI(title="FindMe", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="PlayTrack", version="0.1.0", lifespan=lifespan)
     lifecycle_lock = threading.RLock()
 
     def lifecycle_serialized(function: Any) -> Any:

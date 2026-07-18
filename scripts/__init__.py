@@ -1,2 +1,1 @@
-"""FindMe development and model-management scripts."""
-
+"""PlayTrack development and model-management scripts."""

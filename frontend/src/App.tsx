@@ -102,6 +102,7 @@ export default function App() {
       loading={workspace.loading}
       loadingLabel={workspace.loadingLabel}
       error={workspace.openError}
+      backendUnavailable={workspace.backendUnavailable}
       onUpload={workspace.openUpload}
       onOpenPath={workspace.openPath}
     />
@@ -231,12 +232,24 @@ interface EmptyWorkspaceProps {
   loading: boolean
   loadingLabel: string
   error: string | null
+  backendUnavailable: boolean
   onUpload: (file: File, name?: string) => Promise<void>
   onOpenPath: (path: string, name?: string) => Promise<void>
 }
 
-function EmptyWorkspace({ loading, loadingLabel, error, onUpload, onOpenPath }: EmptyWorkspaceProps) {
+function EmptyWorkspace({ loading, loadingLabel, error, backendUnavailable, onUpload, onOpenPath }: EmptyWorkspaceProps) {
   if (loading) return <div className="empty-workspace"><div className="activity-spinner" /><p>{loadingLabel}</p></div>
+  if (backendUnavailable) {
+    return (
+      <div className="empty-workspace backend-offline" role="status">
+        <div className="empty-symbol" aria-hidden="true">⌁</div>
+        <h1>PlayTrack server is offline</h1>
+        <p>Start the local PlayTrack server, then retry. The installed app shell works offline, but video processing always runs on your computer.</p>
+        <code>scripts/dev.sh</code>
+        <button type="button" className="primary-action" onClick={() => void onOpenPath(EXAMPLE_PATH)}>Retry connection</button>
+      </div>
+    )
+  }
   return (
     <div className="empty-workspace">
       <div className="empty-symbol" aria-hidden="true">＋</div>

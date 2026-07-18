@@ -227,51 +227,6 @@ wheels = [
 ]
 
 [[package]]
-name = "findme-backend"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "av" },
-    { name = "fastapi" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "opencv-python-headless" },
-    { name = "pillow" },
-    { name = "python-multipart" },
-    { name = "sam-2" },
-    { name = "torch" },
-    { name = "torchvision" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "httpx" },
-    { name = "pytest" },
-]
-locate = [
-    { name = "transformers" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "av", specifier = ">=14,<17" },
-    { name = "fastapi", specifier = ">=0.115,<1" },
-    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28,<1" },
-    { name = "numpy", specifier = ">=1.24.4,<3" },
-    { name = "opencv-python-headless", specifier = ">=4.10,<5" },
-    { name = "pillow", specifier = ">=9.4,<13" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3,<9" },
-    { name = "python-multipart", specifier = ">=0.0.20,<1" },
-    { name = "sam-2", git = "https://github.com/facebookresearch/sam2.git?rev=2b90b9f5ceec907a1c18123530e92e794ad901a4" },
-    { name = "torch", specifier = ">=2.5.1,<3" },
-    { name = "torchvision", specifier = ">=0.20.1,<1" },
-    { name = "transformers", marker = "extra == 'locate'", specifier = "==4.57.1" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.34,<1" },
-]
-provides-extras = ["dev", "locate"]
-
-[[package]]
 name = "fsspec"
 version = "2026.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -762,6 +717,51 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/08/14/f6ba68107680ffa74b39985f3f30884e41318fbc4250caa423c79b4788bb/pillow-12.3.0-pp311-pypy311_pp73-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e7e480451b9fa137494bccd3a7d69adbe8ac65a87d97be61e11f1b1050a5bac3", size = 5860358, upload-time = "2026-07-01T11:56:32.68Z" },
     { url = "https://files.pythonhosted.org/packages/36/54/0169bc772ec491108b62f644f8ecf1fe5d8ae5ebafde2ee2142210166903/pillow-12.3.0-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:04f01d28a6aaff387bf842a13be313df23ba0597a44f1a976c9feb3c6ff4711a", size = 7231786, upload-time = "2026-07-01T11:56:35.046Z" },
 ]
+
+[[package]]
+name = "playtrack-backend"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "av" },
+    { name = "fastapi" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "opencv-python-headless" },
+    { name = "pillow" },
+    { name = "python-multipart" },
+    { name = "sam-2" },
+    { name = "torch" },
+    { name = "torchvision" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "pytest" },
+]
+locate = [
+    { name = "transformers" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "av", specifier = ">=14,<17" },
+    { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28,<1" },
+    { name = "numpy", specifier = ">=1.24.4,<3" },
+    { name = "opencv-python-headless", specifier = ">=4.10,<5" },
+    { name = "pillow", specifier = ">=9.4,<13" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3,<9" },
+    { name = "python-multipart", specifier = ">=0.0.20,<1" },
+    { name = "sam-2", git = "https://github.com/facebookresearch/sam2.git?rev=2b90b9f5ceec907a1c18123530e92e794ad901a4" },
+    { name = "torch", specifier = ">=2.5.1,<3" },
+    { name = "torchvision", specifier = ">=0.20.1,<1" },
+    { name = "transformers", marker = "extra == 'locate'", specifier = "==4.57.1" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.34,<1" },
+]
+provides-extras = ["dev", "locate"]
 
 [[package]]
 name = "pluggy"

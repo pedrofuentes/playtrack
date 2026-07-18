@@ -1,0 +1,74 @@
+name: Bug report
+description: Report a reproducible PlayTrack defect
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve PlayTrack. Do not upload footage you are not authorized to share, and use the private security advisory form for vulnerabilities.
+  - type: input
+    id: version
+    attributes:
+      label: PlayTrack version
+      description: Commit SHA or release tag.
+      placeholder: e.g. 1a2b3c4
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows with NVIDIA CUDA
+        - macOS with Apple Silicon
+        - CPU only
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Hardware and runtime
+      description: GPU, VRAM/RAM, OS version, Python, Torch/CUDA or macOS version.
+      placeholder: RTX 2080 Ti 11 GB, Windows 11, CUDA 12.1
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Include source dimensions, fps, frame range, selection method, and exact actions.
+      placeholder: |
+        1. Open a 4096×1024 CFR MP4…
+        2. Select at frame…
+        3. Start tracking…
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and logs
+      description: Include the X-Request-ID and matching backend log when available. Remove private paths and secrets.
+    validations:
+      required: true
+  - type: textarea
+    id: media
+    attributes:
+      label: Optional authorized media
+      description: Share a minimal synthetic clip or screenshots only if you have permission.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues for this problem.
+          required: true
+        - label: I have not included secrets, private footage, or sensitive personal data.
+          required: true
