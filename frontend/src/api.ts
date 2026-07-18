@@ -282,7 +282,7 @@ export function watchTrackJob(
 ): JobWatcher {
   const maximumReconnects = 3
   let socket: WebSocket | null = null
-  let reconnectTimer: number | null = null
+  let reconnectTimer: ReturnType<typeof globalThis.setTimeout> | null = null
   let reconnectAttempts = 0
   let generation = 0
   let disposed = false
