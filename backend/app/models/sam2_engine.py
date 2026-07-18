@@ -119,7 +119,7 @@ class SAM2Engine:
             )
 
     def unload(self) -> None:
-        """Release the image predictor before LocateAnything uses CUDA VRAM."""
+        """Release the image predictor to free accelerator memory."""
         with self._lock:
             self._predictor = None
             gc.collect()
@@ -280,7 +280,7 @@ class SAM2VideoEngine:
                     yield int(output_frame_idx), mask
 
     def unload(self) -> None:
-        """Release the predictor so LocateAnything can use constrained VRAM."""
+        """Release the video predictor to free accelerator memory."""
         with self._lock:
             self._predictor = None
             gc.collect()

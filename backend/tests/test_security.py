@@ -116,6 +116,31 @@ def test_every_http_response_has_server_generated_request_id(tmp_path: Path) -> 
     assert re.fullmatch(r"[0-9a-f]{32}", request_id)
 
 
+def test_openapi_exposes_the_click_only_public_http_contract(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        paths = set(client.get("/openapi.json").json()["paths"])
+
+    assert paths == {
+        "/api/health",
+        "/api/videos",
+        "/api/videos/{video_id}/file",
+        "/api/videos/{video_id}/frames/{frame_idx}",
+        "/api/select/click",
+        "/api/track",
+        "/api/track/{job_id}",
+        "/api/jobs/{job_id}",
+        "/api/jobs/{job_id}/cancel",
+        "/api/export/plan",
+        "/api/export",
+        "/api/exports/{job_id}.mp4",
+        "/api/library",
+        "/api/library/tracks/{job_id}",
+        "/api/library/exports/{export_id}",
+        "/api/library/videos/{video_id}",
+        "/api/library/maintenance/clear-caches",
+    }
+
+
 def test_unexpected_errors_are_correlated_without_disclosing_details(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

@@ -21,12 +21,6 @@ class Settings:
     ffprobe_binary: str = "ffprobe"
     frame_cache_max_dimension: int = 2048
     tracking_max_dimension: int = 2048
-    locate_model_id: str = "nvidia/LocateAnything-3B"
-    locate_max_input_dimension: int = 2500
-    locate_rescue_enabled: bool = True
-    locate_rescue_after: int = 15
-    locate_rescue_min_score: float = 0.5
-    locate_revision: str = "c32291ca5e996f5a7a485845b4f57a233936bba0"
     allowed_hosts: tuple[str, ...] = ()
     max_upload_bytes: int = 20 * 1024**3
     max_export_width: int = 4096
@@ -90,21 +84,6 @@ def load_settings() -> Settings:
         ffmpeg_binary=os.environ.get("PLAYTRACK_FFMPEG", "ffmpeg"),
         ffprobe_binary=os.environ.get("PLAYTRACK_FFPROBE", "ffprobe"),
         tracking_max_dimension=int(os.environ.get("TRACKING_MAX_DIM", "2048")),
-        locate_model_id=os.environ.get(
-            "PLAYTRACK_LOCATE_MODEL", "nvidia/LocateAnything-3B"
-        ),
-        locate_max_input_dimension=int(
-            os.environ.get("LOCATE_MAX_INPUT_DIM", "2500")
-        ),
-        locate_rescue_enabled=_env_bool("LOCATE_RESCUE_ENABLED", True),
-        locate_rescue_after=int(os.environ.get("LOCATE_RESCUE_AFTER", "15")),
-        locate_rescue_min_score=float(
-            os.environ.get("LOCATE_RESCUE_MIN_SCORE", "0.5")
-        ),
-        locate_revision=os.environ.get(
-            "PLAYTRACK_LOCATE_REVISION",
-            "c32291ca5e996f5a7a485845b4f57a233936bba0",
-        ),
         allowed_hosts=_env_csv("PLAYTRACK_ALLOWED_HOSTS"),
         max_upload_bytes=_env_positive_int(
             "PLAYTRACK_MAX_UPLOAD_BYTES", 20 * 1024**3

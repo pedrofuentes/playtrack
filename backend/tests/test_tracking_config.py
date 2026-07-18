@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.config import load_settings
+from app.config import Settings, load_settings
 
 
 def test_tracking_settings_read_resolution_and_offload_flags(monkeypatch: object) -> None:
@@ -38,7 +38,6 @@ def test_hardening_settings_have_balanced_defaults(monkeypatch: object) -> None:
         "PLAYTRACK_MAX_EXPORT_WIDTH",
         "PLAYTRACK_MAX_EXPORT_HEIGHT",
         "PLAYTRACK_MAX_EXPORT_PIXELS",
-        "PLAYTRACK_LOCATE_REVISION",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -49,10 +48,6 @@ def test_hardening_settings_have_balanced_defaults(monkeypatch: object) -> None:
     assert configured.max_export_width == 4096
     assert configured.max_export_height == 2160
     assert configured.max_export_pixels == 4096 * 2160
-    assert (
-        configured.locate_revision
-        == "c32291ca5e996f5a7a485845b4f57a233936bba0"
-    )
 
 
 def test_hardening_settings_parse_host_and_limit_overrides(monkeypatch: object) -> None:
@@ -61,7 +56,6 @@ def test_hardening_settings_parse_host_and_limit_overrides(monkeypatch: object) 
     monkeypatch.setenv("PLAYTRACK_MAX_EXPORT_WIDTH", "1920")
     monkeypatch.setenv("PLAYTRACK_MAX_EXPORT_HEIGHT", "1080")
     monkeypatch.setenv("PLAYTRACK_MAX_EXPORT_PIXELS", "2073600")
-    monkeypatch.setenv("PLAYTRACK_LOCATE_REVISION", "deadbeef")
 
     configured = load_settings()
 
@@ -70,7 +64,6 @@ def test_hardening_settings_parse_host_and_limit_overrides(monkeypatch: object) 
     assert configured.max_export_width == 1920
     assert configured.max_export_height == 1080
     assert configured.max_export_pixels == 2073600
-    assert configured.locate_revision == "deadbeef"
 
 
 def test_playtrack_branded_settings_cover_all_public_overrides(
@@ -87,7 +80,6 @@ def test_playtrack_branded_settings_cover_all_public_overrides(
         "PLAYTRACK_SAM2_CROP_SIZE": "768",
         "PLAYTRACK_FFMPEG": "/tools/ffmpeg",
         "PLAYTRACK_FFPROBE": "/tools/ffprobe",
-        "PLAYTRACK_LOCATE_MODEL": "example/playtrack-locate",
     }
     for name, value in values.items():
         monkeypatch.setenv(name, value)
@@ -101,7 +93,6 @@ def test_playtrack_branded_settings_cover_all_public_overrides(
     assert configured.sam2_crop_size == 768
     assert configured.ffmpeg_binary == "/tools/ffmpeg"
     assert configured.ffprobe_binary == "/tools/ffprobe"
-    assert configured.locate_model_id == "example/playtrack-locate"
 
 
 def test_obsolete_findme_settings_are_not_accepted(
@@ -115,8 +106,6 @@ def test_obsolete_findme_settings_are_not_accepted(
         "FINDME_SAM2_CROP_SIZE": "17",
         "FINDME_FFMPEG": "obsolete-ffmpeg",
         "FINDME_FFPROBE": "obsolete-ffprobe",
-        "FINDME_LOCATE_MODEL": "obsolete/model",
-        "FINDME_LOCATE_REVISION": "obsolete-revision",
         "FINDME_ALLOWED_HOSTS": "obsolete.local",
         "FINDME_MAX_UPLOAD_BYTES": "1",
         "FINDME_MAX_EXPORT_WIDTH": "2",
@@ -135,10 +124,32 @@ def test_obsolete_findme_settings_are_not_accepted(
     assert configured.sam2_crop_size == 1024
     assert configured.ffmpeg_binary == "ffmpeg"
     assert configured.ffprobe_binary == "ffprobe"
-    assert configured.locate_model_id == "nvidia/LocateAnything-3B"
-    assert configured.locate_revision != "obsolete-revision"
     assert configured.allowed_hosts == ()
     assert configured.max_upload_bytes == 20 * 1024**3
     assert configured.max_export_width == 4096
     assert configured.max_export_height == 2160
     assert configured.max_export_pixels == 4096 * 2160
+
+
+def test_settings_surface_contains_only_supported_configuration() -> None:
+    assert set(Settings.__dataclass_fields__) == {
+        "repo_root",
+        "data_dir",
+        "frontend_dist",
+        "checkpoints_dir",
+        "exports_dir",
+        "sam2_checkpoint",
+        "sam2_model_config",
+        "sam2_crop_size",
+        "sam2_offload_video_to_cpu",
+        "sam2_offload_state_to_cpu",
+        "ffmpeg_binary",
+        "ffprobe_binary",
+        "frame_cache_max_dimension",
+        "tracking_max_dimension",
+        "allowed_hosts",
+        "max_upload_bytes",
+        "max_export_width",
+        "max_export_height",
+        "max_export_pixels",
+    }
