@@ -30,6 +30,7 @@ const common = {
   onTextSelect: vi.fn(),
   onPlayerNameChange: vi.fn(),
   onTrack: vi.fn(),
+  onCancelTrack: vi.fn(),
   onRetryTrack: vi.fn(),
   onResetSelection: vi.fn(),
   onBeginFraming: vi.fn(),
@@ -68,6 +69,7 @@ describe('WorkflowInspector', () => {
     )
     expect(running).toContain('595 of 930 frames')
     expect(running).toContain('64%')
+    expect(running).toContain('Cancel tracking')
     expect(running).not.toContain('Set framing')
 
     const failed = renderToStaticMarkup(
@@ -81,6 +83,19 @@ describe('WorkflowInspector', () => {
     )
     expect(failed).toContain('Out of memory')
     expect(failed).toContain('Retry tracking')
+    expect(failed).not.toContain('Cancel tracking')
+
+    const canceled = renderToStaticMarkup(
+      <WorkflowInspector
+        {...common}
+        stage="track"
+        selection={selection}
+        trackJob={job('canceled')}
+        trackError="Canceled"
+      />,
+    )
+    expect(canceled).toContain('Tracking stopped')
+    expect(canceled).toContain('Retry tracking')
   })
 
   it('uses the selected range count for tracking progress', () => {

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  cancelJob,
   exportDownloadUrl,
   getLibrary,
   fetchCropPlan,
@@ -14,6 +15,7 @@ import {
   startTracking,
   trackJobWebSocketUrl,
   uploadVideo,
+  watchTrackJob,
 } from './api'
 import type { LibraryResponse } from './api'
 
@@ -203,7 +205,131 @@ describe('trackJobWebSocketUrl', () => {
         protocol: 'https:',
         host: 'findme.local',
       }),
-    ).toBe('wss://findme.local/ws/jobs/job%2Fone')
+    ).toBe('wss://findme.local/ws/jobs/job%2Fone?protocol=delta-v1')
+  })
+})
+
+describe('watchTrackJob', () => {
+  class FakeWebSocket {
+    static instances: FakeWebSocket[] = []
+    onopen: (() => void) | null = null
+    onmessage: ((event: { data: string }) => void) | null = null
+    onerror: (() => void) | null = null
+    onclose: (() => void) | null = null
+    closed = false
+
+    constructor(public readonly url: string) {
+      FakeWebSocket.instances.push(this)
+    }
+
+    close() {
+      this.closed = true
+    }
+
+    emit(payload: object) {
+      this.onmessage?.({ data: JSON.stringify(payload) })
+    }
+  }
+
+  afterEach(() => {
+    FakeWebSocket.instances = []
+    vi.unstubAllGlobals()
+  })
+
+  it('reconstructs full job state from snapshot and frame deltas', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+    vi.stubGlobal('window', { location: { protocol: 'http:', host: 'localhost:8000' } })
+    const updates: object[] = []
+    const watcher = watchTrackJob('job-1', (update) => updates.push(update), vi.fn())
+    const socket = FakeWebSocket.instances[0]
+
+    socket.emit({
+      type: 'snapshot',
+      version: 2,
+      jobId: 'job-1',
+      state: 'running',
+      progress: 0.25,
+      message: 'Started',
+      track: [
+        { frameIdx: 1, box: [1, 2, 3, 4], center: [2, 3], lost: false },
+      ],
+    })
+    socket.emit({
+      type: 'delta',
+      version: 3,
+      jobId: 'job-1',
+      state: 'running',
+      progress: 0.5,
+      message: 'Continuing',
+      track: [
+        { frameIdx: 2, box: [2, 3, 4, 5], center: [3, 4], lost: false },
+      ],
+      removedFrameIdxs: [1],
+    })
+    socket.emit({ type: 'heartbeat', version: 3, jobId: 'job-1' })
+
+    expect(updates).toHaveLength(2)
+    expect(updates[1]).toEqual({
+      jobId: 'job-1',
+      state: 'running',
+      progress: 0.5,
+      message: 'Continuing',
+      track: [
+        { frameIdx: 2, box: [2, 3, 4, 5], center: [3, 4], lost: false },
+      ],
+    })
+    watcher.close()
+    expect(socket.closed).toBe(true)
+  })
+
+  it('recovers terminal state over HTTP when the socket closes', async () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+    vi.stubGlobal('window', { location: { protocol: 'http:', host: 'localhost:8000' } })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        jobId: 'job-1',
+        state: 'completed',
+        progress: 1,
+        message: 'Tracking complete',
+        track: [],
+      }),
+    }))
+    const onUpdate = vi.fn()
+    const onError = vi.fn()
+    watchTrackJob('job-1', onUpdate, onError)
+
+    FakeWebSocket.instances[0].onclose?.()
+    await vi.waitFor(() => expect(onUpdate).toHaveBeenCalledOnce())
+
+    expect(onUpdate.mock.calls[0][0].state).toBe('completed')
+    expect(onError).not.toHaveBeenCalled()
+    expect(fetch).toHaveBeenCalledWith('/api/jobs/job-1')
+    expect(FakeWebSocket.instances).toHaveLength(1)
+  })
+})
+
+describe('cancelJob', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('requests cooperative cancellation for an encoded job id', async () => {
+    const canceled = {
+      jobId: 'job/1',
+      state: 'canceled',
+      progress: 0,
+      message: 'Canceled',
+      track: [],
+    }
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue(canceled),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(cancelJob('job/1')).resolves.toEqual(canceled)
+    expect(fetchMock).toHaveBeenCalledWith('/api/jobs/job%2F1/cancel', {
+      method: 'POST',
+    })
   })
 })
 

@@ -36,6 +36,7 @@ from .jobs import (
     JobQueueFullError,
     JobRegistry,
     JobRegistryClosedError,
+    JobSnapshot,
 )
 from .library import _clean_name
 from .models.locate_engine import get_locate_engine
@@ -66,6 +67,33 @@ from .videos import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _delta_snapshot(snapshot: JobSnapshot) -> dict[str, object]:
+    return {"type": "snapshot", "version": snapshot.version, **snapshot.to_dict()}
+
+
+def _delta_update(
+    previous: JobSnapshot, current: JobSnapshot
+) -> dict[str, object]:
+    previous_frames = {frame.frame_idx: frame for frame in previous.track}
+    current_frames = {frame.frame_idx: frame for frame in current.track}
+    changed = [
+        current_frames[index].to_dict()
+        for index in sorted(current_frames)
+        if previous_frames.get(index) != current_frames[index]
+    ]
+    removed = sorted(set(previous_frames) - set(current_frames))
+    return {
+        "type": "delta",
+        "jobId": current.job_id,
+        "version": current.version,
+        "state": current.state,
+        "progress": current.progress,
+        "message": current.message,
+        "track": changed,
+        "removedFrameIdxs": removed,
+    }
 
 
 class SPAStaticFiles(StaticFiles):
@@ -625,28 +653,59 @@ def create_app(
             raise HTTPException(503, str(exc)) from exc
         return {"jobId": job_id, "playerName": player_name}
 
+    def saved_job_payload(
+        job_id: str,
+    ) -> tuple[str, dict[str, object]] | None:
+        saved = store.library.get_track(job_id)
+        if saved is not None:
+            return (
+                "track",
+                {
+                    "jobId": saved.job_id,
+                    "state": "completed",
+                    "progress": 1.0,
+                    "message": "Tracking complete",
+                    "track": [frame.to_dict() for frame in saved.track],
+                },
+            )
+        exported = store.library.get_export(job_id)
+        destination = _export_file_path(export_root, job_id)
+        if (
+            exported is not None
+            and destination is not None
+            and destination.is_file()
+        ):
+            return (
+                "export",
+                {
+                    "jobId": job_id,
+                    "state": "completed",
+                    "progress": 1.0,
+                    "message": "Export complete",
+                    "track": [],
+                },
+            )
+        return None
+
     @app.get("/api/track/{job_id}")
     def get_track(job_id: str) -> dict[str, object]:
         try:
             return jobs.get(job_id).to_dict()
         except JobNotFoundError as exc:
-            saved = store.library.get_track(job_id)
-            if saved is None:
+            saved = saved_job_payload(job_id)
+            if saved is None or saved[0] != "track":
                 raise HTTPException(404, str(exc)) from exc
-            return {
-                "jobId": saved.job_id,
-                "state": "completed",
-                "progress": 1.0,
-                "message": "Tracking complete",
-                "track": [frame.to_dict() for frame in saved.track],
-            }
+            return saved[1]
 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str) -> dict[str, object]:
         try:
             return jobs.get(job_id).to_dict()
         except JobNotFoundError as exc:
-            raise HTTPException(404, str(exc)) from exc
+            saved = saved_job_payload(job_id)
+            if saved is None:
+                raise HTTPException(404, str(exc)) from exc
+            return saved[1]
 
     @app.post("/api/jobs/{job_id}/cancel", status_code=202)
     def cancel_job(job_id: str) -> dict[str, object]:
@@ -1143,12 +1202,27 @@ def create_app(
         except JobNotFoundError:
             await websocket.close(code=4404, reason="Tracking job not found")
             return
+        delta_v1 = websocket.query_params.get("protocol") == "delta-v1"
         await websocket.accept()
         try:
+            previous = None
             while True:
-                await websocket.send_json(snapshot.to_dict())
+                if not delta_v1:
+                    payload = snapshot.to_dict()
+                elif previous is None:
+                    payload = _delta_snapshot(snapshot)
+                elif snapshot.version == previous.version:
+                    payload = {
+                        "type": "heartbeat",
+                        "jobId": snapshot.job_id,
+                        "version": snapshot.version,
+                    }
+                else:
+                    payload = _delta_update(previous, snapshot)
+                await websocket.send_json(payload)
                 if snapshot.state in ("completed", "failed", "canceled"):
                     return
+                previous = snapshot
                 snapshot = await asyncio.to_thread(
                     jobs.wait_for_update,
                     job_id,

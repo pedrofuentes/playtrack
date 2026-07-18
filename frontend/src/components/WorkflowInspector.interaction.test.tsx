@@ -39,6 +39,7 @@ it('switches between click and description selection methods', async () => {
       onTextSelect={vi.fn()}
       onPlayerNameChange={vi.fn()}
       onTrack={vi.fn()}
+      onCancelTrack={vi.fn()}
       onRetryTrack={vi.fn()}
       onResetSelection={vi.fn()}
       onBeginFraming={vi.fn()}

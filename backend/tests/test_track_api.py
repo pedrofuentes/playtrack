@@ -115,6 +115,51 @@ def test_track_post_websocket_partial_updates_and_finished_get(
     assert tracker.calls == [(video_id, 1, (100, 50, 140, 100), 0, 4)]
 
 
+def test_delta_v1_websocket_sends_snapshot_then_only_changed_frames(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    client, video_id, tracker = make_tracking_client(tmp_path, tiny_video)
+    with client:
+        response = client.post(
+            "/api/track",
+            json={
+                "videoId": video_id,
+                "frameIdx": 1,
+                "box": [100, 50, 140, 100],
+            },
+        )
+        job_id = response.json()["jobId"]
+        assert tracker.published.wait(timeout=2)
+
+        with client.websocket_connect(
+            f"/ws/jobs/{job_id}?protocol=delta-v1"
+        ) as websocket:
+            initial = websocket.receive_json()
+            tracker.release.set()
+            delta = websocket.receive_json()
+
+    assert initial["type"] == "snapshot"
+    assert isinstance(initial["version"], int)
+    assert [item["frameIdx"] for item in initial["track"]] == [1]
+    assert delta == {
+        "type": "delta",
+        "jobId": job_id,
+        "version": initial["version"] + 1,
+        "state": "completed",
+        "progress": 1.0,
+        "message": "Tracking complete",
+        "track": [
+            {
+                "frameIdx": 2,
+                "box": [100, 200, 140, 260],
+                "center": [120.0, 230.0],
+                "lost": False,
+            }
+        ],
+        "removedFrameIdxs": [],
+    }
+
+
 def test_track_queue_overload_returns_retryable_429(
     tmp_path: Path, tiny_video: Path
 ) -> None:
@@ -190,8 +235,11 @@ def test_saved_track_remains_fetchable_after_terminal_history_is_pruned(
 
     with TestClient(create_app(store, job_registry=jobs)) as client:
         response = client.get("/api/track/saved-track")
+        generic = client.get("/api/jobs/saved-track")
 
     assert response.status_code == 200
+    assert generic.status_code == 200
+    assert generic.json() == response.json()
     assert response.json()["state"] == "completed"
     assert [item["frameIdx"] for item in response.json()["track"]] == [1, 2]
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
+  cancelJob,
   clearFrameCaches,
   type ClickSelection,
   type CropWindow,
@@ -8,6 +9,7 @@ import {
   getFeatures,
   getLibrary,
   getTrack,
+  type JobWatcher,
   type LibraryResponse,
   type LibraryTrack,
   type LibraryVideo,
@@ -73,6 +75,7 @@ export interface WorkspaceController {
   setRangeOut(): void
   resetRange(): void
   startTrack(): Promise<void>
+  cancelTrack(): Promise<void>
   retryTrack(): Promise<void>
   beginFraming(): void
   setCropWindows(windows: CropWindow[]): void
@@ -116,7 +119,9 @@ export function useWorkspace(): WorkspaceController {
   const [framing, setFraming] = useState(false)
   const [exportJob, setExportJobState] = useState<TrackJobUpdate | null>(null)
   const selectionRequest = useRef<AbortController | null>(null)
-  const trackSocket = useRef<WebSocket | null>(null)
+  const trackSocket = useRef<JobWatcher | null>(null)
+  const trackJobRef = useRef(trackJob)
+  trackJobRef.current = trackJob
   const openGeneration = useRef(0)
   const exportSubmissionCounter = useRef(0)
   const exportSubmissionToken = useRef<number | null>(null)
@@ -486,11 +491,17 @@ export function useWorkspace(): WorkspaceController {
         (update) => {
           setTrackJob(update)
           setTrackMessage(update.message)
-          if (update.state === 'failed') setTrackError(update.message)
-          if (update.state === 'completed' || update.state === 'failed') {
+          if (update.state === 'failed' || update.state === 'canceled') {
+            setTrackError(update.message)
+          }
+          if (
+            update.state === 'completed'
+            || update.state === 'failed'
+            || update.state === 'canceled'
+          ) {
             if (trackSocket.current === socket) trackSocket.current = null
             socket.close()
-            refreshLibrary()
+            if (update.state === 'completed') refreshLibrary()
           }
         },
         (message) => {
@@ -508,6 +519,21 @@ export function useWorkspace(): WorkspaceController {
       setTrackStarting(false)
     }
   }, [anchorFrame, playerName, refreshLibrary, selection, video])
+
+  const cancelTrack = useCallback(async () => {
+    const active = trackJobRef.current
+    if (!active || (active.state !== 'queued' && active.state !== 'running')) return
+    try {
+      const update = await cancelJob(active.jobId)
+      if (trackJobRef.current?.jobId !== active.jobId) return
+      setTrackJob(update)
+      setTrackMessage(update.message)
+      if (update.state === 'canceled') setTrackError(update.message)
+    } catch (reason) {
+      if (trackJobRef.current?.jobId !== active.jobId) return
+      setTrackError(reason instanceof Error ? reason.message : 'Could not cancel tracking')
+    }
+  }, [])
 
   const resetSelection = useCallback(() => {
     if (loadingRef.current || trackStartingRef.current) return
@@ -567,6 +593,7 @@ export function useWorkspace(): WorkspaceController {
     setRangeOut,
     resetRange,
     startTrack,
+    cancelTrack,
     retryTrack: startTrack,
     beginFraming: () => setFraming(true),
     setCropWindows: setCropWindowsState,
@@ -581,7 +608,7 @@ export function useWorkspace(): WorkspaceController {
     features, framing, library, loading, loadingLabel, openError, openLibraryPlayer,
     openLibraryVideo, openPath, openUpload, range, refreshLibrary, resetRange, resetSelection,
     playerName, selectAt, selectByDescription, selection, selectionError, selectionKind,
-    selectionLoading, setPlayerName, setRange, setRangeIn, setRangeOut, stage, startTrack, trackError, trackJob, trackMessage,
+    selectionLoading, setPlayerName, setRange, setRangeIn, setRangeOut, stage, startTrack, cancelTrack, trackError, trackJob, trackMessage,
     trackStartedAt, trackStarting, video, videoName, videoSwitchLocked,
   ])
 }

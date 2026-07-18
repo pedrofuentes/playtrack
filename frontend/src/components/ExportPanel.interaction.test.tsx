@@ -8,6 +8,7 @@ import { type ExportPanelHandle, ExportPanel } from './ExportPanel'
 import { playbackGeometryAtTime } from './PlaybackOverlay'
 
 const apiMocks = vi.hoisted(() => ({
+  cancelJob: vi.fn(),
   fetchCropPlan: vi.fn(),
   startExport: vi.fn(),
   watchTrackJob: vi.fn(),
@@ -38,6 +39,9 @@ beforeEach(() => {
     windows: [],
   })
   apiMocks.startExport.mockResolvedValue({ jobId: 'export-1' })
+  apiMocks.cancelJob.mockResolvedValue({
+    jobId: 'export-1', state: 'canceled', progress: 0, message: 'Canceled', track: [],
+  })
   apiMocks.watchTrackJob.mockReturnValue({ close: vi.fn() } as unknown as WebSocket)
 })
 
@@ -214,5 +218,30 @@ it('releases a failed export start and allows a retry with a new token', async (
   expect(apiMocks.startExport).toHaveBeenCalledTimes(2)
   expect(onExportStart).toHaveBeenCalledTimes(2)
   expect(props.onExportFinish).toHaveBeenCalledWith(2)
+  await act(async () => root.unmount())
+})
+
+it('offers cooperative cancellation while an export job is active', async () => {
+  const { container, panelRef, props, root } = await renderReadyExport()
+  await act(async () => {
+    panelRef.current?.triggerExport()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const cancel = [...container.querySelectorAll('button')]
+    .find((button) => button.textContent === 'Cancel export')
+  expect(cancel).toBeDefined()
+  await act(async () => {
+    cancel?.click()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  expect(apiMocks.cancelJob).toHaveBeenCalledWith('export-1')
+  expect(props.onJobChange).toHaveBeenLastCalledWith(expect.objectContaining({
+    jobId: 'export-1', state: 'canceled',
+  }))
+  expect(container.textContent).toContain('Canceled')
   await act(async () => root.unmount())
 })

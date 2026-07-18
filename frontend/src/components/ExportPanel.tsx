@@ -9,10 +9,12 @@ import {
 } from 'react'
 
 import {
+  cancelJob,
   type CropWindow,
   exportDownloadUrl,
   type ExportSettings,
   fetchCropPlan,
+  type JobWatcher,
   startExport,
   type TrackJobUpdate,
   watchTrackJob,
@@ -77,8 +79,10 @@ export const ExportPanel = forwardRef<ExportPanelHandle, ExportPanelProps>(funct
   const [maxAccelPxPerFrame2, setMaxAccelPxPerFrame2] = useState(3)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [job, setJob] = useState<TrackJobUpdate | null>(null)
+  const jobRef = useRef(job)
+  jobRef.current = job
   const [error, setError] = useState<string | null>(null)
-  const socketRef = useRef<WebSocket | null>(null)
+  const socketRef = useRef<JobWatcher | null>(null)
   const mountedRef = useRef(true)
   const requestGenerationRef = useRef(0)
   const activeSubmissionRef = useRef<{ generation: number; token: number } | null>(null)
@@ -173,7 +177,7 @@ export const ExportPanel = forwardRef<ExportPanelHandle, ExportPanelProps>(funct
       }
       setJob(queued)
       onJobChange(queued)
-      let socket: WebSocket
+      let socket: JobWatcher
       try {
         socket = watchTrackJob(
           jobId,
@@ -181,8 +185,14 @@ export const ExportPanel = forwardRef<ExportPanelHandle, ExportPanelProps>(funct
             if (!isCurrent()) return
             setJob(update)
             onJobChange(update)
-            if (update.state === 'failed') setError(update.message)
-            if (update.state === 'completed' || update.state === 'failed') {
+            if (update.state === 'failed' || update.state === 'canceled') {
+              setError(update.message)
+            }
+            if (
+              update.state === 'completed'
+              || update.state === 'failed'
+              || update.state === 'canceled'
+            ) {
               if (socketRef.current === socket) socketRef.current = null
               socket.close()
               if (update.state === 'completed') onLibraryChange()
@@ -223,6 +233,21 @@ export const ExportPanel = forwardRef<ExportPanelHandle, ExportPanelProps>(funct
     disabled, exportStarting, onExportFinish, onExportStart, onJobChange,
     onLibraryChange, previewLoading, settings, trackJobId, validDimensions, videoId,
   ])
+
+  const cancelExport = useCallback(async () => {
+    const active = jobRef.current
+    if (!active || (active.state !== 'queued' && active.state !== 'running')) return
+    try {
+      const update = await cancelJob(active.jobId)
+      if (!mountedRef.current || jobRef.current?.jobId !== active.jobId) return
+      setJob(update)
+      onJobChange(update)
+      if (update.state === 'canceled') setError(update.message)
+    } catch (reason) {
+      if (!mountedRef.current || jobRef.current?.jobId !== active.jobId) return
+      setError(reason instanceof Error ? reason.message : 'Could not cancel export')
+    }
+  }, [onJobChange])
 
   useImperativeHandle(forwardedRef, () => ({
     triggerExport() {
@@ -287,6 +312,9 @@ export const ExportPanel = forwardRef<ExportPanelHandle, ExportPanelProps>(funct
         <div className="export-job" aria-live="polite">
           <p>{job.message}</p>
           <progress max={1} value={job.progress} aria-label="Export progress" />
+          {(job.state === 'queued' || job.state === 'running') && (
+            <button type="button" className="secondary-action" onClick={() => void cancelExport()}>Cancel export</button>
+          )}
         </div>
       )}
       {job?.state === 'completed' && (

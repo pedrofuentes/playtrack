@@ -651,9 +651,12 @@ def test_saved_export_download_survives_terminal_history_pruning(
         create_app(store, job_registry=jobs, exports_dir=exports_dir)
     ) as client:
         response = client.get("/api/exports/saved-export.mp4")
+        generic = client.get("/api/jobs/saved-export")
 
     assert response.status_code == 200
     assert response.content == b"persisted-mp4"
+    assert generic.status_code == 200
+    assert generic.json()["state"] == "completed"
 
 
 def test_saved_track_can_be_reexported_after_terminal_history_pruning(

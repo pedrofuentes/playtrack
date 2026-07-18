@@ -38,7 +38,7 @@ export interface TrackFrame {
   lost: boolean
 }
 
-export type TrackJobState = 'queued' | 'running' | 'completed' | 'failed'
+export type TrackJobState = 'queued' | 'running' | 'completed' | 'failed' | 'canceled'
 
 export interface TrackJobUpdate {
   jobId: string
@@ -46,6 +46,10 @@ export interface TrackJobUpdate {
   progress: number
   message: string
   track: TrackFrame[]
+}
+
+export interface JobWatcher {
+  close(): void
 }
 
 export interface SmoothingSettings {
@@ -245,25 +249,221 @@ export async function getTrack(jobId: string): Promise<TrackJobUpdate> {
   return (await response.json()) as TrackJobUpdate
 }
 
+export async function getJob(jobId: string): Promise<TrackJobUpdate> {
+  const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`)
+  if (!response.ok) {
+    throw new Error(await responseError(response, 'Could not fetch job'))
+  }
+  return (await response.json()) as TrackJobUpdate
+}
+
+export async function cancelJob(jobId: string): Promise<TrackJobUpdate> {
+  const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, {
+    method: 'POST',
+  })
+  if (!response.ok) {
+    throw new Error(await responseError(response, 'Could not cancel job'))
+  }
+  return (await response.json()) as TrackJobUpdate
+}
+
 export function trackJobWebSocketUrl(
   jobId: string,
   pageLocation: WebSocketLocation = window.location,
 ): string {
   const protocol = pageLocation.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${protocol}//${pageLocation.host}/ws/jobs/${encodeURIComponent(jobId)}`
+  return `${protocol}//${pageLocation.host}/ws/jobs/${encodeURIComponent(jobId)}?protocol=delta-v1`
 }
 
 export function watchTrackJob(
   jobId: string,
   onUpdate: (update: TrackJobUpdate) => void,
   onError: (message: string) => void,
-): WebSocket {
-  const socket = new WebSocket(trackJobWebSocketUrl(jobId))
-  socket.onmessage = (event) => {
-    onUpdate(JSON.parse(String(event.data)) as TrackJobUpdate)
+): JobWatcher {
+  const maximumReconnects = 3
+  let socket: WebSocket | null = null
+  let reconnectTimer: number | null = null
+  let reconnectAttempts = 0
+  let generation = 0
+  let disposed = false
+  let latest: TrackJobUpdate | null = null
+  let latestVersion = -1
+
+  const isTerminal = (update: TrackJobUpdate) => (
+    update.state === 'completed' || update.state === 'failed' || update.state === 'canceled'
+  )
+
+  const stopSocket = () => {
+    const active = socket
+    socket = null
+    if (active) {
+      active.onopen = null
+      active.onmessage = null
+      active.onerror = null
+      active.onclose = null
+      active.close()
+    }
   }
-  socket.onerror = () => onError('Lost the tracking progress connection')
-  return socket
+
+  const emit = (update: TrackJobUpdate) => {
+    latest = update
+    onUpdate(update)
+    if (isTerminal(update)) {
+      disposed = true
+      if (reconnectTimer !== null) globalThis.clearTimeout(reconnectTimer)
+      reconnectTimer = null
+      stopSocket()
+    }
+  }
+
+  const scheduleReconnect = () => {
+    if (disposed) return
+    if (reconnectAttempts >= maximumReconnects) {
+      disposed = true
+      onError('Lost the tracking progress connection')
+      return
+    }
+    reconnectAttempts += 1
+    reconnectTimer = globalThis.setTimeout(
+      connect,
+      250 * 2 ** (reconnectAttempts - 1),
+    )
+  }
+
+  const recover = async () => {
+    try {
+      const recovered = await getJob(jobId)
+      if (disposed) return
+      emit(recovered)
+      if (!isTerminal(recovered)) scheduleReconnect()
+    } catch {
+      if (!disposed) scheduleReconnect()
+    }
+  }
+
+  const applyMessage = (raw: unknown): boolean => {
+    if (!raw || typeof raw !== 'object') return false
+    const message = raw as Record<string, unknown>
+    if (message.type === 'heartbeat') return true
+    if (message.type === 'snapshot') {
+      if (!isTrackJobUpdate(message) || !Number.isInteger(message.version)) return false
+      latestVersion = Number(message.version)
+      emit(toTrackJobUpdate(message))
+      return true
+    }
+    if (message.type === 'delta') {
+      if (
+        latest === null
+        || !Number.isInteger(message.version)
+        || Number(message.version) !== latestVersion + 1
+        || !isJobState(message.state)
+        || typeof message.progress !== 'number'
+        || typeof message.message !== 'string'
+        || !Array.isArray(message.track)
+        || !Array.isArray(message.removedFrameIdxs)
+      ) return false
+      const frames = new Map(latest.track.map((frame) => [frame.frameIdx, frame]))
+      for (const frameIdx of message.removedFrameIdxs) {
+        if (typeof frameIdx !== 'number') return false
+        frames.delete(frameIdx)
+      }
+      for (const frame of message.track) {
+        if (!isTrackFrame(frame)) return false
+        frames.set(frame.frameIdx, frame)
+      }
+      latestVersion = Number(message.version)
+      emit({
+        jobId,
+        state: message.state,
+        progress: message.progress,
+        message: message.message,
+        track: [...frames.values()].sort((left, right) => left.frameIdx - right.frameIdx),
+      })
+      return true
+    }
+    if (isTrackJobUpdate(message)) {
+      emit(toTrackJobUpdate(message))
+      return true
+    }
+    return false
+  }
+
+  function connect() {
+    if (disposed) return
+    reconnectTimer = null
+    const currentGeneration = ++generation
+    let handledDisconnect = false
+    try {
+      const active = new WebSocket(trackJobWebSocketUrl(jobId))
+      socket = active
+      const disconnect = () => {
+        if (disposed || handledDisconnect || currentGeneration !== generation) return
+        handledDisconnect = true
+        if (socket === active) socket = null
+        void recover()
+      }
+      active.onmessage = (event) => {
+        if (disposed || currentGeneration !== generation) return
+        try {
+          if (!applyMessage(JSON.parse(String(event.data)))) {
+            active.close()
+            disconnect()
+            return
+          }
+          reconnectAttempts = 0
+        } catch {
+          active.close()
+          disconnect()
+        }
+      }
+      active.onerror = () => {
+        active.close()
+        disconnect()
+      }
+      active.onclose = disconnect
+    } catch {
+      void recover()
+    }
+  }
+
+  connect()
+  return {
+    close() {
+      if (disposed) return
+      disposed = true
+      generation += 1
+      if (reconnectTimer !== null) globalThis.clearTimeout(reconnectTimer)
+      reconnectTimer = null
+      stopSocket()
+    },
+  }
+}
+
+function isJobState(value: unknown): value is TrackJobState {
+  return value === 'queued' || value === 'running' || value === 'completed'
+    || value === 'failed' || value === 'canceled'
+}
+
+function isTrackFrame(value: unknown): value is TrackFrame {
+  if (!value || typeof value !== 'object') return false
+  const frame = value as Partial<TrackFrame>
+  return Number.isInteger(frame.frameIdx) && typeof frame.lost === 'boolean'
+}
+
+function isTrackJobUpdate(value: Record<string, unknown>): boolean {
+  return typeof value.jobId === 'string' && isJobState(value.state)
+    && typeof value.progress === 'number' && typeof value.message === 'string'
+    && Array.isArray(value.track) && value.track.every(isTrackFrame)
+}
+
+function toTrackJobUpdate(value: Record<string, unknown>): TrackJobUpdate {
+  return {
+    jobId: String(value.jobId),
+    state: value.state as TrackJobState,
+    progress: Number(value.progress),
+    message: String(value.message),
+    track: value.track as TrackFrame[],
+  }
 }
 
 export async function fetchCropPlan(

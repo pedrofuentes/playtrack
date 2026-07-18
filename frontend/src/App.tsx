@@ -43,7 +43,10 @@ export default function App() {
       workspace.stage === 'select' && workspace.selection
       && !workspace.loading && !workspace.trackStarting
     ) void workspace.startTrack()
-    else if (workspace.stage === 'track' && workspace.trackJob?.state === 'failed') void workspace.retryTrack()
+    else if (
+      workspace.stage === 'track'
+      && (workspace.trackJob?.state === 'failed' || workspace.trackJob?.state === 'canceled')
+    ) void workspace.retryTrack()
     else if (workspace.stage === 'review') workspace.beginFraming()
     else if (workspace.stage === 'export') exportPanelRef.current?.triggerExport()
   }
@@ -130,6 +133,7 @@ export default function App() {
       }}
       onPlayerNameChange={workspace.setPlayerName}
       onTrack={() => void workspace.startTrack()}
+      onCancelTrack={() => void workspace.cancelTrack()}
       onRetryTrack={() => void workspace.retryTrack()}
       onResetSelection={workspace.resetSelection}
       onBeginFraming={workspace.beginFraming}

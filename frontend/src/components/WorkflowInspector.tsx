@@ -31,6 +31,7 @@ interface WorkflowInspectorProps {
   onTextSelect: (prompt: string) => void
   onPlayerNameChange: (name: string) => void
   onTrack: () => void
+  onCancelTrack: () => void
   onRetryTrack: () => void
   onResetSelection: () => void
   onBeginFraming: () => void
@@ -176,6 +177,7 @@ function TrackingInspector({
   trackMessage,
   trackError,
   trackStartedAt,
+  onCancelTrack,
   onRetryTrack,
 }: WorkflowInspectorProps) {
   const active = trackJob?.state === 'queued' || trackJob?.state === 'running'
@@ -186,12 +188,13 @@ function TrackingInspector({
   return (
     <div className="inspector-body">
       <p className="section-label">SAM 2 propagation</p>
-      <h3>{trackJob?.state === 'failed' ? 'Tracking stopped' : `${processed} of ${trackFrameCount} frames`}</h3>
+      <h3>{trackJob?.state === 'failed' || trackJob?.state === 'canceled' ? 'Tracking stopped' : `${processed} of ${trackFrameCount} frames`}</h3>
       <div className="job-progress-copy">
         <strong>{Math.round(progress * 100)}%</strong>
         {elapsed !== null && <span>{formatElapsed(elapsed)} elapsed</span>}
       </div>
       <progress max={1} value={progress} aria-label="Tracking progress" />
+      {active && <button type="button" className="secondary-action" onClick={onCancelTrack}>Cancel tracking</button>}
       {trackMessage && !trackError && <p className="operation-status">{trackMessage}</p>}
       {trackError && (
         <div className="error-card">

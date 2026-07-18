@@ -20,7 +20,7 @@ gitignored) — supply your own panoramic clip at that path for end-to-end verif
 ```
 frontend/  React + Vite + TypeScript SPA
   src/App.tsx                 app state machine (open → select → track → export)
-  src/api.ts                  typed client + WebSocket job watcher
+  src/api.ts                  typed client + reconnecting WebSocket job watcher
   src/geometry.ts             pure letterbox/zoom coordinate math (unit-tested)
   src/components/
     OpenVideoPanel.tsx        upload (multipart) or open-by-server-path
@@ -31,7 +31,7 @@ frontend/  React + Vite + TypeScript SPA
     LibraryPanel.tsx          persisted videos/tracks/exports; delete; re-export
 
 backend/   FastAPI (Python 3.12, uv-managed)
-  app/main.py                 routes, WS /ws/jobs/{id}, serves frontend/dist + SPA fallback
+  app/main.py                 routes, WS /ws/jobs/{id} (legacy + delta-v1), serves frontend/dist + SPA fallback
   app/config.py               Settings + env vars (single source of truth for config)
   app/videos.py               VideoStore: register/upload, ffprobe metadata, frame caches
   app/selection.py            click→SAM2 image predict on a high-res crop; text→LocateAnything
