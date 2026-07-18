@@ -180,7 +180,7 @@ try {
 
     $backendPython = Join-Path $BackendDir '.venv\Scripts\python.exe'
     if (-not (Test-Path -LiteralPath $backendPython -PathType Leaf)) {
-        throw "Backend environment is missing. Run: uv sync --project backend --python 3.12 --extra dev --extra locate"
+        throw "Backend environment is missing. Run: uv sync --project backend --python 3.12 --extra dev"
     }
 
     if (Test-FrontendBuildStale -FrontendPath $FrontendDir) {
@@ -210,7 +210,7 @@ try {
     Write-Host "Starting PlayTrack at $AppUrl ..."
     $backendProcess = Start-Process `
         -FilePath $uv.Source `
-        -ArgumentList @('run', '--no-sync', '--extra', 'locate', 'uvicorn', 'app.main:app', '--host', $BindHost, '--port', '8000') `
+        -ArgumentList @('run', '--no-sync', 'uvicorn', 'app.main:app', '--host', $BindHost, '--port', '8000') `
         -WorkingDirectory $BackendDir `
         -PassThru `
         -NoNewWindow

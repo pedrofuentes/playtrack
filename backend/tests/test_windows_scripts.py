@@ -23,7 +23,7 @@ def test_run_script_checks_tools_builds_stale_frontend_and_opens_browser() -> No
     assert "Test-FrontendBuildStale" in script
     assert all(token in script for token in ("npm", "run", "build"))
     assert "uvicorn" in script
-    assert "'--extra', 'locate'" in script
+    assert "-ArgumentList @('run', '--no-sync', 'uvicorn'" in script
     assert "'--no-sync'" in script
     assert "127.0.0.1" in script
     assert "Start-Process $AppUrl" in script
@@ -41,7 +41,7 @@ def test_dev_script_starts_reload_backend_and_vite_and_cleans_up() -> None:
     assert "--version" in script
     assert "Backend environment is missing" in script
     assert "uvicorn" in script and "--reload" in script
-    assert "'--extra', 'dev', '--extra', 'locate'" in script
+    assert "-ArgumentList @('run', '--no-sync', '--extra', 'dev', 'uvicorn'" in script
     assert "'--no-sync'" in script
     assert all(token in script for token in ("npm", "run", "dev"))
     assert "5173" in script and "8000" in script

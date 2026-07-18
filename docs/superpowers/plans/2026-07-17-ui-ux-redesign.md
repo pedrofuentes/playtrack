@@ -13,7 +13,7 @@
 - Preserve all existing backend routes, request/response shapes, WebSocket behavior, persistence schemas, and model pipelines.
 - Preserve `geometry.ts`, letterbox-aware click mapping, zoom/pan behavior, selection masks, track overlays, and crop overlays.
 - Keep one active video; disable video switching while tracking or export is queued/running.
-- Text selection is present only when `features.textSelection.enabled` is true.
+- Player selection is always made by clicking the source frame.
 - Registered path sources must never be represented as deletable media; uploaded-source deletion continues to use the existing backend endpoint safeguards.
 - Default export is 1280 × 720; custom dimensions must remain positive even numbers.
 - The desktop editor is primary; below 860 px the inspector becomes a bottom sheet, the timeline condenses, and the activity rail becomes bottom navigation.
@@ -258,7 +258,7 @@ git commit -m "Add track timeline and video controls"
 
 **Interfaces:**
 
-- Consumes: all existing video, feature, library, selection, tracking, and job
+- Consumes: all existing video, library, click-selection, tracking, and job
   API functions currently called in `App.tsx`.
 - Produces: `WorkspaceController` with serializable state plus stable action
   callbacks.
@@ -276,11 +276,8 @@ interface WorkspaceController {
   videoName: string | null
   currentFrame: number
   selection: ClickSelection | null
-  selectionKind: 'click' | 'text'
   selectionLoading: boolean
   selectionError: string | null
-  candidates: LocateCandidate[]
-  features: FeatureFlags
   library: LibraryResponse
   trackJob: TrackJobUpdate | null
   trackMessage: string | null
@@ -300,8 +297,6 @@ interface WorkspaceController {
   reExportLibraryTrack(video: LibraryVideo, jobId: string): Promise<void>
   refreshLibrary(): void
   selectAt(point: Point, frameIdx: number): void
-  selectByDescription(prompt: string): void
-  confirmCandidate(candidate: LocateCandidate, frameIdx: number): void
   setCurrentFrame(frameIdx: number): void
   startTrack(): Promise<void>
   retryTrack(): Promise<void>
@@ -322,8 +317,8 @@ Expected: FAIL because `useWorkspace` is missing.
 - [ ] **Step 3: Move existing async state and actions without changing API behavior**
 
 Move the existing request abortion, socket cleanup, example-open attempt,
-feature loading, library refresh, upload/path/library opening, selection,
-candidate confirmation, tracking, and restored-track logic from `App.tsx` into
+library refresh, upload/path/library opening, click selection, tracking, and
+restored-track logic from `App.tsx` into
 `useWorkspace`. Preserve the same default error text and cleanup effects.
 `clearCaches` calls the existing cache endpoint and refreshes Library state.
 
@@ -448,7 +443,7 @@ git commit -m "Build the editor shell and drawers"
 
 **Interfaces:**
 
-- Consumes: `WorkspaceStage`, selection/job/health state, feature flags, export
+- Consumes: `WorkspaceStage`, selection/job/health state, export
   identifiers, and existing callbacks.
 - Produces: `WorkflowInspector` and `ExportPanelHandle`.
 
@@ -456,7 +451,7 @@ git commit -m "Build the editor shell and drawers"
 
 Render each stage and assert:
 
-- Select has click instructions and shows Describe only when enabled.
+- Select has click instructions.
 - A confirmed selection has one `Track player` primary button.
 - Track shows processed/total frames, percentage, progress, and Retry on failure.
 - Review shows coverage/lost summaries and one button per lost range plus
@@ -480,17 +475,13 @@ interface WorkflowInspectorProps {
   video: VideoMetadata
   currentFrame: number
   selection: ClickSelection | null
-  selectionKind: 'click' | 'text'
   selectionLoading: boolean
   selectionError: string | null
-  candidates: readonly LocateCandidate[]
-  textSelectionEnabled: boolean
   trackJob: TrackJobUpdate | null
   trackMessage: string | null
   trackError: string | null
   trackStartedAt: number | null
   health: TrackHealthSummary | null
-  onTextSelect(prompt: string): void
   onTrack(): void
   onRetryTrack(): void
   onResetSelection(): void
@@ -500,8 +491,8 @@ interface WorkflowInspectorProps {
 }
 ```
 
-Render a shared inspector header and three-segment state marker. Keep candidate
-confirmation instruction local to Select. Track processed frames are
+Render a shared inspector header and three-segment state marker. Keep click
+selection instructions local to Select. Track processed frames are
 `Math.min(video.nbFrames, Math.round(progress * video.nbFrames))`; do not show an
 ETA. While a new job is active, update elapsed whole seconds from
 `trackStartedAt` once per second with an interval that is cleared on terminal

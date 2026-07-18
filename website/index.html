@@ -76,7 +76,7 @@
           <p>PlayTrack keeps the model work visible and the camera choices in your hands.</p>
         </div>
         <ol class="step-grid">
-          <li class="reveal"><span>01</span><h3>Select the player</h3><p>Scrub to a clear frame and click the player. On a CUDA machine, optional text grounding can find candidates from a description.</p></li>
+          <li class="reveal"><span>01</span><h3>Select the player</h3><p>Scrub to a clear frame and click the player. A high-resolution source crop keeps small subjects selectable.</p></li>
           <li class="reveal"><span>02</span><h3>Track the movement</h3><p>SAM 2 propagates the selection through your chosen range. Review coverage and lost frames before framing.</p></li>
           <li class="reveal"><span>03</span><h3>Shape the camera</h3><p>Choose dimensions, zoom, and smoothness. Preview the crop path, then export an H.264 MP4 with source audio.</p></li>
         </ol>
@@ -121,15 +121,15 @@
         <div class="section-heading reveal">
           <p class="eyebrow">Where it runs</p>
           <h2 id="hardware-title">Local models need local hardware.</h2>
-          <p>Windows with NVIDIA CUDA is the primary target. macOS is supported for click-based use and development.</p>
+          <p>Windows with NVIDIA CUDA is the primary target. macOS is supported for click selection and development.</p>
         </div>
         <div class="table-wrap reveal">
           <table>
-            <thead><tr><th>System</th><th>SAM 2 tracking</th><th>Text selection</th><th>Notes</th></tr></thead>
+            <thead><tr><th>System</th><th>SAM 2 tracking</th><th>Notes</th></tr></thead>
             <tbody>
-              <tr><th>Windows + NVIDIA CUDA</th><td><span class="status good">Primary</span></td><td>Optional</td><td>CUDA Turing uses base-plus/fp16; Ampere+ can use large/bf16.</td></tr>
-              <tr><th>macOS + Apple Silicon</th><td><span class="status good">Supported</span></td><td>Unavailable</td><td>MPS with automatic CPU offload for long videos.</td></tr>
-              <tr><th>CPU only</th><td><span class="status slow">Slow</span></td><td>Unavailable</td><td>Small SAM 2 model; useful for compatibility, not fast turnaround.</td></tr>
+              <tr><th>Windows + NVIDIA CUDA</th><td><span class="status good">Primary</span></td><td>CUDA Turing uses base-plus/fp16; Ampere+ can use large/bf16.</td></tr>
+              <tr><th>macOS + Apple Silicon</th><td><span class="status good">Supported</span></td><td>MPS with automatic CPU offload for long videos.</td></tr>
+              <tr><th>CPU only</th><td><span class="status slow">Slow</span></td><td>Small SAM 2 model; useful for compatibility, not fast turnaround.</td></tr>
             </tbody>
           </table>
         </div>
@@ -186,7 +186,7 @@ scripts/dev.sh</code></pre>
           <article class="reveal"><h3>Tracking is compute-heavy</h3><p>The 930-frame example takes about 20 minutes on Apple Silicon. Short ranges are the fastest way to iterate.</p></article>
           <article class="reveal"><h3>Collisions can switch identity</h3><p>When players overlap, SAM 2 can emerge following the wrong person without reporting lost frames. Multi-anchor splicing is the planned fix.</p></article>
           <article class="reveal"><h3>Local means unauthenticated</h3><p>The default binds to localhost. LAN exposure has origin and host checks but no login; do not expose it to the public internet.</p></article>
-          <article class="reveal"><h3>Optional model license</h3><p>LocateAnything weights are covered by NVIDIA’s research license and are non-commercial. Text grounding is for personal/research use.</p></article>
+          <article class="reveal"><h3>Bring your own footage</h3><p>No source video ships with PlayTrack. Use footage you are authorized to process and share.</p></article>
         </div>
       </section>
 

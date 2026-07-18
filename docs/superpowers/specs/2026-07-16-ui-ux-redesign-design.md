@@ -131,8 +131,7 @@ disabled while a track or export job is queued or running.
 ### 2. Select
 
 The Select inspector tells the user to scrub to a clear frame and click a
-player. On CUDA, a Click/Describe segmented control exposes text selection. On
-non-CUDA devices the Describe method is absent rather than disabled.
+player. The same click-selection workflow is available on CUDA, MPS, and CPU.
 
 After selection, the inspector shows a small player thumbnail, anchor time, and
 confidence as secondary detail. The primary action becomes Track Player.
@@ -286,7 +285,7 @@ remain intact.
 
 1. Opening a video resets selection, track, crop, and export state while keeping
    global library data.
-2. A click or text candidate creates the current selection and anchor frame.
+2. A click creates the current selection and anchor frame.
 3. Track Player starts the existing tracking job. WebSocket updates populate
    job status, partial track frames, overlays, and timeline coverage from a
    single state source.
@@ -304,7 +303,7 @@ No backend route, persisted schema, or model pipeline change is required.
 Errors render beside the operation that failed:
 
 - open failures remain in the empty canvas or Library drawer;
-- selection failures preserve the current frame and allow another click/prompt;
+- selection failures preserve the current frame and allow another click;
 - tracking failures preserve the selection and any received partial frames,
   offer Retry, and expose technical details on demand;
 - crop-preview failures preserve settings and offer Retry;
@@ -321,7 +320,7 @@ Weight-free frontend tests cover:
 
 - the workflow reducer/controller transitions and reset rules;
 - one inspector state and primary action at a time;
-- CUDA and non-CUDA selection-method presentation;
+- device-independent click-selection presentation;
 - keyboard shortcuts and input-focus guards;
 - track coverage, lost count, contiguous range derivation, and range seeking;
 - drawer focus/escape behavior and video-switch locking during active jobs;

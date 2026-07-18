@@ -281,7 +281,7 @@ Commit: `git commit -am "Add source naming controls"`
 
 - [ ] **Step 1: Write failing playback-lock interaction tests**
 
-Test that a playing video is paused before `onSourceClick` and `onCandidateConfirm` execute, `togglePlayback` does not call `play()` while locked, and a native `play` event is immediately paused. Add an App wiring test that text selection calls `videoStageRef.pause()` before the workspace callback.
+Test that a playing video is paused before `onSourceClick` executes, the callback receives the exact displayed frame, `togglePlayback` does not call `play()` while locked, and a native `play` event is immediately paused.
 
 ```typescript
 expect(pause.mock.invocationCallOrder[0]).toBeLessThan(
@@ -297,7 +297,7 @@ Expected: pause ordering and lock tests fail.
 
 - [ ] **Step 3: Implement synchronous pause and lock guards**
 
-Pause at the top of click/candidate handlers before reading `currentTime`. Expose `pause()` on the imperative handle. Guard `togglePlayback`; add `onPlay={() => { if (playbackLocked) videoRef.current?.pause() }}`. In App, set the lock when the Select stage has loading, candidates, or a confirmed selection, and wrap text selection with a synchronous `pause()` call.
+Pause at the top of the click handler before reading `currentTime`, calculate the displayed frame, and pass it with the source point. Expose `pause()` on the imperative handle. Guard `togglePlayback`; add `onPlay={() => { if (playbackLocked) videoRef.current?.pause() }}`. In App, set the lock when the Select stage is loading or has a confirmed selection.
 
 - [ ] **Step 4: Verify Task 4 and commit**
 
@@ -349,7 +349,7 @@ New track writes always store `startFrameIdx` and `endFrameExclusive`. Loader in
 
 - [ ] **Step 4: Write failing range-cache and local/absolute mapping tests**
 
-Extract frames `[1, 4)` from the four-frame synthetic video and assert exactly three JPEGs plus `sequence.start_frame_idx == 1`. Run a fake propagation returning local indexes `0,1,2` with anchor source frame 2; assert published/persisted indexes `1,2,3`, progress uses three frames, and rescue asks for absolute source frames.
+Extract frames `[1, 4)` from the four-frame synthetic video and assert exactly three JPEGs plus `sequence.start_frame_idx == 1`. Run a fake propagation returning local indexes `0,1,2` with anchor source frame 2; assert published/persisted indexes `1,2,3` and progress uses three frames.
 
 - [ ] **Step 5: Run tracking tests and confirm RED**
 
@@ -359,7 +359,7 @@ Expected: cache always starts at zero and tracker publishes local indexes.
 
 - [ ] **Step 6: Implement range-specific extraction and mapping**
 
-Use an ffmpeg filter `select=between(n\,START\,END_INCLUSIVE),SCALE` with passthrough frame sync before writing images, and require exactly `end-start` images. Store `start_frame_idx` in `sequence.json` and the cache directory name. Preserve the existing test-only `frame_limit` as a cap from the selected start (`effective_end = min(end_frame_exclusive, start_frame_idx + frame_limit)`). Convert source anchor to `local_anchor = frame_idx - sequence.start_frame_idx`; map every observed local index back before merge, progress, rescue, and missing-frame fill.
+Use an ffmpeg filter `select=between(n\,START\,END_INCLUSIVE),SCALE` with passthrough frame sync before writing images, and require exactly `end-start` images. Store `start_frame_idx` in `sequence.json` and the cache directory name. Preserve the existing test-only `frame_limit` as a cap from the selected start (`effective_end = min(end_frame_exclusive, start_frame_idx + frame_limit)`). Convert source anchor to `local_anchor = frame_idx - sequence.start_frame_idx`; map every observed local index back before merge, progress, persistence, and missing-frame fill.
 
 - [ ] **Step 7: Wire track route and persistence callback**
 
@@ -464,7 +464,7 @@ Expected: missing types, helpers, and request fields.
 
 - [ ] **Step 3: Implement workspace range state**
 
-Initialize `[0, video.nbFrames)` on open. Expose `setRange`, `setRangeIn`, `setRangeOut`, and `resetRange`. Every range change aborts active selection requests and clears selection/candidates/errors. Reject `selectAt`/candidate/text anchors outside the range. Include range in tracking and atomically restore it with a saved player.
+Initialize `[0, video.nbFrames)` on open. Expose `setRange`, `setRangeIn`, `setRangeOut`, and `resetRange`. Every range change aborts active selection requests and clears the selection and its errors. Reject click anchors outside the range. Include range in tracking and atomically restore it with a saved player.
 
 - [ ] **Step 4: Write failing Option A interaction tests**
 

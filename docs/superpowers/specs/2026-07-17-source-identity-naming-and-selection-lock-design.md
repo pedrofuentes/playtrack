@@ -8,7 +8,7 @@ Make each source video appear once in the Library, let users name sources when o
 
 ## Scope
 
-This change covers source registration and migration, source naming, frame-range selection, range-bounded tracking/export, selection-time playback behavior, and download filenames. It does not change player-detection semantics, crop-following behavior, or the existing source/player/export Library tabs.
+This change covers source registration and migration, source naming, frame-range selection, range-bounded tracking/export, selection-time playback behavior, and download filenames. It does not change click-selection semantics, crop-following behavior, or the existing source/player/export Library tabs.
 
 ## User Experience
 
@@ -28,8 +28,7 @@ Server-path and uploaded sources retain different ownership semantics. Registere
 
 - Users may play or scrub footage to find an anchor frame before starting selection.
 - A click selection pauses the video synchronously before the frame index is captured.
-- Starting text selection also pauses the video before the request is sent.
-- Playback remains locked while click/text selection is loading, while text candidates are shown, or while a player selection is confirmed.
+- Playback remains locked while click selection is loading or while a player selection is confirmed.
 - Native controls and the Space shortcut cannot resume playback while locked.
 - Resetting the selection removes the lock but does not automatically resume playback.
 - Tracking and later review/export stages keep their current playback behavior.
@@ -80,7 +79,7 @@ The registration API accepts an optional name in the JSON body for paths and as 
 
 `TrackRequest` adds optional `startFrameIdx` and `endFrameExclusive`. Omitted fields preserve backward compatibility by selecting `[0, sourceFrameCount)`. The route validates the range and requires the anchor frame to be inside it before starting a job.
 
-`VideoStore.prepare_tracking_frames` accepts the validated start/end pair and caches a sequential JPEG set for only that interval. `TrackingFrameSequence` records the absolute starting source frame as well as its local frame count. SAM 2 continues to receive a zero-based sequential directory and a local anchor index. `VideoTracker` maps engine observations back to absolute source frame indexes before publishing progress, invoking rescue, or persisting `TrackFrame` values. Missing-frame filling is limited to the selected interval.
+`VideoStore.prepare_tracking_frames` accepts the validated start/end pair and caches a sequential JPEG set for only that interval. `TrackingFrameSequence` records the absolute starting source frame as well as its local frame count. SAM 2 continues to receive a zero-based sequential directory and a local anchor index. `VideoTracker` maps engine observations back to absolute source frame indexes before publishing progress or persisting `TrackFrame` values. Missing-frame filling is limited to the selected interval.
 
 This boundary is required for the feature's performance goal: selecting 1,000 frames from a 100,000-frame source must extract and propagate across roughly 1,000 frames, not merely hide the other 99,000 frames in the UI.
 
@@ -88,7 +87,7 @@ This boundary is required for the feature's performance goal: selecting 1,000 fr
 
 Saved track JSON gains `startFrameIdx` and `endFrameExclusive`. `SavedTrack` exposes both values, and Library responses include them. New writes always include explicit boundaries. For a legacy record without them, the loader infers the minimum and maximum persisted `TrackFrame.frameIdx` values; an empty legacy track falls back to the full source bounds supplied by the Library/API layer. Existing tracks are not rewritten merely to add these fields.
 
-All persisted `TrackFrame.frameIdx` values remain absolute source indexes. This keeps timeline navigation, rescue-frame extraction, and future multi-anchor splicing unambiguous.
+All persisted `TrackFrame.frameIdx` values remain absolute source indexes. This keeps timeline navigation, track-health ranges, and future multi-anchor splicing unambiguous.
 
 ### Range-bounded crop planning and export
 
@@ -140,14 +139,14 @@ The existing editor timeline gains the approved Option A interaction during the 
 - In and Out handles visually bracket the included segment; excluded footage is dimmed.
 - `Set In`, `Set Out`, and `Reset full video` controls sit with the range summary.
 - Pointer dragging provides fast coarse placement, and keyboard controls move a focused handle frame by frame for accessible precision.
-- Changing a boundary clears any existing click selection or text candidates because their anchor may no longer be valid.
+- Changing a boundary clears any existing click selection because its anchor may no longer be valid.
 - When tracking begins, the handles become read-only and the selected interval remains visible through Review and Export.
 
 `useWorkspace` owns the current `FrameRange`, initializes it from video metadata, includes it in `startTracking`, and restores it atomically with a saved player. `TrackTimeline` owns range rendering and pointer/keyboard interaction but reports validated boundary changes upward.
 
 ### Selection lock boundary
 
-`VideoStage` owns the synchronous media action because it has direct access to the `<video>` element. Its imperative handle gains `pause()`. Click and candidate confirmation handlers pause before reading `currentTime`. App pauses the stage before invoking text selection. A `playbackLocked` prop prevents native play events and shortcut playback while selection state is active. This keeps media control separate from asynchronous selection state in `useWorkspace`.
+`VideoStage` owns the synchronous media action because it has direct access to the `<video>` element. Its imperative handle gains `pause()`. The click handler pauses before reading `currentTime` and includes the exact displayed frame in its callback. A `playbackLocked` prop prevents native play events and shortcut playback while selection state is active. This keeps media control separate from asynchronous selection state in `useWorkspace`.
 
 ## Error Handling
 
@@ -180,7 +179,6 @@ The existing editor timeline gains the approved Option A interaction during the 
 - Path and upload registration submit optional source names and consume the returned name.
 - The Sources tab renames a source inline and refreshes the Library.
 - Clicking a player pauses before the selection callback observes the frame.
-- Text selection pauses before the API request.
 - Native and shortcut playback remain blocked until selection is reset.
 - Timeline handles and Set In/Set Out update a frame-accurate contiguous range and expose duration/frame count.
 - Moving a range boundary clears stale selection state and prevents selection outside the interval.

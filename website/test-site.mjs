@@ -36,8 +36,9 @@ if (errors.length === 0) {
     'https://github.com/pedrofuentes/playtrack',
     'https://github.com/pedrofuentes/playtrack/issues/new?template=bug_report.yml',
     'https://github.com/pedrofuentes/playtrack/issues/new?template=feature_request.yml',
-    'LocateAnything',
-    'non-commercial',
+    '<th>System</th><th>SAM 2 tracking</th><th>Notes</th>',
+    'Bring your own footage',
+    'Scrub to a clear frame and click the player.',
     'Windows',
     'macOS',
   ]

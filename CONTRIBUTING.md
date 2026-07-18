@@ -49,6 +49,5 @@ features use a plain imperative subject.
 ## Licensing
 
 Contributions to PlayTrack are accepted under the repository's [MIT License](LICENSE).
-Third-party dependencies and model weights retain their upstream terms. In particular,
-optional LocateAnything weights are non-commercial under NVIDIA's research license and
-must not be redistributed with PlayTrack.
+Third-party dependencies and model weights retain their upstream terms and must not be
+redistributed with PlayTrack unless their licenses allow it.

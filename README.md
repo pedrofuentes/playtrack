@@ -17,8 +17,8 @@
 ## What PlayTrack does
 
 PlayTrack turns a fixed panoramic recording into a conventional video that follows
-one player. Click a player on a clear frame—or describe them on a CUDA machine—then
-let SAM 2 propagate the selection through a chosen range. Review track health, tune
+one player. Click a player on a clear frame, then let SAM 2 propagate the selection
+through a chosen range. Review track health, tune
 the crop dimensions, zoom, and camera smoothness, and export an H.264 MP4 with audio.
 
 The application is single-user and local-first. Videos, frame caches, tracks, and
@@ -26,8 +26,7 @@ exports stay on the computer running FastAPI. The installable PWA caches only th
 compiled UI and brand assets; video processing still requires the local backend.
 
 Windows with NVIDIA CUDA is the primary target. macOS/Apple Silicon supports click
-selection and tracking through MPS. Optional LocateAnything text grounding is
-CUDA-only and its weights are non-commercial under NVIDIA's research license.
+selection and tracking through MPS.
 
 ## Quick start
 
@@ -43,7 +42,7 @@ From PowerShell in the repository root:
 
 ```powershell
 uv python install 3.12
-uv sync --project backend --python 3.12 --extra dev --extra locate
+uv sync --project backend --python 3.12 --extra dev
 
 uv pip install --python backend\.venv\Scripts\python.exe --reinstall `
   torch==2.5.1 torchvision==0.20.1 `
@@ -55,7 +54,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1
 
 `run.ps1` checks the toolchain, installs/builds the frontend when needed, starts
 PlayTrack at <http://127.0.0.1:8000>, waits for health, and opens the browser.
-The first text-selection request downloads roughly 7.7 GB of LocateAnything weights.
 
 For development with FastAPI reload and Vite hot reload:
 
@@ -75,16 +73,14 @@ backend/.venv/bin/python scripts/fetch_models.py
 ./scripts/dev.sh
 ```
 
-Open <http://127.0.0.1:5173>. LocateAnything is intentionally omitted: the text
-selection UI is hidden and `POST /api/select/text` returns 501 on non-CUDA hosts.
+Open <http://127.0.0.1:5173>.
 
 ## Use PlayTrack
 
 1. Open a constant-frame-rate sports video by upload or server path. If
    `examples/example.mp4` exists, PlayTrack opens it automatically. No footage ships
    with the repository; `examples/*.mp4` is gitignored.
-2. Mark a useful in/out range, scrub to a clear frame, and click the player. On CUDA,
-   you can instead enter a description and confirm one of the candidate boxes.
+2. Mark a useful in/out range, scrub to a clear frame, and click the player.
 3. Name the player and start tracking. The overlay fills as SAM 2 propagates forward
    and backward from the anchor.
 4. Review coverage and lost-frame ranges. Choose **Set framing** when the track is ready.
@@ -122,19 +118,15 @@ Defaults live in `backend/app/config.py`.
 | `PLAYTRACK_SAM2_CHECKPOINT` | base-plus checkpoint | Checkpoint override. |
 | `PLAYTRACK_SAM2_CONFIG` | base-plus config | SAM 2 model config override. |
 | `PLAYTRACK_SAM2_CROP_SIZE` | `1024` | High-resolution click-selection crop in source pixels. |
-| `PLAYTRACK_LOCATE_MODEL` | `nvidia/LocateAnything-3B` | Optional text-grounding model ID. |
-| `PLAYTRACK_LOCATE_REVISION` | pinned commit | Trusted model-code/weight revision. |
 | `PLAYTRACK_FFMPEG` / `PLAYTRACK_FFPROBE` | `ffmpeg` / `ffprobe` | Video tool binaries. |
 | `PLAYTRACK_MAX_UPLOAD_BYTES` | `21474836480` | Streaming upload limit (20 GiB). |
 | `PLAYTRACK_MAX_EXPORT_WIDTH` / `PLAYTRACK_MAX_EXPORT_HEIGHT` | `4096` / `2160` | Output dimension bounds. |
 | `PLAYTRACK_MAX_EXPORT_PIXELS` | `8847360` | Output pixels per frame. |
 | `TRACKING_MAX_DIM` | `2048` | Maximum tracking-cache frame dimension. |
 | `SAM2_OFFLOAD_VIDEO_TO_CPU` / `SAM2_OFFLOAD_STATE_TO_CPU` | `0` | SAM 2 memory offload; forced on MPS. |
-| `LOCATE_MAX_INPUT_DIM` | `2500` | Text-grounding downscale bound. |
-| `LOCATE_RESCUE_ENABLED` / `LOCATE_RESCUE_AFTER` / `LOCATE_RESCUE_MIN_SCORE` | `1` / `15` / `0.5` | Occlusion-rescue controls. |
 
 This release is a clean environment-variable rename: obsolete `FINDME_*` settings are
-not accepted. Unbranded `SAM2_*`, `LOCATE_*`, and `TRACKING_MAX_DIM` settings remain.
+not accepted. Unbranded `SAM2_*` and `TRACKING_MAX_DIM` settings remain.
 
 ### Library migration
 
@@ -152,7 +144,7 @@ prefer the canonical database. Legacy JSON catalogs remain intentionally ignored
 
 ```text
 frontend/   React + Vite + TypeScript editor + generateSW PWA
-backend/    FastAPI + SAM 2 + LocateAnything + PyAV/OpenCV
+backend/    FastAPI + SAM 2 + PyAV/OpenCV
 website/    Dependency-free static product site for GitHub Pages
 scripts/    macOS/Windows launchers and model fetcher
 ```
@@ -167,11 +159,9 @@ FindMe specs under `docs/superpowers/` are historical records from before the re
 - Full 930-frame tracking takes about 20 minutes on Apple Silicon. Use short ranges to iterate.
 - SAM 2 can switch identity when players overlap without producing lost frames. Re-anchor
   after the collision; multi-anchor splicing is the planned fix.
-- LocateAnything visual-prompt rescue remains dormant because compatible public weights
-  are not available. Text grounding works independently on CUDA.
 - Tracking/export each have one worker and two queue slots. Overload returns retryable HTTP 429.
 - Variable-frame-rate sources are rejected so frame-indexed tracking and export cannot drift.
-- RTX 2080 Ti support exists in code but the real 11 GB VRAM ceiling and speed remain unverified.
+- RTX 2080 Ti support exists in code, but SAM 2 speed and peak VRAM remain unverified on that hardware.
 - PlayTrack has no authentication. Do not expose it to the public internet.
 
 ## Contributing and security

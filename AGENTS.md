@@ -8,7 +8,7 @@ as historical implementation records; do not treat their branding/config names a
 ## What this is
 
 A local web app that turns panoramic sports footage into a "virtual camera": the user
-opens a video, selects a player (click, or text prompt on CUDA), SAM 2 tracks them
+opens a video, clicks a player to select them, SAM 2 tracks them
 through the video, and the app exports a cropped video that smoothly follows the player
 at user-chosen dimensions. Single user, localhost by default.
 
@@ -37,14 +37,13 @@ backend/   FastAPI (Python 3.12, uv-managed)
   app/main.py                 routes, WS /ws/jobs/{id} (legacy + delta-v1), serves frontend/dist + SPA fallback
   app/config.py               Settings + env vars (single source of truth for config)
   app/videos.py               VideoStore: register/upload, ffprobe metadata, frame caches
-  app/selection.py            click→SAM2 image predict on a high-res crop; text→LocateAnything
-  app/tracking.py             SAM2 video propagation job, loss detection, LocateAnything rescue
+  app/selection.py            click→SAM2 image predict on a high-res crop
+  app/tracking.py             SAM2 video propagation job and loss detection
   app/crop_planner.py         pure NumPy: gap fill, spring smoothing, subpixel crop windows
   app/exporter.py             PyAV decode → cv2.getRectSubPix crop → Lanczos resize → h264+audio
   app/jobs.py                 bounded track/export queues, cancellation, leases, durable state
   app/library.py              SQLite persistence: data/library/playtrack.sqlite3 (WAL + FULL sync)
   app/models/sam2_engine.py   lazy SAM2 image/video engines, device autodetect
-  app/models/locate_engine.py LocateAnything-3B (CUDA only), lazy load/unload
 
 scripts/   dev.sh (Mac dev), dev.ps1 + run.ps1 (Windows), fetch_models.py (SAM2 checkpoints)
 
@@ -69,7 +68,6 @@ uv sync --extra dev                                  # deps (torch, sam2 from gi
 uv run --extra dev pytest -m "not integration"       # weight-free suite — the default gate
 python3 ../scripts/fetch_models.py                   # SAM2.1 base-plus → checkpoints/ (~309MB)
 uv run --extra dev pytest                             # full suite (needs checkpoint; CUDA tests skip off-CUDA)
-uv sync --extra dev --extra locate                    # adds transformers for LocateAnything (CUDA machines)
 
 # Frontend
 cd frontend
@@ -107,25 +105,18 @@ the local FastAPI server is required and offer retry when it is unreachable.
 | `PLAYTRACK_SAM2_CROP_SIZE` | `1024` | click-select high-res crop size (source px) |
 | `SAM2_OFFLOAD_VIDEO_TO_CPU` / `SAM2_OFFLOAD_STATE_TO_CPU` | `0` | forced on automatically on MPS |
 | `TRACKING_MAX_DIM` | `2048` | tracking frame-cache resolution (4096 ≈ 2× slower, no accuracy gain — measured) |
-| `PLAYTRACK_LOCATE_MODEL` | `nvidia/LocateAnything-3B` | HF model id |
-| `PLAYTRACK_LOCATE_REVISION` | pinned commit | exact trusted model-code/weight revision passed to Transformers |
-| `LOCATE_MAX_INPUT_DIM` | `2500` | downscale bound for text grounding |
-| `LOCATE_RESCUE_ENABLED` / `LOCATE_RESCUE_AFTER` / `LOCATE_RESCUE_MIN_SCORE` | `1` / `15` / `0.5` | occlusion-rescue tuning |
 | `PLAYTRACK_FFMPEG` / `PLAYTRACK_FFPROBE` | `ffmpeg`/`ffprobe` | binary paths |
 | `PLAYTRACK_MAX_EXPORT_WIDTH` / `PLAYTRACK_MAX_EXPORT_HEIGHT` | `4096` / `2160` | maximum output dimensions |
 | `PLAYTRACK_MAX_EXPORT_PIXELS` | `8847360` | maximum output pixels per frame |
 
 ## Device matrix
 
-| Device | SAM 2.1 | LocateAnything |
+| Device | SAM 2.1 | Notes |
 |---|---|---|
-| CUDA Turing (target: RTX 2080 Ti, 11 GB) | base-plus, fp16, SDPA (flash-attn unsupported) | fp16 + SDPA, lazy load/**unload before SAM2 runs** (VRAM) |
-| CUDA Ampere+ | large, bf16 | bf16 + SDPA |
-| MPS (Mac dev) | base-plus, offload forced | disabled (API returns 501; UI hides text search) |
-| CPU | small | disabled |
-
-`GET /api/features` reports availability; the frontend adapts. LocateAnything weights
-are **non-commercial** (NVIDIA research license) — keep this app personal-use.
+| CUDA Turing (target: RTX 2080 Ti, 11 GB) | base-plus, fp16, SDPA | flash-attn unsupported |
+| CUDA Ampere+ | large, bf16 | SDPA |
+| MPS (Mac dev) | base-plus | CPU offload forced |
+| CPU | small | compatibility path; slow |
 
 ## Conventions and rules
 
@@ -168,9 +159,6 @@ are **non-commercial** (NVIDIA research license) — keep this app personal-use.
   following the wrong player, with zero `lost` frames — loss detection cannot catch it,
   and raising `TRACKING_MAX_DIM` to 4096 does not fix it (verified on the example at
   ~frame 650). The real fix is the planned multi-anchor splicing feature.
-- **LocateAnything rescue is dormant**: the public 3B checkpoint doesn't support
-  visual-prompt inference yet; the rescue path activates only when NVIDIA ships those
-  weights. Text grounding works. Candidate scores are uncalibrated (1.0).
 - The macOS `av`/`cv2` duplicate-dylib objc warning on export is benign noise.
 - Full-video tracking takes ~20 min on Apple Silicon (930 frames) — design UX and tests
   accordingly; CI-scale tests must use short synthetic clips.
@@ -180,8 +168,7 @@ are **non-commercial** (NVIDIA research license) — keep this app personal-use.
 M0–M7 are complete and committed (git log is authoritative). Not yet done:
 
 1. **Windows/RTX 2080 Ti verification** (code exists, hardware untested): `run.ps1` /
-   `dev.ps1`, LocateAnything real-model text selection, VRAM ceiling under 11 GB across
-   select→track→export, CUDA tracking speed.
+   `dev.ps1`, SAM 2 peak VRAM, and CUDA tracking speed.
 2. **Multi-anchor track splicing** (proposed, top priority for contact sports): re-anchor
    the track after an identity switch and merge segments into one exportable track.
 3. Network-exposure hardening (auth token, restrict path registration) if LAN use
