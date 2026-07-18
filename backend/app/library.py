@@ -33,6 +33,17 @@ class SavedTrack:
     name: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class PendingDeletion:
+    deletion_id: int
+    kind: str
+    target_id: str
+    path: Path | None
+    created_at: str
+    attempts: int
+    last_error: str | None
+
+
 class LibraryStore:
     """Transactional SQLite catalog for videos, jobs, tracks, and exports."""
 
@@ -272,12 +283,76 @@ class LibraryStore:
             ):
                 redundant_path.unlink(missing_ok=True)
 
-    def remove_video(self, video_id: str) -> None:
-        self._write(
-            lambda connection: connection.execute(
-                "DELETE FROM videos WHERE video_id = ?", (video_id,)
+    def remove_video(
+        self,
+        video_id: str,
+        *,
+        pending_paths: Sequence[tuple[str, str, Path]] = (),
+    ) -> None:
+        def remove(connection: sqlite3.Connection) -> None:
+            connection.execute("DELETE FROM videos WHERE video_id = ?", (video_id,))
+            for kind, target_id, path in pending_paths:
+                connection.execute(
+                    """
+                    INSERT INTO pending_deletions (
+                        kind, target_id, path, created_at
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (kind, target_id, str(path), _now()),
+                )
+
+        self._write(remove)
+
+    def remove_video_with_dependents(
+        self,
+        video_id: str,
+        *,
+        pending_paths: Sequence[tuple[str, str, Path]] = (),
+        export_deletion_path: Callable[[dict[str, Any]], Path | None] | None = None,
+    ) -> tuple[bool, list[str], list[dict[str, Any]]]:
+        def remove(
+            connection: sqlite3.Connection,
+        ) -> tuple[bool, list[str], list[dict[str, Any]]]:
+            exists = connection.execute(
+                "SELECT 1 FROM videos WHERE video_id = ?", (video_id,)
+            ).fetchone()
+            if exists is None:
+                return False, [], []
+            track_ids = [
+                str(row["job_id"])
+                for row in connection.execute(
+                    "SELECT job_id FROM tracks WHERE video_id = ?", (video_id,)
+                ).fetchall()
+            ]
+            export_rows = connection.execute(
+                "SELECT * FROM exports WHERE video_id = ?", (video_id,)
+            ).fetchall()
+            exported = [_export_dict(row, tolerate_corrupt=True) for row in export_rows]
+            job_ids = track_ids + [str(entry["exportId"]) for entry in exported]
+            connection.execute("DELETE FROM exports WHERE video_id = ?", (video_id,))
+            connection.execute("DELETE FROM tracks WHERE video_id = ?", (video_id,))
+            connection.execute("DELETE FROM videos WHERE video_id = ?", (video_id,))
+            connection.executemany(
+                "DELETE FROM jobs WHERE job_id = ?",
+                ((job_id,) for job_id in job_ids),
             )
-        )
+            for kind, target_id, path in pending_paths:
+                self._insert_pending_deletion(
+                    connection, kind=kind, target_id=target_id, path=path
+                )
+            if export_deletion_path is not None:
+                for entry in exported:
+                    path = export_deletion_path(entry)
+                    if path is not None:
+                        self._insert_pending_deletion(
+                            connection,
+                            kind="export",
+                            target_id=str(entry["exportId"]),
+                            path=path,
+                        )
+            return True, track_ids, exported
+
+        return self._write(remove)
 
     def rename_video(self, video_id: str, raw_name: str) -> str | None:
         name = _clean_name(raw_name, label="Source name")
@@ -367,6 +442,19 @@ class LibraryStore:
                 )
         return saved
 
+    def get_track(self, job_id: str) -> SavedTrack | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM tracks WHERE job_id = ?", (job_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            return _saved_track(row)
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning("Ignoring corrupt library track %s: %s", job_id, exc)
+            return None
+
     def resolve_player_name(self, video_id: str, requested: str | None) -> str:
         cleaned = _clean_name(requested, label="Player name")
         if cleaned is not None:
@@ -448,6 +536,56 @@ class LibraryStore:
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             return None
 
+    def remove_track_with_exports(
+        self,
+        job_id: str,
+        *,
+        export_deletion_path: Callable[[dict[str, Any]], Path | None] | None = None,
+    ) -> tuple[SavedTrack | None, list[dict[str, Any]]]:
+        def remove(
+            connection: sqlite3.Connection,
+        ) -> tuple[sqlite3.Row | None, list[dict[str, Any]]]:
+            track_row = connection.execute(
+                "SELECT * FROM tracks WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if track_row is None:
+                return None, []
+            export_rows = connection.execute(
+                "SELECT * FROM exports WHERE track_job_id = ?", (job_id,)
+            ).fetchall()
+            exported = [_export_dict(row, tolerate_corrupt=True) for row in export_rows]
+            connection.execute(
+                "DELETE FROM exports WHERE track_job_id = ?", (job_id,)
+            )
+            connection.execute("DELETE FROM tracks WHERE job_id = ?", (job_id,))
+            job_identifiers = [
+                job_id,
+                *(str(entry["exportId"]) for entry in exported),
+            ]
+            connection.executemany(
+                "DELETE FROM jobs WHERE job_id = ?",
+                ((identifier,) for identifier in job_identifiers),
+            )
+            if export_deletion_path is not None:
+                for entry in exported:
+                    path = export_deletion_path(entry)
+                    if path is not None:
+                        self._insert_pending_deletion(
+                            connection,
+                            kind="export",
+                            target_id=str(entry["exportId"]),
+                            path=path,
+                        )
+            return track_row, exported
+
+        row, exported = self._write(remove)
+        if row is None:
+            return None, exported
+        try:
+            return _saved_track(row), exported
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return None, exported
+
     def save_export(
         self,
         export_id: str,
@@ -514,17 +652,255 @@ class LibraryStore:
                 )
         return entries
 
-    def remove_exports(self, predicate: Any) -> list[dict[str, Any]]:
+    def get_export(self, export_id: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM exports WHERE export_id = ?", (export_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            params = json.loads(row["params_json"])
+            if not isinstance(params, dict):
+                raise ValueError("export params must be an object")
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning("Ignoring corrupt library export %s: %s", export_id, exc)
+            return None
+        return {
+            "exportId": row["export_id"],
+            "videoId": row["video_id"],
+            "trackJobId": row["track_job_id"],
+            "params": params,
+            "path": row["path"],
+            "size": row["size"],
+            "createdAt": row["created_at"],
+        }
+
+    def remove_exports(
+        self,
+        predicate: Any,
+        *,
+        deletion_path: Callable[[dict[str, Any]], Path | None] | None = None,
+    ) -> list[dict[str, Any]]:
         removed = [entry for entry in self.exports() if predicate(entry)]
         identifiers = [str(entry["exportId"]) for entry in removed]
         if identifiers:
-            self._write(
-                lambda connection: connection.executemany(
+            def remove(connection: sqlite3.Connection) -> None:
+                connection.executemany(
                     "DELETE FROM exports WHERE export_id = ?",
                     ((identifier,) for identifier in identifiers),
                 )
-            )
+                connection.executemany(
+                    "DELETE FROM jobs WHERE job_id = ?",
+                    ((identifier,) for identifier in identifiers),
+                )
+                if deletion_path is not None:
+                    for entry in removed:
+                        path = deletion_path(entry)
+                        if path is not None:
+                            connection.execute(
+                                """
+                                INSERT INTO pending_deletions (
+                                    kind, target_id, path, created_at
+                                ) VALUES (?, ?, ?, ?)
+                                """,
+                                (
+                                    "export",
+                                    str(entry["exportId"]),
+                                    str(path),
+                                    _now(),
+                                ),
+                            )
+
+            self._write(remove)
         return removed
+
+    def pending_deletions(
+        self, *, kind: str | None = None, target_id: str | None = None
+    ) -> list[PendingDeletion]:
+        clauses: list[str] = []
+        parameters: list[str] = []
+        if kind is not None:
+            clauses.append("kind = ?")
+            parameters.append(kind)
+        if target_id is not None:
+            clauses.append("target_id = ?")
+            parameters.append(target_id)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"SELECT * FROM pending_deletions{where} ORDER BY deletion_id",
+                parameters,
+            ).fetchall()
+        return [
+            PendingDeletion(
+                deletion_id=int(row["deletion_id"]),
+                kind=str(row["kind"]),
+                target_id=str(row["target_id"]),
+                path=Path(str(row["path"])) if row["path"] is not None else None,
+                created_at=str(row["created_at"]),
+                attempts=int(row["attempts"]),
+                last_error=(
+                    str(row["last_error"])
+                    if row["last_error"] is not None
+                    else None
+                ),
+            )
+            for row in rows
+        ]
+
+    def complete_pending_deletion(self, deletion_id: int) -> None:
+        self._write(
+            lambda connection: connection.execute(
+                "DELETE FROM pending_deletions WHERE deletion_id = ?",
+                (deletion_id,),
+            )
+        )
+
+    @staticmethod
+    def _insert_pending_deletion(
+        connection: sqlite3.Connection,
+        *,
+        kind: str,
+        target_id: str,
+        path: Path,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO pending_deletions (kind, target_id, path, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (kind, target_id, str(path), _now()),
+        )
+
+    def fail_pending_deletion(self, deletion_id: int, error: str) -> None:
+        self._write(
+            lambda connection: connection.execute(
+                """
+                UPDATE pending_deletions
+                SET attempts = attempts + 1, last_error = ?
+                WHERE deletion_id = ?
+                """,
+                (error, deletion_id),
+            )
+        )
+
+    def save_job(
+        self,
+        *,
+        job_id: str,
+        kind: str,
+        state: str,
+        progress: float,
+        message: str,
+        track: Sequence["TrackFrame"],
+        resources: Sequence[str],
+        version: int,
+        created_at: str,
+        updated_at: str,
+        terminal_at: str | None,
+    ) -> None:
+        track_json = _json([frame.to_dict() for frame in track])
+        resources_json = _json(sorted(set(resources)))
+
+        def save(connection: sqlite3.Connection) -> None:
+            connection.execute(
+                """
+                INSERT INTO jobs (
+                    job_id, kind, state, progress, message, track_json,
+                    resources_json, version, created_at, updated_at, terminal_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(job_id) DO UPDATE SET
+                    kind = excluded.kind,
+                    state = excluded.state,
+                    progress = excluded.progress,
+                    message = excluded.message,
+                    track_json = excluded.track_json,
+                    resources_json = excluded.resources_json,
+                    version = excluded.version,
+                    updated_at = excluded.updated_at,
+                    terminal_at = excluded.terminal_at
+                """,
+                (
+                    job_id,
+                    kind,
+                    state,
+                    progress,
+                    message,
+                    track_json,
+                    resources_json,
+                    version,
+                    created_at,
+                    updated_at,
+                    terminal_at,
+                ),
+            )
+
+        self._write(save)
+
+    def load_jobs(self) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM jobs ORDER BY created_at, job_id"
+            ).fetchall()
+        jobs: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                raw_track = json.loads(row["track_json"])
+                raw_resources = json.loads(row["resources_json"])
+                if not isinstance(raw_track, list) or not isinstance(
+                    raw_resources, list
+                ):
+                    raise TypeError("job payloads must be JSON arrays")
+                jobs.append(
+                    {
+                        "jobId": str(row["job_id"]),
+                        "kind": str(row["kind"]),
+                        "state": str(row["state"]),
+                        "progress": float(row["progress"]),
+                        "message": str(row["message"]),
+                        "track": tuple(_track_frame(item) for item in raw_track),
+                        "resources": frozenset(str(item) for item in raw_resources),
+                        "version": int(row["version"]),
+                        "createdAt": str(row["created_at"]),
+                        "updatedAt": str(row["updated_at"]),
+                        "terminalAt": (
+                            str(row["terminal_at"])
+                            if row["terminal_at"] is not None
+                            else None
+                        ),
+                    }
+                )
+            except (TypeError, ValueError, json.JSONDecodeError, KeyError) as exc:
+                logger.warning("Ignoring corrupt job %s: %s", row["job_id"], exc)
+        return jobs
+
+    def remove_job(self, job_id: str) -> None:
+        self._write(
+            lambda connection: connection.execute(
+                "DELETE FROM jobs WHERE job_id = ?", (job_id,)
+            )
+        )
+
+    def prune_terminal_jobs(self, retention: int) -> list[str]:
+        def prune(connection: sqlite3.Connection) -> list[str]:
+            rows = connection.execute(
+                """
+                SELECT job_id FROM jobs
+                WHERE state IN ('completed', 'failed', 'canceled')
+                ORDER BY terminal_at DESC, updated_at DESC, job_id DESC
+                LIMIT -1 OFFSET ?
+                """,
+                (retention,),
+            ).fetchall()
+            identifiers = [str(row["job_id"]) for row in rows]
+            connection.executemany(
+                "DELETE FROM jobs WHERE job_id = ?",
+                ((identifier,) for identifier in identifiers),
+            )
+            return identifiers
+
+        return self._write(prune)
 
     def clear_caches(self) -> int:
         freed = 0
@@ -558,6 +934,28 @@ def _video_dict(row: sqlite3.Row) -> dict[str, Any]:
             "duration": row["duration"],
         },
         "openedAt": row["opened_at"],
+    }
+
+
+def _export_dict(
+    row: sqlite3.Row, *, tolerate_corrupt: bool = False
+) -> dict[str, Any]:
+    try:
+        params = json.loads(row["params_json"])
+        if not isinstance(params, dict):
+            raise ValueError("export params must be an object")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        if not tolerate_corrupt:
+            raise
+        params = {}
+    return {
+        "exportId": row["export_id"],
+        "videoId": row["video_id"],
+        "trackJobId": row["track_job_id"],
+        "params": params,
+        "path": row["path"],
+        "size": row["size"],
+        "createdAt": row["created_at"],
     }
 
 

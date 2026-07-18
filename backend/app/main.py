@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import math
 import posixpath
 import re
 import threading
 import unicodedata
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
@@ -29,7 +31,12 @@ from .crop_planner import (
     plan_crop_windows,
 )
 from .exporter import export_video
-from .jobs import JobNotFoundError, JobRegistry
+from .jobs import (
+    JobNotFoundError,
+    JobQueueFullError,
+    JobRegistry,
+    JobRegistryClosedError,
+)
 from .library import _clean_name
 from .models.locate_engine import get_locate_engine
 from .models.sam2_engine import get_sam2_engine, get_sam2_video_engine
@@ -57,6 +64,8 @@ from .videos import (
     VideoToolError,
     metadata_dict,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class SPAStaticFiles(StaticFiles):
@@ -325,25 +334,21 @@ def create_app(
             rescue_min_score=settings.locate_rescue_min_score,
             rescue_max_input_dimension=settings.locate_max_input_dimension,
         )
-    jobs = job_registry or JobRegistry()
+    owns_job_registry = job_registry is None
+    jobs = job_registry or JobRegistry(library=store.library)
     export_root = exports_dir if exports_dir is not None else settings.exports_dir
     store.library.backfill_track_names()
-    for saved_track in store.library.iter_tracks():
-        try:
-            store.get(saved_track.video_id)
-        except VideoNotFoundError:
-            continue
-        jobs.restore_completed(saved_track.job_id, saved_track.track)
-    for saved_export in store.library.exports():
-        export_id = saved_export.get("exportId")
-        destination = _export_file_path(export_root, export_id)
-        if destination is not None and destination.is_file():
-            jobs.restore_progress_completed(
-                str(export_id), completion_message="Export complete"
-            )
     exporter = video_exporter or export_video
 
-    app = FastAPI(title="FindMe", version="0.1.0")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        try:
+            yield
+        finally:
+            if owns_job_registry:
+                jobs.close()
+
+    app = FastAPI(title="FindMe", version="0.1.0", lifespan=lifespan)
     lifecycle_lock = threading.RLock()
 
     def lifecycle_serialized(function: Any) -> Any:
@@ -591,34 +596,62 @@ def create_app(
             )
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
-        job_id = jobs.submit(
-            lambda report: tracker.track(
-                payload.videoId,
-                payload.frameIdx,
-                box,
-                start_frame_idx=payload.startFrameIdx,
-                end_frame_exclusive=end_frame_exclusive,
-                on_update=report,
-            ),
-            on_completed=lambda completed_id, track: persist_completed_track(
-                store.library,
-                video_id=payload.videoId,
-                job_id=completed_id,
-                anchor_frame_idx=payload.frameIdx,
-                box=box,
-                track=track,
-                start_frame_idx=payload.startFrameIdx,
-                end_frame_exclusive=end_frame_exclusive,
-                name=player_name,
-            ),
-            resources={f"video:{payload.videoId}", "cache"},
-        )
+        try:
+            job_id = jobs.submit(
+                lambda report: tracker.track(
+                    payload.videoId,
+                    payload.frameIdx,
+                    box,
+                    start_frame_idx=payload.startFrameIdx,
+                    end_frame_exclusive=end_frame_exclusive,
+                    on_update=report,
+                ),
+                on_completed=lambda completed_id, track: persist_completed_track(
+                    store.library,
+                    video_id=payload.videoId,
+                    job_id=completed_id,
+                    anchor_frame_idx=payload.frameIdx,
+                    box=box,
+                    track=track,
+                    start_frame_idx=payload.startFrameIdx,
+                    end_frame_exclusive=end_frame_exclusive,
+                    name=player_name,
+                ),
+                resources={f"video:{payload.videoId}", "cache"},
+            )
+        except JobQueueFullError as exc:
+            raise HTTPException(429, str(exc), headers={"Retry-After": "1"}) from exc
+        except JobRegistryClosedError as exc:
+            raise HTTPException(503, str(exc)) from exc
         return {"jobId": job_id, "playerName": player_name}
 
     @app.get("/api/track/{job_id}")
     def get_track(job_id: str) -> dict[str, object]:
         try:
             return jobs.get(job_id).to_dict()
+        except JobNotFoundError as exc:
+            saved = store.library.get_track(job_id)
+            if saved is None:
+                raise HTTPException(404, str(exc)) from exc
+            return {
+                "jobId": saved.job_id,
+                "state": "completed",
+                "progress": 1.0,
+                "message": "Tracking complete",
+                "track": [frame.to_dict() for frame in saved.track],
+            }
+
+    @app.get("/api/jobs/{job_id}")
+    def get_job(job_id: str) -> dict[str, object]:
+        try:
+            return jobs.get(job_id).to_dict()
+        except JobNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.post("/api/jobs/{job_id}/cancel", status_code=202)
+    def cancel_job(job_id: str) -> dict[str, object]:
+        try:
+            return jobs.cancel(job_id).to_dict()
         except JobNotFoundError as exc:
             raise HTTPException(404, str(exc)) from exc
 
@@ -665,18 +698,13 @@ def create_app(
             raise HTTPException(404, str(exc)) from exc
         try:
             track_snapshot = jobs.get(track_job_id)
-        except JobNotFoundError as exc:
-            raise HTTPException(404, str(exc)) from exc
-        if track_snapshot.state != "completed":
+        except JobNotFoundError:
+            track_snapshot = None
+        saved_track = store.library.get_track(track_job_id)
+        if track_snapshot is None and saved_track is None:
+            raise HTTPException(404, "Tracking job not found")
+        if track_snapshot is not None and track_snapshot.state != "completed":
             raise HTTPException(409, "Tracking job is not complete")
-        saved_track = next(
-            (
-                track
-                for track in store.library.iter_tracks()
-                if track.job_id == track_job_id
-            ),
-            None,
-        )
         if saved_track is None:
             raise HTTPException(409, "Completed tracking job has no saved track")
         if saved_track.video_id != video_id:
@@ -688,7 +716,7 @@ def create_app(
             <= record.metadata.nb_frames
         ):
             raise HTTPException(409, "Saved track range is invalid for the source video")
-        if track_snapshot.track != saved_track.track:
+        if track_snapshot is not None and track_snapshot.track != saved_track.track:
             raise HTTPException(409, "Tracking job does not match the saved track")
 
         range_length = (
@@ -700,7 +728,7 @@ def create_app(
         boxes: list[tuple[float, float, float, float] | None] = [
             None
         ] * range_length
-        for frame in sorted(track_snapshot.track, key=lambda item: item.frame_idx):
+        for frame in sorted(saved_track.track, key=lambda item: item.frame_idx):
             local_index = frame.frame_idx - saved_track.start_frame_idx
             if (
                 0 <= local_index < range_length
@@ -772,17 +800,23 @@ def create_app(
         )
 
         def run_export(job_id: str, report: Any) -> None:
-            exporter(
-                record.path,
-                export_root / f"{job_id}.mp4",
-                windows,
-                output_width=payload.outWidth,
-                output_height=payload.outHeight,
-                fps=record.metadata.fps,
-                source_start_frame=source_start_frame,
-                source_total_frames=record.metadata.nb_frames,
-                on_progress=report,
-            )
+            destination = export_root / f"{job_id}.mp4"
+            try:
+                exporter(
+                    record.path,
+                    destination,
+                    windows,
+                    output_width=payload.outWidth,
+                    output_height=payload.outHeight,
+                    fps=record.metadata.fps,
+                    source_start_frame=source_start_frame,
+                    source_total_frames=record.metadata.nb_frames,
+                    on_progress=report,
+                )
+            except Exception:
+                destination.unlink(missing_ok=True)
+                destination.with_suffix(".part.mp4").unlink(missing_ok=True)
+                raise
 
         def save_completed_export(completed_id: str) -> None:
             destination = export_root / f"{completed_id}.mp4"
@@ -803,38 +837,45 @@ def create_app(
                 destination.unlink(missing_ok=True)
                 raise
 
-        job_id = jobs.submit_progress(
-            run_export,
-            completion_message="Export complete",
-            on_completed=save_completed_export,
-            resources={
-                f"video:{payload.videoId}",
-                f"track:{payload.trackJobId}",
-            },
-        )
+        try:
+            job_id = jobs.submit_progress(
+                run_export,
+                completion_message="Export complete",
+                on_completed=save_completed_export,
+                resources={
+                    f"video:{payload.videoId}",
+                    f"track:{payload.trackJobId}",
+                },
+            )
+        except JobQueueFullError as exc:
+            raise HTTPException(429, str(exc), headers={"Retry-After": "1"}) from exc
+        except JobRegistryClosedError as exc:
+            raise HTTPException(503, str(exc)) from exc
         return {"jobId": job_id}
 
     @app.get("/api/exports/{job_id}.mp4", response_class=FileResponse)
     def exported_video(job_id: str) -> FileResponse:
         try:
             snapshot = jobs.get(job_id)
-        except JobNotFoundError as exc:
-            raise HTTPException(404, str(exc)) from exc
-        if snapshot.state not in ("completed", "failed"):
+        except JobNotFoundError:
+            snapshot = None
+        if snapshot is not None and snapshot.state not in (
+            "completed",
+            "failed",
+            "canceled",
+        ):
             raise HTTPException(409, "Export is not complete")
         destination = _export_file_path(export_root, job_id)
         if destination is None:
             raise HTTPException(404, "Exported video not found")
-        if snapshot.state == "failed" or not destination.is_file():
+        if (
+            snapshot is not None
+            and snapshot.state in ("failed", "canceled")
+        ) or not destination.is_file():
             raise HTTPException(404, "Exported video not found")
-        exported = next(
-            (
-                item
-                for item in store.library.exports()
-                if item.get("exportId") == job_id
-            ),
-            {},
-        )
+        exported = store.library.get_export(job_id)
+        if exported is None:
+            raise HTTPException(404, "Exported video not found")
         video_id = exported.get("videoId")
         source = next(
             (
@@ -968,10 +1009,45 @@ def create_app(
             ]
         }
 
+    def export_deletion_path(entry: dict[str, object]) -> Path | None:
+        return _export_file_path(export_root, entry.get("exportId"))
+
+    def retry_export_deletions(target_id: str | None = None) -> None:
+        pending = store.library.pending_deletions(
+            kind="export", target_id=target_id
+        )
+        for deletion in pending:
+            expected = _export_file_path(export_root, deletion.target_id)
+            if (
+                expected is None
+                or deletion.path is None
+                or deletion.path.resolve() != expected.resolve()
+            ):
+                store.library.fail_pending_deletion(
+                    deletion.deletion_id,
+                    "Pending export path is outside the configured export root",
+                )
+                continue
+            try:
+                expected.unlink(missing_ok=True)
+            except OSError as exc:
+                store.library.fail_pending_deletion(
+                    deletion.deletion_id, str(exc) or type(exc).__name__
+                )
+                logger.warning(
+                    "Could not finish pending export deletion %s: %s",
+                    deletion.target_id,
+                    exc,
+                )
+            else:
+                store.library.complete_pending_deletion(deletion.deletion_id)
+
     def delete_export_file(entry: dict[str, object]) -> None:
-        path = _export_file_path(export_root, entry.get("exportId"))
-        if path is not None and path.is_file():
-            path.unlink()
+        export_id = entry.get("exportId")
+        if isinstance(export_id, str):
+            retry_export_deletions(export_id)
+
+    retry_export_deletions()
 
     @app.patch("/api/library/tracks/{job_id}")
     def rename_library_track(
@@ -1004,12 +1080,15 @@ def create_app(
             raise HTTPException(409, "Track is still being saved")
         if jobs.is_resource_active(f"track:{job_id}"):
             raise HTTPException(409, "Track is in use by an active export")
-        saved = store.library.remove_track(job_id)
+        saved, exported = store.library.remove_track_with_exports(
+            job_id, export_deletion_path=export_deletion_path
+        )
         if saved is None:
             raise HTTPException(404, "Track not found")
-        jobs.remove(job_id)
-        for exported in store.library.remove_exports(lambda item: item.get("trackJobId") == job_id):
-            delete_export_file(exported)
+        jobs.remove(job_id, persist=False)
+        for entry in exported:
+            jobs.remove(str(entry["exportId"]), persist=False)
+            delete_export_file(entry)
         return Response(status_code=204)
 
     @app.delete("/api/library/exports/{export_id}", status_code=204)
@@ -1017,12 +1096,15 @@ def create_app(
     def delete_library_export(export_id: str) -> Response:
         if jobs.is_resource_active(f"job:{export_id}"):
             raise HTTPException(409, "Export is still being saved")
-        removed = store.library.remove_exports(lambda item: item.get("exportId") == export_id)
+        removed = store.library.remove_exports(
+            lambda item: item.get("exportId") == export_id,
+            deletion_path=export_deletion_path,
+        )
         if not removed:
             raise HTTPException(404, "Export not found")
         for exported in removed:
             delete_export_file(exported)
-        jobs.remove(export_id)
+        jobs.remove(export_id, persist=False)
         return Response(status_code=204)
 
     @app.delete("/api/library/videos/{video_id}", status_code=204)
@@ -1031,15 +1113,20 @@ def create_app(
         if jobs.is_resource_active(f"video:{video_id}"):
             raise HTTPException(409, "Source is in use by an active job")
         try:
-            store.remove(video_id)
+            _record, track_ids, exported = store.remove_with_dependents(
+                video_id, export_deletion_path=export_deletion_path
+            )
         except VideoNotFoundError as exc:
-            if not store.remove_catalog_entry(video_id):
+            found, track_ids, exported = store.library.remove_video_with_dependents(
+                video_id, export_deletion_path=export_deletion_path
+            )
+            if not found:
                 raise HTTPException(404, str(exc)) from exc
-        for saved in [track for track in store.library.iter_tracks() if track.video_id == video_id]:
-            store.library.remove_track(saved.job_id)
-            jobs.remove(saved.job_id)
-        for exported in store.library.remove_exports(lambda item: item.get("videoId") == video_id):
-            delete_export_file(exported)
+        for track_id in track_ids:
+            jobs.remove(track_id, persist=False)
+        for entry in exported:
+            jobs.remove(str(entry["exportId"]), persist=False)
+            delete_export_file(entry)
         return Response(status_code=204)
 
     @app.post("/api/library/maintenance/clear-caches")
@@ -1060,7 +1147,7 @@ def create_app(
         try:
             while True:
                 await websocket.send_json(snapshot.to_dict())
-                if snapshot.state in ("completed", "failed"):
+                if snapshot.state in ("completed", "failed", "canceled"):
                     return
                 snapshot = await asyncio.to_thread(
                     jobs.wait_for_update,

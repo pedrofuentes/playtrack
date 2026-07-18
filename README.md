@@ -213,8 +213,12 @@ per-track JSON files are left untouched but are not imported.
 - Visual-prompt occlusion rescue awaits compatible public weights.
 - Tracking is single-player and can change identity during close interactions;
   recovery currently requires a new click and track job.
-- Jobs and their progress are held in memory, so restarting the backend loses
-  job history. Video/frame/export caches remain on disk.
+- Tracking and export each run through one worker with at most two queued jobs. A full
+  queue returns HTTP 429, and `POST /api/jobs/{jobId}/cancel` cooperatively cancels a
+  queued or running job.
+- Job state is persisted in SQLite. Completed history is bounded; saved library tracks
+  and exports remain available after history pruning, while work interrupted by a
+  backend restart is reported as failed.
 - FindMe is a local, single-user application with no authentication. Host/origin
   checks reduce browser-based cross-site requests but do not make LAN deployment a
   multi-user security boundary.

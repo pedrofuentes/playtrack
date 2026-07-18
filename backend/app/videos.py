@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import shutil
 import subprocess
 import threading
@@ -9,9 +10,11 @@ import uuid
 from dataclasses import asdict, dataclass, replace
 from fractions import Fraction
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO, Callable
 
 from .library import LibraryStore, _clean_name
+
+logger = logging.getLogger(__name__)
 
 
 class VideoStoreError(Exception):
@@ -113,6 +116,7 @@ class VideoStore:
         self._records: dict[str, VideoRecord] = {}
         self._lock = threading.RLock()
         self.library = LibraryStore(self.data_dir)
+        self._retry_pending_file_deletions()
         self.library.consolidate_sources(self.upload_dir)
         self._rehydrate()
 
@@ -329,18 +333,31 @@ class VideoStore:
     def remove(self, video_id: str) -> VideoRecord:
         with self._lock:
             record = self.get(video_id)
-            self.library.remove_video(video_id)
+            self.library.remove_video(
+                video_id, pending_paths=self._managed_deletion_paths(record)
+            )
             self._records.pop(video_id)
-        for cache in (
-            record.frame_cache_dir,
-            self.tracking_frame_root / video_id,
-            self.selection_crop_root / video_id,
-        ):
-            if cache.exists():
-                shutil.rmtree(cache)
-        if record.source_kind == "upload" and self._is_under(record.path, self.upload_dir):
-            record.path.unlink(missing_ok=True)
+        self._retry_pending_file_deletions(video_id)
         return record
+
+    def remove_with_dependents(
+        self,
+        video_id: str,
+        *,
+        export_deletion_path: Callable[[dict[str, Any]], Path | None],
+    ) -> tuple[VideoRecord, list[str], list[dict[str, Any]]]:
+        with self._lock:
+            record = self.get(video_id)
+            found, track_ids, exported = self.library.remove_video_with_dependents(
+                video_id,
+                pending_paths=self._managed_deletion_paths(record),
+                export_deletion_path=export_deletion_path,
+            )
+            if not found:
+                raise VideoNotFoundError("Video not found")
+            self._records.pop(video_id)
+        self._retry_pending_file_deletions(video_id)
+        return record, track_ids, exported
 
     def remove_catalog_entry(self, video_id: str) -> bool:
         with self._lock:
@@ -441,6 +458,65 @@ class VideoStore:
             record = self._record_from_saved(saved)
             if record is not None:
                 self._records[record.video_id] = record
+
+    def _retry_pending_file_deletions(self, target_id: str | None = None) -> None:
+        allowed_cache_roots = (
+            self.frame_cache_root,
+            self.tracking_frame_root,
+            self.selection_crop_root,
+        )
+        for deletion in self.library.pending_deletions(target_id=target_id):
+            path = deletion.path
+            if deletion.kind not in {"upload", "cache"}:
+                continue
+            if path is None:
+                self.library.fail_pending_deletion(
+                    deletion.deletion_id, "Pending deletion has no path"
+                )
+                continue
+            if deletion.kind == "upload":
+                allowed = self._is_under(path, self.upload_dir)
+            else:
+                allowed = any(self._is_under(path, root) for root in allowed_cache_roots)
+            if not allowed:
+                self.library.fail_pending_deletion(
+                    deletion.deletion_id,
+                    "Pending deletion path is outside its managed runtime directory",
+                )
+                continue
+            try:
+                if deletion.kind == "cache":
+                    if path.exists():
+                        shutil.rmtree(path)
+                else:
+                    path.unlink(missing_ok=True)
+            except OSError as exc:
+                self.library.fail_pending_deletion(
+                    deletion.deletion_id, str(exc) or type(exc).__name__
+                )
+                logger.warning(
+                    "Could not finish pending %s deletion %s: %s",
+                    deletion.kind,
+                    path,
+                    exc,
+                )
+            else:
+                self.library.complete_pending_deletion(deletion.deletion_id)
+
+    def _managed_deletion_paths(
+        self, record: VideoRecord
+    ) -> list[tuple[str, str, Path]]:
+        video_id = record.video_id
+        pending_paths = [
+            ("cache", video_id, record.frame_cache_dir),
+            ("cache", video_id, self.tracking_frame_root / video_id),
+            ("cache", video_id, self.selection_crop_root / video_id),
+        ]
+        if record.source_kind == "upload" and self._is_under(
+            record.path, self.upload_dir
+        ):
+            pending_paths.append(("upload", video_id, record.path))
+        return pending_paths
 
     def _record_from_saved(self, saved: dict[str, object]) -> VideoRecord | None:
         try:

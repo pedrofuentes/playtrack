@@ -38,7 +38,7 @@ backend/   FastAPI (Python 3.12, uv-managed)
   app/tracking.py             SAM2 video propagation job, loss detection, LocateAnything rescue
   app/crop_planner.py         pure NumPy: gap fill, spring smoothing, subpixel crop windows
   app/exporter.py             PyAV decode → cv2.getRectSubPix crop → Lanczos resize → h264+audio
-  app/jobs.py                 in-memory job registry (rehydrated from library on startup)
+  app/jobs.py                 bounded track/export queues, cancellation, leases, durable state
   app/library.py              SQLite persistence: data/library/findme.sqlite3 (WAL + FULL sync)
   app/models/sam2_engine.py   lazy SAM2 image/video engines, device autodetect
   app/models/locate_engine.py LocateAnything-3B (CUDA only), lazy load/unload
@@ -124,6 +124,14 @@ are **non-commercial** (NVIDIA research license) — keep this app personal-use.
 - Library persistence is a clean-break SQLite format. Legacy `videos.json`,
   `exports.json`, and `tracks/*.json` files are intentionally ignored and must not be
   imported implicitly.
+- Tracking and export each have one daemon worker and two queued slots. Queue overload
+  is a retryable HTTP 429. Queued/running jobs hold resource leases through their
+  durable-save callback; deletion must continue to honor those leases.
+- Terminal job history is capped in memory/SQLite. Saved tracks and exports remain
+  authoritative and fetchable after volatile job history is pruned. Jobs interrupted
+  by restart rehydrate as failed, never running.
+- Failed managed-file deletions are recorded in SQLite and retried on startup. Retry
+  code must revalidate the upload/export/cache boundary before touching a path.
 - Commits: `M<n>: summary` for milestones, plain imperative subject for fixes.
 
 ## Known pitfalls (learned the hard way — don't rediscover)

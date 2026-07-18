@@ -326,10 +326,10 @@ def test_delete_and_rename_share_one_catalog_transaction_lock(
     delete_write_reached = threading.Event()
     release_delete = threading.Event()
 
-    def synchronized_remove(video_id: str) -> None:
+    def synchronized_remove(video_id: str, **kwargs: object) -> None:
         delete_write_reached.set()
         assert release_delete.wait(timeout=2)
-        original_remove(video_id)
+        original_remove(video_id, **kwargs)
 
     monkeypatch.setattr(store.library, "remove_video", synchronized_remove)
 
@@ -384,6 +384,42 @@ def test_video_remove_catalog_failure_preserves_state_media_and_caches(
     assert store.library.videos() == []
     assert not record.path.exists()
     assert all(not cache_dir.exists() for cache_dir in cache_dirs)
+
+
+def test_failed_upload_unlink_is_persisted_and_retried_on_restart(
+    tmp_path: Path,
+    tiny_video: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_dir = tmp_path / "data"
+    store = VideoStore(repo_root=tmp_path, data_dir=data_dir)
+    with tiny_video.open("rb") as source:
+        record = store.register_upload(source, "uploaded.mp4")
+    real_unlink = Path.unlink
+
+    def fail_upload_unlink(path: Path, *args: object, **kwargs: object) -> None:
+        if path == record.path:
+            raise PermissionError("file is busy")
+        real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_upload_unlink)
+    removed = store.remove(record.video_id)
+
+    assert removed == record
+    assert record.path.is_file()
+    assert store.library.videos() == []
+    pending = store.library.pending_deletions(
+        kind="upload", target_id=record.video_id
+    )
+    assert len(pending) == 1
+    assert pending[0].attempts == 1
+
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+    restarted = VideoStore(repo_root=tmp_path, data_dir=data_dir)
+
+    assert restarted.records() == ()
+    assert not record.path.exists()
+    assert restarted.library.pending_deletions() == []
 
 
 def test_reuses_canonical_path_registration(

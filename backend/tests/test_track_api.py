@@ -115,6 +115,87 @@ def test_track_post_websocket_partial_updates_and_finished_get(
     assert tracker.calls == [(video_id, 1, (100, 50, 140, 100), 0, 4)]
 
 
+def test_track_queue_overload_returns_retryable_429(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    record = store.register_path(tiny_video)
+    tracker = BlockingFakeTracker()
+    jobs = JobRegistry(queue_capacity=0)
+    app = create_app(store, track_runner=tracker, job_registry=jobs)
+    payload = {
+        "videoId": record.video_id,
+        "frameIdx": 1,
+        "box": [100, 50, 140, 100],
+    }
+
+    with TestClient(app) as client:
+        first = client.post("/api/track", json=payload)
+        assert first.status_code == 202
+        assert tracker.published.wait(timeout=2)
+        overloaded = client.post("/api/track", json=payload)
+        tracker.release.set()
+        jobs.wait_until_terminal(first.json()["jobId"], timeout=2)
+
+    assert overloaded.status_code == 429
+    assert overloaded.headers["retry-after"] == "1"
+    assert "queue is full" in overloaded.json()["detail"]
+
+
+def test_running_job_can_be_canceled_and_observed_over_generic_endpoint(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    client, video_id, tracker = make_tracking_client(tmp_path, tiny_video)
+    jobs = client.app.state.job_registry
+    with client:
+        started = client.post(
+            "/api/track",
+            json={
+                "videoId": video_id,
+                "frameIdx": 1,
+                "box": [100, 50, 140, 100],
+            },
+        )
+        job_id = started.json()["jobId"]
+        assert tracker.published.wait(timeout=2)
+
+        requested = client.post(f"/api/jobs/{job_id}/cancel")
+        tracker.release.set()
+        terminal = jobs.wait_until_terminal(job_id, timeout=2)
+        fetched = client.get(f"/api/jobs/{job_id}")
+
+    assert requested.status_code == 202
+    assert requested.json()["message"] == "Cancellation requested"
+    assert terminal.state == "canceled"
+    assert fetched.status_code == 200
+    assert fetched.json()["state"] == "canceled"
+
+
+def test_saved_track_remains_fetchable_after_terminal_history_is_pruned(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    record = store.register_path(tiny_video)
+    track = [tracked_frame(1), tracked_frame(2)]
+    store.library.save_track(
+        record.video_id,
+        "saved-track",
+        1,
+        track[0].box,
+        track,
+        start_frame_idx=1,
+        end_frame_exclusive=3,
+    )
+    jobs = JobRegistry(terminal_retention=0)
+
+    with TestClient(create_app(store, job_registry=jobs)) as client:
+        response = client.get("/api/track/saved-track")
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "completed"
+    assert [item["frameIdx"] for item in response.json()["track"]] == [1, 2]
+
+
 def test_track_range_is_forwarded_and_persisted_in_library(
     tmp_path: Path, tiny_video: Path
 ) -> None:

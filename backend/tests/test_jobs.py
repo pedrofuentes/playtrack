@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
-from app.jobs import JobNotFoundError, JobRegistry
+import pytest
+
+from app.jobs import JobNotFoundError, JobQueueFullError, JobRegistry
+from app.library import LibraryStore
 from app.tracking import TrackFrame
 
 
@@ -130,4 +134,199 @@ def test_registry_reports_resources_only_while_jobs_are_active() -> None:
     assert registry.is_resource_active(f"job:{job_id}")
     release.set()
     assert registry.wait_until_terminal(job_id, timeout=2).state == "completed"
+    assert registry.active_resources() == set()
+
+
+def test_track_queue_allows_one_running_and_two_waiting() -> None:
+    registry = JobRegistry(queue_capacity=2)
+    release = threading.Event()
+    running = threading.Event()
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def worker(_report: object) -> list[TrackFrame]:
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        running.set()
+        assert release.wait(timeout=2)
+        with lock:
+            active -= 1
+        return [frame(0)]
+
+    identifiers = [registry.submit(worker) for _ in range(3)]
+    assert running.wait(timeout=1)
+    with pytest.raises(JobQueueFullError):
+        registry.submit(worker)
+
+    release.set()
+    assert all(
+        registry.wait_until_terminal(job_id, timeout=2).state == "completed"
+        for job_id in identifiers
+    )
+    assert max_active == 1
+
+
+def test_track_and_export_queues_run_independently() -> None:
+    registry = JobRegistry()
+    release = threading.Event()
+    track_running = threading.Event()
+    export_running = threading.Event()
+
+    track_id = registry.submit(
+        lambda _report: (
+            track_running.set(),
+            release.wait(timeout=2),
+            [frame(0)],
+        )[2]
+    )
+    export_id = registry.submit_progress(
+        lambda _job_id, _report: (
+            export_running.set(),
+            release.wait(timeout=2),
+        ),
+        completion_message="Export complete",
+    )
+
+    assert track_running.wait(timeout=1)
+    assert export_running.wait(timeout=1)
+    release.set()
+    assert registry.wait_until_terminal(track_id, timeout=2).state == "completed"
+    assert registry.wait_until_terminal(export_id, timeout=2).state == "completed"
+
+
+def test_canceling_queued_job_frees_capacity_without_running_worker() -> None:
+    registry = JobRegistry(queue_capacity=1)
+    release = threading.Event()
+    running = threading.Event()
+    queued_called = False
+
+    first = registry.submit(
+        lambda _report: (running.set(), release.wait(timeout=2), [frame(0)])[2]
+    )
+    assert running.wait(timeout=1)
+
+    def queued(_report: object) -> list[TrackFrame]:
+        nonlocal queued_called
+        queued_called = True
+        return [frame(1)]
+
+    second = registry.submit(queued)
+    with pytest.raises(JobQueueFullError):
+        registry.submit(queued)
+
+    canceled = registry.cancel(second)
+    replacement = registry.submit(lambda _report: [frame(2)])
+    release.set()
+
+    assert canceled.state == "canceled"
+    assert registry.wait_until_terminal(first, timeout=2).state == "completed"
+    assert registry.wait_until_terminal(replacement, timeout=2).state == "completed"
+    assert queued_called is False
+
+
+def test_running_cancellation_is_cooperative_and_holds_resources_until_exit() -> None:
+    registry = JobRegistry()
+    first_report = threading.Event()
+    continue_worker = threading.Event()
+
+    def worker(report: object) -> list[TrackFrame]:
+        report(0.25, "Started", frame(0))
+        first_report.set()
+        assert continue_worker.wait(timeout=2)
+        report(0.5, "Continuing", frame(1))
+        return [frame(0), frame(1)]
+
+    job_id = registry.submit(worker, resources={"video:v1"})
+    assert first_report.wait(timeout=1)
+    requested = registry.cancel(job_id)
+
+    assert requested.state == "running"
+    assert registry.is_resource_active("video:v1")
+    continue_worker.set()
+    terminal = registry.wait_until_terminal(job_id, timeout=2)
+    assert terminal.state == "canceled"
+    assert not registry.is_resource_active("video:v1")
+
+
+def test_terminal_retention_is_bounded() -> None:
+    registry = JobRegistry(terminal_retention=2)
+    identifiers = []
+    for index in range(3):
+        job_id = registry.submit(lambda _report, index=index: [frame(index)])
+        assert registry.wait_until_terminal(job_id, timeout=2).state == "completed"
+        identifiers.append(job_id)
+
+    with pytest.raises(JobNotFoundError):
+        registry.get(identifiers[0])
+    assert registry.get(identifiers[1]).state == "completed"
+    assert registry.get(identifiers[2]).state == "completed"
+
+
+def test_terminal_jobs_rehydrate_from_sqlite(tmp_path: Path) -> None:
+    library = LibraryStore(tmp_path / "data")
+    registry = JobRegistry(library=library)
+    job_id = registry.submit(lambda _report: [frame(3)])
+    completed = registry.wait_until_terminal(job_id, timeout=2)
+
+    restarted = JobRegistry(library=library)
+    restored = restarted.get(job_id)
+
+    assert completed.state == "completed"
+    assert restored.state == "completed"
+    assert restored.track == (frame(3),)
+
+
+def test_active_job_is_marked_failed_after_restart(tmp_path: Path) -> None:
+    library = LibraryStore(tmp_path / "data")
+    library.save_job(
+        job_id="interrupted",
+        kind="track",
+        state="running",
+        progress=0.5,
+        message="Tracking",
+        track=[frame(0)],
+        resources=["video:v1"],
+        version=2,
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:01:00+00:00",
+        terminal_at=None,
+    )
+
+    restarted = JobRegistry(library=library)
+    restored = restarted.get("interrupted")
+
+    assert restored.state == "failed"
+    assert restored.message == "Interrupted by backend restart"
+    assert restarted.active_resources() == set()
+    assert library.load_jobs()[0]["state"] == "failed"
+
+
+def test_state_persistence_failure_fails_job_and_releases_resources() -> None:
+    class FlakyLibrary:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def load_jobs(self) -> list[object]:
+            return []
+
+        def save_job(self, **_kwargs: object) -> None:
+            self.calls += 1
+            if self.calls == 2:
+                raise OSError("database is read-only")
+
+        def prune_terminal_jobs(self, _retention: int) -> list[str]:
+            return []
+
+    registry = JobRegistry(library=FlakyLibrary())
+    job_id = registry.submit(
+        lambda _report: [frame(0)], resources={"video:v1"}
+    )
+
+    terminal = registry.wait_until_terminal(job_id, timeout=2)
+
+    assert terminal.state == "failed"
+    assert terminal.message == "Could not persist job state: database is read-only"
     assert registry.active_resources() == set()

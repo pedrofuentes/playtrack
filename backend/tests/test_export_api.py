@@ -633,6 +633,64 @@ def test_completed_export_is_downloadable_after_app_restart(
     assert response.content == b"persisted-mp4"
 
 
+def test_saved_export_download_survives_terminal_history_pruning(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    exports_dir = tmp_path / "exports"
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    record = store.register_path(tiny_video)
+    destination = exports_dir / "saved-export.mp4"
+    destination.parent.mkdir()
+    destination.write_bytes(b"persisted-mp4")
+    store.library.save_export(
+        "saved-export", record.video_id, "saved-track", {}, destination
+    )
+    jobs = JobRegistry(terminal_retention=0)
+
+    with TestClient(
+        create_app(store, job_registry=jobs, exports_dir=exports_dir)
+    ) as client:
+        response = client.get("/api/exports/saved-export.mp4")
+
+    assert response.status_code == 200
+    assert response.content == b"persisted-mp4"
+
+
+def test_saved_track_can_be_reexported_after_terminal_history_pruning(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    record = store.register_path(tiny_video)
+    frames = [
+        TrackFrame(index, (80, 50, 120, 110), (100.0, 80.0), False)
+        for index in range(record.metadata.nb_frames)
+    ]
+    store.library.save_track(
+        record.video_id,
+        "saved-track",
+        0,
+        frames[0].box,
+        frames,
+        start_frame_idx=0,
+        end_frame_exclusive=record.metadata.nb_frames,
+    )
+    jobs = JobRegistry(terminal_retention=0)
+
+    with TestClient(create_app(store, job_registry=jobs)) as client:
+        response = client.get(
+            "/api/export/plan",
+            params={
+                "videoId": record.video_id,
+                "trackJobId": "saved-track",
+                "outWidth": 128,
+                "outHeight": 72,
+            },
+        )
+
+    assert response.status_code == 200
+    assert len(response.json()["windows"]) == record.metadata.nb_frames
+
+
 def test_export_delete_never_trusts_catalog_path_outside_export_root(
     tmp_path: Path
 ) -> None:
@@ -647,6 +705,45 @@ def test_export_delete_never_trusts_catalog_path_outside_export_root(
 
     assert response.status_code == 204
     assert unrelated.read_text(encoding="utf-8") == "keep"
+
+
+def test_failed_export_unlink_is_persisted_and_retried_on_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    exports_dir = tmp_path / "exports"
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    destination = exports_dir / "retry-export.mp4"
+    destination.parent.mkdir()
+    destination.write_bytes(b"export")
+    store.library.save_export(
+        "retry-export", "video", "track", {}, destination
+    )
+    app = create_app(store, exports_dir=exports_dir)
+    real_unlink = Path.unlink
+
+    def fail_target_unlink(path: Path, *args: object, **kwargs: object) -> None:
+        if path == destination:
+            raise PermissionError("file is busy")
+        real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_target_unlink)
+    with TestClient(app) as client:
+        deleted = client.delete("/api/library/exports/retry-export")
+
+    assert deleted.status_code == 204
+    assert destination.is_file()
+    assert store.library.exports() == []
+    pending = store.library.pending_deletions(
+        kind="export", target_id="retry-export"
+    )
+    assert len(pending) == 1
+    assert pending[0].attempts == 1
+
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+    create_app(store, exports_dir=exports_dir)
+
+    assert not destination.exists()
+    assert store.library.pending_deletions() == []
 
 
 def test_export_catalog_failure_removes_unpublished_output(
@@ -676,6 +773,73 @@ def test_export_catalog_failure_removes_unpublished_output(
 
     assert snapshot.state == "failed"
     assert not (exports_dir / f"{export_id}.mp4").exists()
+
+
+def test_cancel_export_releases_lease_and_removes_unpublished_output(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    record = store.register_path(tiny_video)
+    jobs = JobRegistry()
+    track_job_id = completed_track(jobs)
+    track = jobs.get(track_job_id).track
+    store.library.save_track(
+        record.video_id,
+        track_job_id,
+        0,
+        track[0].box,
+        track,
+        start_frame_idx=0,
+        end_frame_exclusive=record.metadata.nb_frames,
+    )
+    started_export = threading.Event()
+    release_export = threading.Event()
+
+    def blocking_exporter(
+        _source: Path,
+        destination: Path,
+        _windows: list[CropWindow],
+        **kwargs: object,
+    ) -> Path:
+        report = kwargs["on_progress"]
+        report(0.25, "Started")
+        started_export.set()
+        assert release_export.wait(timeout=2)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"unpublished")
+        report(0.5, "Continuing")
+        return destination
+
+    exports_dir = tmp_path / "exports"
+    app = create_app(
+        store,
+        job_registry=jobs,
+        video_exporter=blocking_exporter,
+        exports_dir=exports_dir,
+    )
+    with TestClient(app) as client:
+        started = client.post(
+            "/api/export",
+            json={
+                "videoId": record.video_id,
+                "trackJobId": track_job_id,
+                "outWidth": 128,
+                "outHeight": 72,
+                "smoothing": {},
+            },
+        )
+        export_id = started.json()["jobId"]
+        assert started_export.wait(timeout=2)
+        requested = client.post(f"/api/jobs/{export_id}/cancel")
+        assert jobs.is_resource_active(f"track:{track_job_id}")
+        release_export.set()
+        terminal = jobs.wait_until_terminal(export_id, timeout=2)
+
+    assert requested.status_code == 202
+    assert terminal.state == "canceled"
+    assert not jobs.is_resource_active(f"track:{track_job_id}")
+    assert not (exports_dir / f"{export_id}.mp4").exists()
+    assert store.library.exports() == []
 
 
 @pytest.mark.parametrize(
