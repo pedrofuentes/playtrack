@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+import httpx
 from fastapi.testclient import TestClient
 
 from app.main import create_app
@@ -34,6 +36,34 @@ def test_registers_local_video_and_returns_metadata(
     assert payload["fps"] == 10.0
     assert payload["nbFrames"] == 4
     assert payload["duration"] == 0.4
+
+
+def test_path_registration_runs_outside_the_async_event_loop(
+    tmp_path: Path, tiny_video: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    record = store.register_path(tiny_video)
+    event_loop_thread = threading.get_ident()
+    registration_threads: list[int] = []
+
+    def observe_registration(_path: str, _name: str | None = None) -> object:
+        registration_threads.append(threading.get_ident())
+        return record
+
+    monkeypatch.setattr(store, "register_path", observe_registration)
+    app = create_app(store)
+
+    async def register() -> httpx.Response:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            return await client.post("/api/videos", json={"path": "ignored.mp4"})
+
+    response = asyncio.run(register())
+
+    assert response.status_code == 201
+    assert registration_threads and registration_threads[0] != event_loop_thread
 
 
 def test_registers_multipart_upload(

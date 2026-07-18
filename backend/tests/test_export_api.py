@@ -604,3 +604,70 @@ def test_export_route_serializes_submission_and_persistence_against_deletion(
         assert client.delete(f"/api/library/exports/{export_id}").status_code == 204
         assert client.delete(f"/api/library/tracks/{track_id}").status_code == 204
         assert client.delete(f"/api/library/videos/{record.video_id}").status_code == 204
+
+
+def test_completed_export_is_downloadable_after_app_restart(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    data_dir = tmp_path / "data"
+    exports_dir = tmp_path / "exports"
+    store = VideoStore(repo_root=tmp_path, data_dir=data_dir)
+    record = store.register_path(tiny_video)
+    destination = exports_dir / "saved-export.mp4"
+    destination.parent.mkdir()
+    destination.write_bytes(b"persisted-mp4")
+    store.library.save_export(
+        "saved-export", record.video_id, "saved-track", {}, destination
+    )
+
+    restarted = VideoStore(repo_root=tmp_path, data_dir=data_dir)
+    with TestClient(create_app(restarted, exports_dir=exports_dir)) as client:
+        response = client.get("/api/exports/saved-export.mp4")
+
+    assert response.status_code == 200
+    assert response.content == b"persisted-mp4"
+
+
+def test_export_delete_never_trusts_catalog_path_outside_export_root(
+    tmp_path: Path
+) -> None:
+    exports_dir = tmp_path / "exports"
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    unrelated = tmp_path / "unrelated.txt"
+    unrelated.write_text("keep", encoding="utf-8")
+    store.library.save_export("outside", "video", "track", {}, unrelated)
+
+    with TestClient(create_app(store, exports_dir=exports_dir)) as client:
+        response = client.delete("/api/library/exports/outside")
+
+    assert response.status_code == 204
+    assert unrelated.read_text(encoding="utf-8") == "keep"
+
+
+def test_export_catalog_failure_removes_unpublished_output(
+    tmp_path: Path, tiny_video: Path, monkeypatch: object
+) -> None:
+    client, video_id, track_job_id, jobs, _exporter, exports_dir = make_client(
+        tmp_path, tiny_video
+    )
+
+    def fail_save(*_args: object, **_kwargs: object) -> None:
+        raise OSError("catalog is read-only")
+
+    monkeypatch.setattr(client.app.state.video_store.library, "save_export", fail_save)
+    with client:
+        started = client.post(
+            "/api/export",
+            json={
+                "videoId": video_id,
+                "trackJobId": track_job_id,
+                "outWidth": 128,
+                "outHeight": 72,
+                "smoothing": {},
+            },
+        )
+        export_id = started.json()["jobId"]
+        snapshot = jobs.wait_until_terminal(export_id, timeout=2)
+
+    assert snapshot.state == "failed"
+    assert not (exports_dir / f"{export_id}.mp4").exists()

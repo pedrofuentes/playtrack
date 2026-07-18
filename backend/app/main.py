@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import posixpath
 import re
 import threading
@@ -246,6 +247,18 @@ def _download_short_id(value: object) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:6]
 
 
+def _export_file_path(export_root: Path, export_id: object) -> Path | None:
+    if not isinstance(export_id, str) or not export_id:
+        return None
+    root = Path(export_root).resolve()
+    candidate = root / f"{export_id}.mp4"
+    try:
+        candidate.resolve().relative_to(root)
+    except ValueError:
+        return None
+    return candidate
+
+
 def create_app(
     video_store: VideoStore | None = None,
     *,
@@ -302,6 +315,7 @@ def create_app(
             rescue_max_input_dimension=settings.locate_max_input_dimension,
         )
     jobs = job_registry or JobRegistry()
+    export_root = exports_dir if exports_dir is not None else settings.exports_dir
     store.library.backfill_track_names()
     for saved_track in store.library.iter_tracks():
         try:
@@ -309,8 +323,14 @@ def create_app(
         except VideoNotFoundError:
             continue
         jobs.restore_completed(saved_track.job_id, saved_track.track)
+    for saved_export in store.library.exports():
+        export_id = saved_export.get("exportId")
+        destination = _export_file_path(export_root, export_id)
+        if destination is not None and destination.is_file():
+            jobs.restore_progress_completed(
+                str(export_id), completion_message="Export complete"
+            )
     exporter = video_exporter or export_video
-    export_root = exports_dir if exports_dir is not None else settings.exports_dir
 
     app = FastAPI(title="FindMe", version="0.1.0")
     lifecycle_lock = threading.RLock()
@@ -394,13 +414,17 @@ def create_app(
                 raw_name = form.get("name")
                 name = raw_name if isinstance(raw_name, str) else None
                 await upload.seek(0)
-                record = store.register_upload(upload.file, upload.filename, name)
+                record = await asyncio.to_thread(
+                    store.register_upload, upload.file, upload.filename, name
+                )
             elif content_type.startswith("application/json"):
                 try:
                     payload = VideoPathRequest.model_validate(await request.json())
                 except (ValidationError, ValueError) as exc:
                     raise HTTPException(422, "JSON request must include a path") from exc
-                record = store.register_path(payload.path, payload.name)
+                record = await asyncio.to_thread(
+                    store.register_path, payload.path, payload.name
+                )
             else:
                 raise HTTPException(
                     415, "Use application/json or multipart/form-data"
@@ -704,21 +728,29 @@ def create_app(
                 on_progress=report,
             )
 
+        def save_completed_export(completed_id: str) -> None:
+            destination = export_root / f"{completed_id}.mp4"
+            try:
+                store.library.save_export(
+                    completed_id,
+                    payload.videoId,
+                    payload.trackJobId,
+                    {
+                        "outWidth": payload.outWidth,
+                        "outHeight": payload.outHeight,
+                        "zoom": payload.zoom,
+                        "smoothing": payload.smoothing.model_dump(exclude_none=True),
+                    },
+                    destination,
+                )
+            except Exception:
+                destination.unlink(missing_ok=True)
+                raise
+
         job_id = jobs.submit_progress(
             run_export,
             completion_message="Export complete",
-            on_completed=lambda completed_id: store.library.save_export(
-                completed_id,
-                payload.videoId,
-                payload.trackJobId,
-                {
-                    "outWidth": payload.outWidth,
-                    "outHeight": payload.outHeight,
-                    "zoom": payload.zoom,
-                    "smoothing": payload.smoothing.model_dump(exclude_none=True),
-                },
-                export_root / f"{completed_id}.mp4",
-            ),
+            on_completed=save_completed_export,
             resources={
                 f"video:{payload.videoId}",
                 f"track:{payload.trackJobId}",
@@ -734,7 +766,9 @@ def create_app(
             raise HTTPException(404, str(exc)) from exc
         if snapshot.state not in ("completed", "failed"):
             raise HTTPException(409, "Export is not complete")
-        destination = export_root / f"{job_id}.mp4"
+        destination = _export_file_path(export_root, job_id)
+        if destination is None:
+            raise HTTPException(404, "Exported video not found")
         if snapshot.state == "failed" or not destination.is_file():
             raise HTTPException(404, "Exported video not found")
         exported = next(
@@ -788,7 +822,33 @@ def create_app(
     def get_library() -> dict[str, object]:
         tracks = store.library.iter_tracks()
         exports = store.library.exports()
-        catalog = store.library.videos()
+        catalog: list[dict[str, object]] = []
+        for item in store.library.videos():
+            video_id = item.get("videoId")
+            metadata = item.get("metadata")
+            if not isinstance(video_id, str) or not video_id or not isinstance(metadata, dict):
+                continue
+            try:
+                normalized_metadata = {
+                    "width": int(metadata["width"]),
+                    "height": int(metadata["height"]),
+                    "fps": float(metadata["fps"]),
+                    "nbFrames": int(metadata["nbFrames"]),
+                    "duration": float(metadata["duration"]),
+                }
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+            if (
+                normalized_metadata["width"] <= 0
+                or normalized_metadata["height"] <= 0
+                or normalized_metadata["nbFrames"] <= 0
+                or not math.isfinite(normalized_metadata["fps"])
+                or normalized_metadata["fps"] <= 0
+                or not math.isfinite(normalized_metadata["duration"])
+                or normalized_metadata["duration"] <= 0
+            ):
+                continue
+            catalog.append({**item, "videoId": video_id, "metadata": normalized_metadata})
         by_video_tracks: dict[str, list[dict[str, object]]] = {}
         for track in tracks:
             source = next(
@@ -853,8 +913,8 @@ def create_app(
         }
 
     def delete_export_file(entry: dict[str, object]) -> None:
-        path = Path(str(entry.get("path", "")))
-        if path.is_file():
+        path = _export_file_path(export_root, entry.get("exportId"))
+        if path is not None and path.is_file():
             path.unlink()
 
     @app.patch("/api/library/tracks/{job_id}")

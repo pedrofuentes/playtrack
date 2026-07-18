@@ -104,6 +104,19 @@ class JobRegistry:
             )
             self._condition.notify_all()
 
+    def restore_progress_completed(
+        self, job_id: str, *, completion_message: str
+    ) -> None:
+        with self._condition:
+            self._jobs[job_id] = _Job(
+                job_id=job_id,
+                state="completed",
+                progress=1.0,
+                message=completion_message,
+                version=1,
+            )
+            self._condition.notify_all()
+
     def remove(self, job_id: str) -> None:
         with self._condition:
             self._jobs.pop(job_id, None)

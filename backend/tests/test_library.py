@@ -122,6 +122,116 @@ def test_library_tolerates_corrupt_catalog_and_skips_missing_video(tmp_path: Pat
     assert list(store.records()) == []
 
 
+def test_library_skips_track_with_non_object_frame(tmp_path: Path) -> None:
+    library = LibraryStore(tmp_path / "data")
+    library.tracks_dir.mkdir(parents=True)
+    (library.tracks_dir / "bad.json").write_text(
+        json.dumps(
+            {
+                "jobId": "bad",
+                "videoId": "video-1",
+                "anchorFrameIdx": 0,
+                "box": [0, 0, 1, 1],
+                "track": [7],
+                "createdAt": "2026-01-01T00:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert library.iter_tracks() == []
+
+
+def test_library_api_skips_malformed_video_rows(tmp_path: Path) -> None:
+    library_dir = tmp_path / "data" / "library"
+    library_dir.mkdir(parents=True)
+    (library_dir / "videos.json").write_text(
+        json.dumps(
+            [
+                7,
+                {},
+                {
+                    "videoId": "non-finite",
+                    "path": "/missing.mp4",
+                    "metadata": {
+                        "width": 320,
+                        "height": 180,
+                        "fps": "nan",
+                        "nbFrames": 4,
+                        "duration": 0.4,
+                    },
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+
+    with TestClient(create_app(store)) as client:
+        response = client.get("/api/library")
+
+    assert response.status_code == 200
+    assert response.json()["videos"] == []
+
+
+def test_library_api_skips_malformed_export_rows(tmp_path: Path) -> None:
+    library_dir = tmp_path / "data" / "library"
+    library_dir.mkdir(parents=True)
+    (library_dir / "exports.json").write_text(
+        json.dumps([7, None, "bad"]),
+        encoding="utf-8",
+    )
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+
+    with TestClient(create_app(store)) as client:
+        response = client.get("/api/library")
+
+    assert response.status_code == 200
+    assert response.json()["videos"] == []
+
+
+def test_concurrent_export_saves_preserve_both_catalog_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    library = LibraryStore(tmp_path / "data")
+    first_write_entered = threading.Event()
+    release_first_write = threading.Event()
+    call_lock = threading.Lock()
+    write_count = 0
+    real_write_list = library._write_list
+
+    def blocked_first_write(path: Path, entries: list[dict[str, object]]) -> None:
+        nonlocal write_count
+        with call_lock:
+            write_count += 1
+            current_write = write_count
+        if current_write == 1:
+            first_write_entered.set()
+            assert release_first_write.wait(timeout=2)
+        real_write_list(path, entries)
+
+    monkeypatch.setattr(library, "_write_list", blocked_first_write)
+    export_paths = []
+    for export_id in ("first", "second"):
+        path = tmp_path / f"{export_id}.mp4"
+        path.write_bytes(export_id.encode())
+        export_paths.append(path)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(
+            library.save_export, "first", "video", "track", {}, export_paths[0]
+        )
+        assert first_write_entered.wait(timeout=2)
+        second = pool.submit(
+            library.save_export, "second", "video", "track", {}, export_paths[1]
+        )
+        release_first_write.set()
+        first.result(timeout=2)
+        second.result(timeout=2)
+
+    assert {entry["exportId"] for entry in library.exports()} == {"first", "second"}
+
+
 @pytest.mark.parametrize("mutation", ["rename", "register"])
 def test_missing_file_delete_serializes_with_video_catalog_mutations(
     tmp_path: Path,

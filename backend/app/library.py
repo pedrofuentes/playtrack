@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import shutil
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -39,6 +40,7 @@ class LibraryStore:
         self.tracks_dir = self.root / "tracks"
         self.videos_path = self.root / "videos.json"
         self.exports_path = self.root / "exports.json"
+        self._exports_lock = threading.RLock()
 
     def videos(self) -> list[dict[str, Any]]:
         return self._read_list(self.videos_path)
@@ -297,27 +299,37 @@ class LibraryStore:
         params: dict[str, Any],
         path: Path,
     ) -> None:
-        entries = [entry for entry in self.exports() if entry.get("exportId") != export_id]
-        entries.append(
-            {
-                "exportId": export_id,
-                "videoId": video_id,
-                "trackJobId": track_job_id,
-                "params": params,
-                "path": str(path),
-                "size": path.stat().st_size if path.is_file() else 0,
-                "createdAt": _now(),
-            }
-        )
-        self._write_list(self.exports_path, entries)
+        with self._exports_lock:
+            entries = [
+                entry
+                for entry in self.exports()
+                if entry.get("exportId") != export_id
+            ]
+            entries.append(
+                {
+                    "exportId": export_id,
+                    "videoId": video_id,
+                    "trackJobId": track_job_id,
+                    "params": params,
+                    "path": str(path),
+                    "size": path.stat().st_size if path.is_file() else 0,
+                    "createdAt": _now(),
+                }
+            )
+            self._write_list(self.exports_path, entries)
 
     def exports(self) -> list[dict[str, Any]]:
         return self._read_list(self.exports_path)
 
     def remove_exports(self, predicate: Any) -> list[dict[str, Any]]:
-        removed = [entry for entry in self.exports() if predicate(entry)]
-        self._write_list(self.exports_path, [entry for entry in self.exports() if not predicate(entry)])
-        return removed
+        with self._exports_lock:
+            entries = self.exports()
+            removed: list[dict[str, Any]] = []
+            retained: list[dict[str, Any]] = []
+            for entry in entries:
+                (removed if predicate(entry) else retained).append(entry)
+            self._write_list(self.exports_path, retained)
+            return removed
 
     def clear_caches(self) -> int:
         freed = 0
@@ -392,6 +404,8 @@ class LibraryStore:
 
 def _track_frame(value: Any) -> "TrackFrame":
     from .tracking import TrackFrame
+    if not isinstance(value, dict):
+        raise TypeError("track frame must be a JSON object")
     box = value.get("box")
     center = value.get("center")
     return TrackFrame(
