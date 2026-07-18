@@ -1,8 +1,7 @@
-import { type FormEvent, type ReactNode, useEffect, useState } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 
 import type {
   ClickSelection,
-  LocateCandidate,
   TrackJobUpdate,
   VideoMetadata,
 } from '../api'
@@ -14,12 +13,9 @@ interface WorkflowInspectorProps {
   video: VideoMetadata
   currentFrame: number
   selection: ClickSelection | null
-  selectionKind: 'click' | 'text'
   selectionLoading: boolean
   selectionError: string | null
-  candidates: readonly LocateCandidate[]
   playerName: string
-  textSelectionEnabled: boolean
   trackJob: TrackJobUpdate | null
   trackMessage: string | null
   trackError: string | null
@@ -28,7 +24,6 @@ interface WorkflowInspectorProps {
   trackStartedAt: number | null
   trackFrameCount: number
   health: TrackHealthSummary | null
-  onTextSelect: (prompt: string) => void
   onPlayerNameChange: (name: string) => void
   onTrack: () => void
   onCancelTrack: () => void
@@ -65,12 +60,8 @@ export function WorkflowInspector(props: WorkflowInspectorProps) {
 
 function SelectionInspector({
   selection,
-  selectionKind,
   selectionLoading,
   selectionError,
-  candidates,
-  textSelectionEnabled,
-  onTextSelect,
   playerName,
   onPlayerNameChange,
   onTrack,
@@ -78,75 +69,23 @@ function SelectionInspector({
   trackStarting,
   selectionLocked,
 }: WorkflowInspectorProps) {
-  const [prompt, setPrompt] = useState('')
-  const [method, setMethod] = useState<'click' | 'describe'>('click')
-  const submitPrompt = (event: FormEvent) => {
-    event.preventDefault()
-    if (!selectionLocked && !trackStarting && prompt.trim()) onTextSelect(prompt)
-  }
-
   return (
     <div className="inspector-body">
-      {textSelectionEnabled && (
-        <div className="selection-methods" role="group" aria-label="Selection method">
-          <button
-            type="button"
-            data-method="click"
-            className={method === 'click' ? 'is-active' : ''}
-            aria-pressed={method === 'click'}
-            disabled={selectionLocked || trackStarting}
-            onClick={() => setMethod('click')}
-          >Click</button>
-          <button
-            type="button"
-            data-method="describe"
-            className={method === 'describe' ? 'is-active' : ''}
-            aria-pressed={method === 'describe'}
-            disabled={selectionLocked || trackStarting}
-            onClick={() => setMethod('describe')}
-          >Describe</button>
-        </div>
-      )}
-      {!selection && method === 'click' && (
+      {!selection && (
         <div className="inspector-callout">
           <p className="section-label">Choose target</p>
           <h3>Click a player</h3>
           <p>Scrub to a clear frame, zoom if needed, then click the player in the video.</p>
         </div>
       )}
-      {textSelectionEnabled && !selection && method === 'describe' && (
-        <form className="text-selection-form" onSubmit={submitPrompt}>
-          <label htmlFor="player-description">Describe a player</label>
-          <div>
-            <input
-              id="player-description"
-              value={prompt}
-              maxLength={500}
-              disabled={selectionLocked || trackStarting}
-              placeholder="the player in the white jersey"
-              onChange={(event) => setPrompt(event.target.value)}
-            />
-            <button
-              type="submit"
-              className="secondary"
-              disabled={selectionLocked || trackStarting || selectionLoading || !prompt.trim()}
-            >
-              Find
-            </button>
-          </div>
-        </form>
-      )}
       {selectionLoading && <p className="operation-status" role="status">Finding player…</p>}
-      {candidates.length > 0 && (
-        <p className="operation-status">{candidates.length} candidate{candidates.length === 1 ? '' : 's'} found. Click a numbered box to confirm.</p>
-      )}
       {selectionError && <p className="inline-error">{selectionError}</p>}
       {selection && (
         <div className="selected-player-card">
           <div className="player-thumbnail" aria-hidden="true" />
           <div>
             <strong>Player selected</strong>
-            <span>{Math.round(selection.score * 100)}% confidence · {selectionKind === 'click' ? 'Click mask' : 'Description match'}</span>
+            <span>{Math.round(selection.score * 100)}% confidence · Click mask</span>
           </div>
         </div>
       )}

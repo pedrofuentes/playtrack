@@ -5,18 +5,14 @@ import {
   clearFrameCaches,
   type ClickSelection,
   type CropWindow,
-  type FeatureFlags,
-  getFeatures,
   getLibrary,
   getTrack,
   type JobWatcher,
   type LibraryResponse,
   type LibraryTrack,
   type LibraryVideo,
-  type LocateCandidate,
   registerVideo,
   selectByClick,
-  selectByText,
   startTracking,
   type TrackJobUpdate,
   type VideoMetadata,
@@ -39,12 +35,9 @@ export interface WorkspaceController {
   currentFrame: number
   range: FrameRange
   selection: ClickSelection | null
-  selectionKind: 'click' | 'text'
   selectionLoading: boolean
   selectionError: string | null
-  candidates: LocateCandidate[]
   playerName: string
-  features: FeatureFlags
   library: LibraryResponse
   trackJob: TrackJobUpdate | null
   trackMessage: string | null
@@ -67,8 +60,6 @@ export interface WorkspaceController {
   openLibraryPlayer(video: LibraryVideo, player: LibraryTrack): Promise<boolean>
   refreshLibrary(): void
   selectAt(point: Point, frameIdx: number): void
-  selectByDescription(prompt: string, frameIdx?: number): void
-  confirmCandidate(candidate: LocateCandidate, frameIdx: number): void
   setPlayerName(name: string): void
   setCurrentFrame(frameIdx: number): void
   setRange(range: FrameRange): void
@@ -97,15 +88,9 @@ export function useWorkspace(): WorkspaceController {
   })
   const [anchorFrame, setAnchorFrame] = useState<number | null>(null)
   const [selection, setSelection] = useState<ClickSelection | null>(null)
-  const [selectionKind, setSelectionKind] = useState<'click' | 'text'>('click')
   const [selectionLoading, setSelectionLoading] = useState(false)
   const [selectionError, setSelectionError] = useState<string | null>(null)
-  const [candidates, setCandidates] = useState<LocateCandidate[]>([])
   const [playerName, setPlayerNameState] = useState('')
-  const [candidateFrame, setCandidateFrame] = useState<number | null>(null)
-  const [features, setFeatures] = useState<FeatureFlags>({
-    textSelection: { enabled: false, reason: '' },
-  })
   const [library, setLibrary] = useState<LibraryResponse>({ videos: [], cacheBytes: 0 })
   const [trackJob, setTrackJob] = useState<TrackJobUpdate | null>(null)
   const [trackMessage, setTrackMessage] = useState<string | null>(null)
@@ -177,12 +162,9 @@ export function useWorkspace(): WorkspaceController {
     selectionRequest.current = null
     setAnchorFrame(null)
     setSelection(null)
-    setSelectionKind('click')
     setSelectionLoading(false)
     setSelectionError(null)
-    setCandidates([])
     setPlayerNameState('')
-    setCandidateFrame(null)
   }, [])
 
   const openVideo = useCallback(async (
@@ -207,12 +189,9 @@ export function useWorkspace(): WorkspaceController {
     setCurrentFrameState(0)
     setAnchorFrame(null)
     setSelection(null)
-    setSelectionKind('click')
     setSelectionLoading(false)
     setSelectionError(null)
-    setCandidates([])
     setPlayerNameState('')
-    setCandidateFrame(null)
     try {
       const registered = await register()
       if (generation !== openGeneration.current) return
@@ -298,11 +277,8 @@ export function useWorkspace(): WorkspaceController {
       setRangeState(restoredRange)
       setAnchorFrame(player.anchorFrameIdx)
       setSelection(null)
-      setSelectionKind('click')
       setSelectionLoading(false)
       setSelectionError(null)
-      setCandidates([])
-      setCandidateFrame(null)
       setPlayerNameState(player.name)
       setTrackJob(restored)
       setTrackMessage(restored.message)
@@ -326,11 +302,6 @@ export function useWorkspace(): WorkspaceController {
   useEffect(() => {
     void openPath(EXAMPLE_PATH)
     refreshLibrary()
-    void getFeatures()
-      .then(setFeatures)
-      .catch(() => setFeatures({
-        textSelection: { enabled: false, reason: 'Feature status is unavailable' },
-      }))
   }, [openPath, refreshLibrary])
 
   useEffect(() => () => {
@@ -339,15 +310,12 @@ export function useWorkspace(): WorkspaceController {
     trackSocket.current?.close()
   }, [])
 
-  const prepareSelection = useCallback((frameIdx: number, kind: 'click' | 'text') => {
+  const prepareSelection = useCallback((frameIdx: number) => {
     trackSocket.current?.close()
     trackSocket.current = null
     setAnchorFrame(frameIdx)
     setSelection(null)
-    setSelectionKind(kind)
-    setCandidates([])
     setPlayerNameState('')
-    setCandidateFrame(null)
     setSelectionError(null)
     clearDownstreamState()
     setSelectionLoading(true)
@@ -362,7 +330,7 @@ export function useWorkspace(): WorkspaceController {
     selectionRequest.current?.abort()
     const controller = new AbortController()
     selectionRequest.current = controller
-    prepareSelection(frameIdx, 'click')
+    prepareSelection(frameIdx)
     void selectByClick(video.videoId, frameIdx, point.x, point.y, controller.signal)
       .then((result) => {
         if (!controller.signal.aborted) setSelection(result)
@@ -379,64 +347,9 @@ export function useWorkspace(): WorkspaceController {
       })
   }, [prepareSelection, video])
 
-  const selectByDescription = useCallback((rawPrompt: string, frameIdx?: number) => {
-    const prompt = rawPrompt.trim()
-    const selectionFrame = frameIdx ?? currentFrame
-    if (loadingRef.current || trackStartingRef.current || !video || !prompt) return
-    if (!containsFrame(rangeRef.current, selectionFrame)) {
-      setSelectionError('Choose a frame inside the selected range')
-      return
-    }
-    selectionRequest.current?.abort()
-    const controller = new AbortController()
-    selectionRequest.current = controller
-    prepareSelection(selectionFrame, 'text')
-    void selectByText(video.videoId, selectionFrame, prompt, controller.signal)
-      .then((result) => {
-        if (controller.signal.aborted) return
-        setCandidates(result)
-        setCandidateFrame(selectionFrame)
-        if (result.length === 0) setSelectionError('No players matched that prompt')
-      })
-      .catch((reason: unknown) => {
-        if (controller.signal.aborted) return
-        setSelectionError(reason instanceof Error ? reason.message : 'Could not ground text prompt')
-      })
-      .finally(() => {
-        if (selectionRequest.current === controller) {
-          selectionRequest.current = null
-          setSelectionLoading(false)
-        }
-      })
-  }, [currentFrame, prepareSelection, video])
-
-  const confirmCandidate = useCallback((candidate: LocateCandidate, frameIdx: number) => {
-    if (loadingRef.current || trackStartingRef.current) return
-    if (candidateFrame === null || frameIdx !== candidateFrame) {
-      if (candidateFrame !== null) {
-        setSelectionError(`Return to frame ${candidateFrame} to confirm this candidate`)
-      }
-      return
-    }
-    if (!containsFrame(rangeRef.current, frameIdx)) {
-      setSelectionError('Choose a frame inside the selected range')
-      return
-    }
-    setSelection({ box: candidate.box, score: candidate.score, maskPng: '' })
-    setSelectionKind('text')
-    setAnchorFrame(frameIdx)
-    setCandidates([])
-    setCandidateFrame(null)
-    setSelectionError(null)
-  }, [candidateFrame])
-
   const setCurrentFrame = useCallback((frameIdx: number) => {
     setCurrentFrameState(frameIdx)
-    if (candidateFrame !== null && frameIdx !== candidateFrame) {
-      setCandidates([])
-      setCandidateFrame(null)
-    }
-  }, [candidateFrame])
+  }, [])
 
   const setRange = useCallback((nextRange: FrameRange) => {
     if (
@@ -566,12 +479,9 @@ export function useWorkspace(): WorkspaceController {
     currentFrame,
     range,
     selection,
-    selectionKind,
     selectionLoading,
     selectionError,
-    candidates,
     playerName,
-    features,
     library,
     trackJob,
     trackMessage,
@@ -594,8 +504,6 @@ export function useWorkspace(): WorkspaceController {
     openLibraryPlayer,
     refreshLibrary,
     selectAt,
-    selectByDescription,
-    confirmCandidate,
     setPlayerName,
     setCurrentFrame,
     setRange,
@@ -613,11 +521,11 @@ export function useWorkspace(): WorkspaceController {
     resetSelection,
     clearCaches,
   }), [
-    beginExportSubmission, candidates, clearCaches, confirmCandidate, cropWindows, currentFrame,
+    beginExportSubmission, clearCaches, cropWindows, currentFrame,
     exportJob, exportStarting, finishExportSubmission,
-    features, framing, library, loading, loadingLabel, openError, openLibraryPlayer,
+    framing, library, loading, loadingLabel, openError, openLibraryPlayer,
     openLibraryVideo, openPath, openUpload, range, refreshLibrary, resetRange, resetSelection,
-    playerName, selectAt, selectByDescription, selection, selectionError, selectionKind,
+    playerName, selectAt, selection, selectionError,
     selectionLoading, setPlayerName, setRange, setRangeIn, setRangeOut, stage, startTrack, cancelTrack, trackError, trackJob, trackMessage,
     trackStartedAt, trackStarting, video, videoName, videoSwitchLocked,
   ])

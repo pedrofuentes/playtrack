@@ -11,12 +11,10 @@ import { type WorkspaceController, useWorkspace } from './useWorkspace'
 const apiMocks = vi.hoisted(() => ({
   clearFrameCaches: vi.fn(),
   fetchCropPlan: vi.fn(),
-  getFeatures: vi.fn(),
   getLibrary: vi.fn(),
   getTrack: vi.fn(),
   registerVideo: vi.fn(),
   selectByClick: vi.fn(),
-  selectByText: vi.fn(),
   startExport: vi.fn(),
   startTracking: vi.fn(),
   uploadVideo: vi.fn(),
@@ -107,12 +105,10 @@ async function mountController() {
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   controller = null
-  apiMocks.getFeatures.mockResolvedValue({ textSelection: { enabled: false, reason: '' } })
   apiMocks.getLibrary.mockResolvedValue({ videos: [], cacheBytes: 0 })
   apiMocks.registerVideo.mockResolvedValue(video)
   apiMocks.uploadVideo.mockResolvedValue(video)
   apiMocks.selectByClick.mockResolvedValue({ box: [1, 2, 3, 4], maskPng: '', score: 0.9 })
-  apiMocks.selectByText.mockResolvedValue([])
   apiMocks.startTracking.mockResolvedValue({ jobId: 'track-1', playerName: 'White 19' })
   apiMocks.clearFrameCaches.mockResolvedValue({ bytesFreed: 0 })
   apiMocks.fetchCropPlan.mockResolvedValue({
@@ -248,13 +244,12 @@ describe('useWorkspace', () => {
 
     expect(pendingSignals[0].aborted).toBe(true)
     expect(controller?.selection).toBeNull()
-    expect(controller?.candidates).toEqual([])
     expect(controller?.selectionError).toBeNull()
     expect(controller?.selectionLoading).toBe(false)
     await act(async () => root.unmount())
   })
 
-  it('rejects click, text, and candidate anchors outside the selected range', async () => {
+  it('rejects click anchors outside the selected range', async () => {
     const root = await mountController()
     act(() => controller?.setRange({ startFrameIdx: 10, endFrameExclusive: 20 }))
 
@@ -262,43 +257,12 @@ describe('useWorkspace', () => {
     expect(apiMocks.selectByClick).not.toHaveBeenCalled()
     expect(controller?.selectionError).toBe('Choose a frame inside the selected range')
 
-    act(() => controller?.setCurrentFrame(20))
-    act(() => controller?.selectByDescription('white jersey'))
-    expect(apiMocks.selectByText).not.toHaveBeenCalled()
-
-    act(() => controller?.confirmCandidate({ box: [1, 2, 3, 4], score: 1 }, 20))
-    expect(controller?.selection).toBeNull()
-
     await act(async () => {
       controller?.selectAt({ x: 10, y: 20 }, 10)
       await Promise.resolve()
     })
     expect(apiMocks.selectByClick).toHaveBeenCalledOnce()
     expect(controller?.selection).not.toBeNull()
-    await act(async () => root.unmount())
-  })
-
-  it('grounds text at the exact paused frame and only confirms candidates there', async () => {
-    const candidate = { box: [10, 20, 30, 40] as const, score: 0.95 }
-    apiMocks.selectByText.mockResolvedValueOnce([candidate])
-    const root = await mountController()
-    act(() => controller?.setCurrentFrame(10))
-
-    await act(async () => {
-      controller?.selectByDescription('white jersey', 37)
-      await Promise.resolve()
-    })
-    expect(apiMocks.selectByText).toHaveBeenCalledWith(
-      'video-1', 37, 'white jersey', expect.any(AbortSignal),
-    )
-    expect(controller?.candidates).toEqual([candidate])
-
-    act(() => controller?.confirmCandidate(candidate, 38))
-    expect(controller?.selection).toBeNull()
-    expect(controller?.selectionError).toBe('Return to frame 37 to confirm this candidate')
-
-    act(() => controller?.confirmCandidate(candidate, 37))
-    expect(controller?.selection?.box).toEqual(candidate.box)
     await act(async () => root.unmount())
   })
 
@@ -587,7 +551,6 @@ describe('useWorkspace', () => {
     act(() => controller?.setPlayerName('Current player'))
     apiMocks.getTrack.mockReturnValueOnce(restore.promise)
     apiMocks.selectByClick.mockClear()
-    apiMocks.selectByText.mockClear()
     apiMocks.startTracking.mockClear()
 
     let playerOpen: Promise<boolean> | undefined
@@ -597,15 +560,12 @@ describe('useWorkspace', () => {
       controller?.setRange({ startFrameIdx: 10, endFrameExclusive: 100 })
       controller?.resetSelection()
       controller?.selectAt({ x: 30, y: 40 }, 30)
-      controller?.selectByDescription('white jersey')
-      controller?.confirmCandidate({ box: [8, 9, 10, 11], score: 1 }, 20)
       controller?.setPlayerName('Changed while opening')
     })
 
     expect(controller?.loading).toBe(true)
     expect(apiMocks.startTracking).not.toHaveBeenCalled()
     expect(apiMocks.selectByClick).not.toHaveBeenCalled()
-    expect(apiMocks.selectByText).not.toHaveBeenCalled()
     expect(controller?.selection?.box).toEqual([1, 2, 3, 4])
     expect(controller?.playerName).toBe('Current player')
     expect(controller?.range).toEqual({ startFrameIdx: 0, endFrameExclusive: 930 })

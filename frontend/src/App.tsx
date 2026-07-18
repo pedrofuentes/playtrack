@@ -34,7 +34,6 @@ export default function App() {
   ), [workspace.range, workspace.trackJob, workspace.video])
   const playbackLocked = workspace.stage === 'select' && (
     workspace.selectionLoading ||
-    workspace.candidates.length > 0 ||
     workspace.selection !== null
   )
 
@@ -90,11 +89,9 @@ export default function App() {
       selection={workspace.selection}
       track={workspace.trackJob?.track ?? []}
       cropWindows={workspace.cropWindows}
-      candidates={workspace.candidates}
       playbackLocked={playbackLocked}
       selectionLocked={selectionLocked}
       onSourceClick={workspace.selectAt}
-      onCandidateConfirm={workspace.confirmCandidate}
       onFrameChange={workspace.setCurrentFrame}
     />
   ) : (
@@ -114,12 +111,9 @@ export default function App() {
       video={workspace.video}
       currentFrame={workspace.currentFrame}
       selection={workspace.selection}
-      selectionKind={workspace.selectionKind}
       selectionLoading={workspace.selectionLoading}
       selectionError={workspace.selectionError}
-      candidates={workspace.candidates}
       playerName={workspace.playerName}
-      textSelectionEnabled={workspace.features.textSelection.enabled}
       trackJob={workspace.trackJob}
       trackMessage={workspace.trackMessage}
       trackError={workspace.trackError}
@@ -128,10 +122,6 @@ export default function App() {
       trackStartedAt={workspace.trackStartedAt}
       trackFrameCount={frameRangeCount(workspace.range)}
       health={health}
-      onTextSelect={(prompt) => {
-        const frameIdx = videoStageRef.current?.pause()
-        workspace.selectByDescription(prompt, frameIdx ?? workspace.currentFrame)
-      }}
       onPlayerNameChange={workspace.setPlayerName}
       onTrack={() => void workspace.startTrack()}
       onCancelTrack={() => void workspace.cancelTrack()}

@@ -13,12 +13,9 @@ const common = {
   video,
   currentFrame: 368,
   selection: null,
-  selectionKind: 'click' as const,
   selectionLoading: false,
   selectionError: null,
-  candidates: [],
   playerName: '',
-  textSelectionEnabled: false,
   trackJob: null,
   trackMessage: null,
   trackError: null,
@@ -27,7 +24,6 @@ const common = {
   trackStartedAt: null,
   trackFrameCount: 930,
   health: null,
-  onTextSelect: vi.fn(),
   onPlayerNameChange: vi.fn(),
   onTrack: vi.fn(),
   onCancelTrack: vi.fn(),
@@ -43,21 +39,20 @@ function job(state: TrackJobUpdate['state'], progress = 0.64): TrackJobUpdate {
 }
 
 describe('WorkflowInspector', () => {
-  it('shows click-first selection and exposes description only when enabled', () => {
+  it('shows click-only selection controls', () => {
     const clickOnly = renderToStaticMarkup(<WorkflowInspector {...common} stage="select" />)
     expect(clickOnly).toContain('Click a player')
-    expect(clickOnly).not.toContain('Describe')
+    expect(clickOnly).not.toContain('aria-label="Selection method"')
 
     const selected = renderToStaticMarkup(
       <WorkflowInspector
         {...common}
         stage="select"
         selection={selection}
-        textSelectionEnabled
       />,
     )
-    expect(selected).toContain('Describe')
     expect(selected).toContain('92% confidence')
+    expect(selected).toContain('Click mask')
     expect(selected).toContain('Name this player')
     expect(selected).toContain('maxLength="80"')
     expect(selected).toContain('Track player')

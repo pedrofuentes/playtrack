@@ -22,7 +22,6 @@ import {
 import type {
   ClickSelection,
   CropWindow,
-  LocateCandidate,
   TrackFrame,
 } from '../api'
 import { PlaybackOverlay } from './PlaybackOverlay'
@@ -36,11 +35,9 @@ export interface VideoStageProps {
   selection: ClickSelection | null
   track: readonly TrackFrame[]
   cropWindows: readonly CropWindow[]
-  candidates: readonly LocateCandidate[]
   playbackLocked: boolean
   selectionLocked?: boolean
   onSourceClick: (point: Point, frameIdx: number) => void
-  onCandidateConfirm: (candidate: LocateCandidate, frameIdx: number) => void
   onFrameChange: (frameIdx: number) => void
 }
 
@@ -121,11 +118,9 @@ export const VideoStage = forwardRef<VideoStageHandle, VideoStageProps>(function
   selection,
   track,
   cropWindows,
-  candidates,
   playbackLocked,
   selectionLocked = false,
   onSourceClick,
-  onCandidateConfirm,
   onFrameChange,
 }: VideoStageProps, forwardedRef) {
   const stageRef = useRef<HTMLDivElement>(null)
@@ -184,11 +179,10 @@ export const VideoStage = forwardRef<VideoStageHandle, VideoStageProps>(function
       canvasRef,
       lastPoint,
       selection,
-      candidates,
       sourceWidth,
       sourceHeight,
     )
-  }, [candidates, lastPoint, selection, sourceHeight, sourceWidth])
+  }, [lastPoint, selection, sourceHeight, sourceWidth])
 
   useEffect(() => {
     const video = videoRef.current
@@ -254,12 +248,6 @@ export const VideoStage = forwardRef<VideoStageHandle, VideoStageProps>(function
       { width: sourceWidth, height: sourceHeight },
     )
     if (!point) return
-    const candidate = candidateAtSourcePoint(candidates, point)
-    if (candidate) {
-      setLastPoint(null)
-      onCandidateConfirm(candidate, frameIdx)
-      return
-    }
     setLastPoint(point)
     console.info('PlayTrack source click', point)
     onSourceClick(point, frameIdx)
@@ -416,7 +404,6 @@ function drawOverlayCanvas(
   canvasRef: RefObject<HTMLCanvasElement | null>,
   point: Point | null,
   selection: ClickSelection | null,
-  candidates: readonly LocateCandidate[],
   sourceWidth: number,
   sourceHeight: number,
 ) {
@@ -459,23 +446,6 @@ function drawOverlayCanvas(
     }
   }
 
-  candidates.forEach((candidate, index) => {
-    const box = canvasRectFromSourceBox(
-      candidate.box,
-      { width: bounds.width, height: bounds.height },
-      { width: sourceWidth, height: sourceHeight },
-    )
-    if (!box) return
-    context.strokeStyle = '#ff5f8f'
-    context.fillStyle = 'rgba(255, 95, 143, 0.16)'
-    context.lineWidth = 3
-    context.fillRect(box.left, box.top, box.width, box.height)
-    context.strokeRect(box.left, box.top, box.width, box.height)
-    context.fillStyle = '#ffedf3'
-    context.font = '700 13px system-ui'
-    context.fillText(String(index + 1), box.left + 5, box.top + 16)
-  })
-
   if (point) {
     const x = media.left + point.x * media.scale
     const y = media.top + point.y * media.scale
@@ -493,18 +463,6 @@ function drawOverlayCanvas(
     context.lineTo(x, y + 15)
     context.stroke()
   }
-}
-
-export function candidateAtSourcePoint(
-  candidates: readonly LocateCandidate[],
-  point: Point,
-): LocateCandidate | null {
-  return (
-    candidates.find(({ box }) => {
-      const [x1, y1, x2, y2] = box
-      return point.x >= x1 && point.x < x2 && point.y >= y1 && point.y < y2
-    }) ?? null
-  )
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {

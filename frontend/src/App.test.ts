@@ -6,7 +6,6 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const appMocks = vi.hoisted(() => ({
-  pause: vi.fn(),
   play: vi.fn(),
   seekToFrame: vi.fn(),
   sourceClick: vi.fn(),
@@ -39,7 +38,6 @@ vi.mock('./components/VideoStage', async () => {
       appMocks.selectionLocked = selectionLocked
       appMocks.sourceClick.mockImplementation(onSourceClick)
       useImperativeHandle(ref, () => ({
-        pause: appMocks.pause,
         play: appMocks.play,
         togglePlayback: appMocks.play,
         seekToFrame: appMocks.seekToFrame,
@@ -60,12 +58,9 @@ function workspace(overrides: Record<string, unknown> = {}) {
     currentFrame: 0,
     range: { startFrameIdx: 0, endFrameExclusive: 1 },
     selection: null,
-    selectionKind: 'click',
     selectionLoading: false,
     selectionError: null,
-    candidates: [],
     playerName: '',
-    features: { textSelection: { enabled: false, reason: '' } },
     library: { videos: [], cacheBytes: 0 },
     trackJob: null,
     trackMessage: null,
@@ -88,8 +83,6 @@ function workspace(overrides: Record<string, unknown> = {}) {
     openLibraryPlayer: vi.fn(),
     refreshLibrary: vi.fn(),
     selectAt: vi.fn(),
-    selectByDescription: vi.fn(),
-    confirmCandidate: vi.fn(),
     setPlayerName: vi.fn(),
     setCurrentFrame: vi.fn(),
     setRange: vi.fn(),
@@ -128,8 +121,6 @@ function openedWorkspace(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
-  appMocks.pause.mockClear()
-  appMocks.pause.mockReturnValue(undefined)
   appMocks.play.mockClear()
   appMocks.seekToFrame.mockClear()
   appMocks.sourceClick.mockReset()
@@ -207,41 +198,8 @@ it('renders cached-shell guidance and retry when the local backend is offline', 
   expect(markup).toContain('Retry connection')
 })
 
-it('pauses the video before starting text selection', async () => {
-  const selectByDescription = vi.fn()
-  appMocks.pause.mockReturnValue(37)
-  appMocks.workspace = openedWorkspace({
-    currentFrame: 10,
-    features: { textSelection: { enabled: true, reason: '' } },
-    selectByDescription,
-  })
-  const container = document.createElement('div')
-  document.body.append(container)
-  const root = createRoot(container)
-
-  await act(async () => root.render(createElement(App)))
-  const describeButton = container.querySelector<HTMLButtonElement>('[data-method="describe"]')!
-  await act(async () => describeButton.click())
-  const input = container.querySelector<HTMLInputElement>('#player-description')!
-  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
-  await act(async () => {
-    setValue.call(input, 'white jersey')
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-  })
-  const form = container.querySelector<HTMLFormElement>('.text-selection-form')!
-  await act(async () => form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true })))
-
-  expect(appMocks.pause.mock.invocationCallOrder[0]).toBeLessThan(
-    selectByDescription.mock.invocationCallOrder[0],
-  )
-  expect(selectByDescription).toHaveBeenCalledWith('white jersey', 37)
-  await act(async () => root.unmount())
-  container.remove()
-})
-
 it.each([
   ['selection loading', { selectionLoading: true }],
-  ['text candidates', { candidates: [{ box: [1, 2, 3, 4], score: 0.9 }] }],
   ['confirmed selection', { selection: { box: [1, 2, 3, 4], score: 0.9, maskPng: '' } }],
 ])('locks playback during %s', async (_label, selectionState) => {
   appMocks.workspace = openedWorkspace({
@@ -324,7 +282,6 @@ it('routes an outside-range click to workspace validation', async () => {
 
 it.each([
   ['selection loading', { selectionLoading: true }],
-  ['text candidates', { candidates: [{ box: [1, 2, 3, 4], score: 0.9 }] }],
   ['confirmed selection', { selection: { box: [1, 2, 3, 4], score: 0.9, maskPng: '' } }],
 ])('blocks ArrowRight frame stepping during %s', async (_label, selectionState) => {
   appMocks.workspace = openedWorkspace(selectionState)
