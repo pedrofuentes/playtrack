@@ -199,6 +199,11 @@ with the comma-separated `FINDME_ALLOWED_HOSTS` setting.
 Unexpected API failures return a stable error code and an `X-Request-ID`; the matching
 identifier is written to the backend log with the full diagnostic traceback.
 
+The reusable library is stored transactionally in
+`data/library/findme.sqlite3` with SQLite WAL journaling and full synchronous writes.
+This is a clean persistence-format break: legacy `videos.json`, `exports.json`, and
+per-track JSON files are left untouched but are not imported.
+
 ## Known limitations
 
 - The UI currently opens `examples/example.mp4`; it does not yet expose the

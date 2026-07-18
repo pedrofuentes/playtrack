@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -455,9 +456,10 @@ def test_export_download_disposition_falls_back_for_legacy_catalog(
 ) -> None:
     store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
     record = store.register_path(tiny_video)
-    catalog = store.library.videos()
-    catalog[0].pop("name", None)
-    store.library._write_list(store.library.videos_path, catalog)
+    with sqlite3.connect(store.library.database_path) as connection:
+        connection.execute(
+            "UPDATE videos SET name = NULL WHERE video_id = ?", (record.video_id,)
+        )
     export_id = "legacy-export-123xyz"
     exports_dir = tmp_path / "exports"
     exports_dir.mkdir()
@@ -468,9 +470,11 @@ def test_export_download_disposition_falls_back_for_legacy_catalog(
     store.library.save_export(
         export_id, record.video_id, "missing-track", {}, destination
     )
-    exports = store.library.exports()
-    exports[0]["createdAt"] = "invalid"
-    store.library._write_list(store.library.exports_path, exports)
+    with sqlite3.connect(store.library.database_path) as connection:
+        connection.execute(
+            "UPDATE exports SET created_at = ? WHERE export_id = ?",
+            ("invalid", export_id),
+        )
     jobs = JobRegistry()
     jobs.restore_completed(export_id, [])
 

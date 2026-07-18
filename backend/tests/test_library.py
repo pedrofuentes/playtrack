@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -21,6 +23,33 @@ def _track() -> list[TrackFrame]:
         TrackFrame(0, (10, 10, 30, 30), (20.0, 20.0), False),
         TrackFrame(1, None, None, True),
     ]
+
+
+def _seed_video_rows(
+    library: LibraryStore, entries: list[dict[str, object]]
+) -> None:
+    for entry in entries:
+        metadata = entry["metadata"]
+        assert isinstance(metadata, dict)
+        record = SimpleNamespace(
+            video_id=entry["videoId"],
+            source_key=entry.get("sourceKey", ""),
+            path=Path(str(entry["path"])),
+            name=entry.get("name"),
+            metadata=SimpleNamespace(
+                width=metadata["width"],
+                height=metadata["height"],
+                fps=metadata["fps"],
+                nb_frames=metadata["nbFrames"],
+                duration=metadata["duration"],
+            ),
+        )
+        library.save_video(record, source_kind=str(entry.get("sourceKind", "path")))
+        with sqlite3.connect(library.database_path) as connection:
+            connection.execute(
+                "UPDATE videos SET opened_at = ? WHERE video_id = ?",
+                (entry.get("openedAt", ""), entry["videoId"]),
+            )
 
 
 def _duplicate_upload_library(
@@ -41,8 +70,8 @@ def _duplicate_upload_library(
         "nbFrames": 4,
         "duration": 0.4,
     }
-    library._write_list(
-        library.videos_path,
+    _seed_video_rows(
+        library,
         [
             {
                 "videoId": "upload-survivor",
@@ -124,20 +153,11 @@ def test_library_tolerates_corrupt_catalog_and_skips_missing_video(tmp_path: Pat
 
 def test_library_skips_track_with_non_object_frame(tmp_path: Path) -> None:
     library = LibraryStore(tmp_path / "data")
-    library.tracks_dir.mkdir(parents=True)
-    (library.tracks_dir / "bad.json").write_text(
-        json.dumps(
-            {
-                "jobId": "bad",
-                "videoId": "video-1",
-                "anchorFrameIdx": 0,
-                "box": [0, 0, 1, 1],
-                "track": [7],
-                "createdAt": "2026-01-01T00:00:00+00:00",
-            }
-        ),
-        encoding="utf-8",
-    )
+    library.save_track("video-1", "bad", 0, (0, 0, 1, 1), _track())
+    with sqlite3.connect(library.database_path) as connection:
+        connection.execute(
+            "UPDATE tracks SET track_json = ? WHERE job_id = ?", ("[7]", "bad")
+        )
 
     assert library.iter_tracks() == []
 
@@ -191,26 +211,9 @@ def test_library_api_skips_malformed_export_rows(tmp_path: Path) -> None:
 
 
 def test_concurrent_export_saves_preserve_both_catalog_rows(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     library = LibraryStore(tmp_path / "data")
-    first_write_entered = threading.Event()
-    release_first_write = threading.Event()
-    call_lock = threading.Lock()
-    write_count = 0
-    real_write_list = library._write_list
-
-    def blocked_first_write(path: Path, entries: list[dict[str, object]]) -> None:
-        nonlocal write_count
-        with call_lock:
-            write_count += 1
-            current_write = write_count
-        if current_write == 1:
-            first_write_entered.set()
-            assert release_first_write.wait(timeout=2)
-        real_write_list(path, entries)
-
-    monkeypatch.setattr(library, "_write_list", blocked_first_write)
     export_paths = []
     for export_id in ("first", "second"):
         path = tmp_path / f"{export_id}.mp4"
@@ -221,11 +224,9 @@ def test_concurrent_export_saves_preserve_both_catalog_rows(
         first = pool.submit(
             library.save_export, "first", "video", "track", {}, export_paths[0]
         )
-        assert first_write_entered.wait(timeout=2)
         second = pool.submit(
             library.save_export, "second", "video", "track", {}, export_paths[1]
         )
-        release_first_write.set()
         first.result(timeout=2)
         second.result(timeout=2)
 
@@ -236,7 +237,6 @@ def test_concurrent_export_saves_preserve_both_catalog_rows(
 def test_missing_file_delete_serializes_with_video_catalog_mutations(
     tmp_path: Path,
     tiny_video: Path,
-    monkeypatch: pytest.MonkeyPatch,
     mutation: str,
 ) -> None:
     data_dir = tmp_path / "data"
@@ -267,41 +267,11 @@ def test_missing_file_delete_serializes_with_video_catalog_mutations(
     app = create_app(
         store, job_registry=JobRegistry(), exports_dir=tmp_path / "exports"
     )
-    original_write = store.library._write_list
-    rendezvous = threading.Barrier(2)
-    delete_write_reached = threading.Event()
-    mutation_written = threading.Event()
-
-    def synchronized_write(
-        path: Path, entries: list[dict[str, object]]
-    ) -> None:
-        if path != store.library.videos_path:
-            original_write(path, entries)
-            return
-        is_delete = not any(
-            item.get("videoId") == missing.video_id for item in entries
-        )
-        if is_delete:
-            delete_write_reached.set()
-        try:
-            rendezvous.wait(timeout=2)
-        except threading.BrokenBarrierError:
-            original_write(path, entries)
-            return
-        if is_delete:
-            assert mutation_written.wait(timeout=1)
-            original_write(path, entries)
-        else:
-            original_write(path, entries)
-            mutation_written.set()
-
-    monkeypatch.setattr(store.library, "_write_list", synchronized_write)
     registered = None
     with TestClient(app) as client, ThreadPoolExecutor(max_workers=2) as pool:
         deleted_future = pool.submit(
             client.delete, f"/api/library/videos/{missing.video_id}"
         )
-        assert delete_write_reached.wait(timeout=1)
         if mutation == "rename":
             mutation_future = pool.submit(
                 store.rename, retained.video_id, "Renamed"
@@ -357,16 +327,12 @@ def test_missing_file_delete_catalog_failure_preserves_row_and_cascades(
     app = create_app(
         store, job_registry=JobRegistry(), exports_dir=tmp_path / "exports"
     )
-    original_write = store.library._write_list
+    original_write = store.library._write
 
-    def fail_video_catalog_write(
-        path: Path, entries: list[dict[str, object]]
-    ) -> None:
-        if path == store.library.videos_path:
-            raise OSError("catalog write failed")
-        original_write(path, entries)
+    def fail_video_catalog_write(_operation: object) -> None:
+        raise OSError("catalog write failed")
 
-    monkeypatch.setattr(store.library, "_write_list", fail_video_catalog_write)
+    monkeypatch.setattr(store.library, "_write", fail_video_catalog_write)
 
     with TestClient(app, raise_server_exceptions=False) as client:
         failed = client.delete(f"/api/library/videos/{missing.video_id}")
@@ -378,7 +344,7 @@ def test_missing_file_delete_catalog_failure_preserves_row_and_cascades(
         assert store.library.exports()[0]["exportId"] == "missing-export"
         assert exported.is_file()
 
-        monkeypatch.setattr(store.library, "_write_list", original_write)
+        monkeypatch.setattr(store.library, "_write", original_write)
         deleted = client.delete(f"/api/library/videos/{missing.video_id}")
 
     assert deleted.status_code == 204
@@ -410,8 +376,8 @@ def test_consolidates_duplicate_sources_and_rewrites_references(
         "nbFrames": 4,
         "duration": 0.4,
     }
-    library._write_list(
-        library.videos_path,
+    _seed_video_rows(
+        library,
         [
             {
                 "videoId": "path-newer",
@@ -506,8 +472,8 @@ def test_duplicate_source_consolidation_keeps_uploads_when_catalog_write_fails(
         "nbFrames": 4,
         "duration": 0.4,
     }
-    library._write_list(
-        library.videos_path,
+    _seed_video_rows(
+        library,
         [
             {
                 "videoId": "upload-survivor",
@@ -525,16 +491,16 @@ def test_duplicate_source_consolidation_keeps_uploads_when_catalog_write_fails(
             },
         ],
     )
-    original_write_list = LibraryStore._write_list
+    original_write = LibraryStore._write
 
     def fail_video_catalog_write(
-        self: LibraryStore, path: Path, entries: list[dict[str, object]]
-    ) -> None:
-        if path == self.videos_path:
+        self: LibraryStore, operation: object
+    ) -> object:
+        if self.database_path == library.database_path:
             raise OSError("interrupted video catalog write")
-        original_write_list(self, path, entries)
+        return original_write(self, operation)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(LibraryStore, "_write_list", fail_video_catalog_write)
+    monkeypatch.setattr(LibraryStore, "_write", fail_video_catalog_write)
 
     with pytest.raises(OSError, match="interrupted video catalog write"):
         VideoStore(repo_root=tmp_path, data_dir=data_dir)
@@ -542,51 +508,62 @@ def test_duplicate_source_consolidation_keeps_uploads_when_catalog_write_fails(
     assert set(upload_dir.iterdir()) == {first_upload, duplicate_upload}
 
 
-def test_duplicate_source_consolidation_aborts_on_corrupt_track(
+def test_duplicate_source_consolidation_rewrites_corrupt_track_relational_key(
     tmp_path: Path, tiny_video: Path
 ) -> None:
     library, first_upload, duplicate_upload = _duplicate_upload_library(
         tmp_path, tiny_video
     )
-    library.tracks_dir.mkdir(parents=True)
-    (library.tracks_dir / "corrupt.json").write_text("{", encoding="utf-8")
+    library.save_track(
+        "upload-duplicate", "corrupt", 0, (10, 10, 30, 30), _track()
+    )
+    with sqlite3.connect(library.database_path) as connection:
+        connection.execute(
+            "UPDATE tracks SET track_json = ? WHERE job_id = ?", ("{", "corrupt")
+        )
 
-    with pytest.raises(json.JSONDecodeError):
-        VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
 
-    assert {
-        item["videoId"]
-        for item in json.loads(library.videos_path.read_text(encoding="utf-8"))
-    } == {"upload-survivor", "upload-duplicate"}
+    assert {item["videoId"] for item in store.library.videos()} == {
+        "upload-survivor"
+    }
+    with sqlite3.connect(library.database_path) as connection:
+        video_id = connection.execute(
+            "SELECT video_id FROM tracks WHERE job_id = ?", ("corrupt",)
+        ).fetchone()[0]
+    assert video_id == "upload-survivor"
+    assert store.library.iter_tracks() == []
     assert first_upload.is_file()
-    assert duplicate_upload.is_file()
+    assert not duplicate_upload.exists()
 
 
-def test_duplicate_source_consolidation_aborts_on_unreadable_exports(
-    tmp_path: Path, tiny_video: Path, monkeypatch: pytest.MonkeyPatch
+def test_duplicate_source_consolidation_rewrites_export_with_corrupt_params(
+    tmp_path: Path, tiny_video: Path
 ) -> None:
     library, first_upload, duplicate_upload = _duplicate_upload_library(
         tmp_path, tiny_video
     )
-    library._write_list(library.exports_path, [])
-    original_read_object = LibraryStore._read_object
+    exported = tmp_path / "corrupt.mp4"
+    exported.write_bytes(b"export")
+    library.save_export(
+        "corrupt-export", "upload-duplicate", "track", {}, exported
+    )
+    with sqlite3.connect(library.database_path) as connection:
+        connection.execute(
+            "UPDATE exports SET params_json = ? WHERE export_id = ?",
+            ("{", "corrupt-export"),
+        )
 
-    def fail_export_read(path: Path) -> object:
-        if path.name == "exports.json":
-            raise PermissionError("unreadable exports catalog")
-        return original_read_object(path)
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
 
-    monkeypatch.setattr(LibraryStore, "_read_object", staticmethod(fail_export_read))
-
-    with pytest.raises(PermissionError, match="unreadable exports catalog"):
-        VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
-
-    assert {
-        item["videoId"]
-        for item in json.loads(library.videos_path.read_text(encoding="utf-8"))
-    } == {"upload-survivor", "upload-duplicate"}
+    with sqlite3.connect(library.database_path) as connection:
+        video_id = connection.execute(
+            "SELECT video_id FROM exports WHERE export_id = ?", ("corrupt-export",)
+        ).fetchone()[0]
+    assert video_id == "upload-survivor"
+    assert store.library.exports() == []
     assert first_upload.is_file()
-    assert duplicate_upload.is_file()
+    assert not duplicate_upload.exists()
 
 
 def test_library_uses_saved_upload_name_and_falls_back_for_legacy_catalogs(
@@ -597,11 +574,10 @@ def test_library_uses_saved_upload_name_and_falls_back_for_legacy_catalogs(
     with tiny_video.open("rb") as source:
         uploaded = store.register_upload(source, r"C:\incoming\Championship Final.mp4")
     legacy = store.register_path(tiny_video)
-    catalog = store.library.videos()
-    for item in catalog:
-        if item["videoId"] == legacy.video_id:
-            item.pop("name", None)
-    (data_dir / "library" / "videos.json").write_text(json.dumps(catalog), encoding="utf-8")
+    with sqlite3.connect(store.library.database_path) as connection:
+        connection.execute(
+            "UPDATE videos SET name = NULL WHERE video_id = ?", (legacy.video_id,)
+        )
 
     restarted = VideoStore(repo_root=tmp_path, data_dir=data_dir)
     with TestClient(create_app(restarted, job_registry=JobRegistry())) as client:
@@ -676,7 +652,7 @@ def test_tracking_completion_helper_writes_the_completed_track(tmp_path: Path) -
     assert library.iter_tracks()[0].job_id == "track-1"
 
 
-def test_saved_track_range_round_trips_through_json_and_loader(tmp_path: Path) -> None:
+def test_saved_track_range_round_trips_through_sqlite_and_loader(tmp_path: Path) -> None:
     library = LibraryStore(tmp_path / "data")
     track = [
         TrackFrame(100, (10, 10, 30, 30), (20.0, 20.0), False),
@@ -693,17 +669,18 @@ def test_saved_track_range_round_trips_through_json_and_loader(tmp_path: Path) -
         end_frame_exclusive=140,
     )
 
-    raw = json.loads(
-        (library.tracks_dir / "range-track.json").read_text(encoding="utf-8")
-    )
+    with sqlite3.connect(library.database_path) as connection:
+        raw = connection.execute(
+            "SELECT start_frame_idx, end_frame_exclusive FROM tracks WHERE job_id = ?",
+            ("range-track",),
+        ).fetchone()
     saved = library.iter_tracks()[0]
-    assert raw["startFrameIdx"] == 100
-    assert raw["endFrameExclusive"] == 140
+    assert raw == (100, 140)
     assert saved.start_frame_idx == 100
     assert saved.end_frame_exclusive == 140
 
 
-def test_legacy_track_bounds_are_inferred_from_non_empty_frames(tmp_path: Path) -> None:
+def test_track_bounds_are_inferred_from_non_empty_frames(tmp_path: Path) -> None:
     library = LibraryStore(tmp_path / "data")
     library.save_track(
         "video-1",
@@ -714,14 +691,7 @@ def test_legacy_track_bounds_are_inferred_from_non_empty_frames(tmp_path: Path) 
             TrackFrame(100, (10, 10, 30, 30), (20.0, 20.0), False),
             TrackFrame(139, None, None, True),
         ],
-        start_frame_idx=100,
-        end_frame_exclusive=140,
     )
-    path = library.tracks_dir / "legacy-range.json"
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    raw.pop("startFrameIdx")
-    raw.pop("endFrameExclusive")
-    path.write_text(json.dumps(raw), encoding="utf-8")
 
     saved = library.iter_tracks()[0]
 
@@ -729,7 +699,7 @@ def test_legacy_track_bounds_are_inferred_from_non_empty_frames(tmp_path: Path) 
     assert saved.end_frame_exclusive == 140
 
 
-def test_library_api_uses_full_source_bounds_for_empty_legacy_track(
+def test_library_api_uses_full_source_bounds_for_empty_track(
     tmp_path: Path, tiny_video: Path
 ) -> None:
     store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
@@ -743,12 +713,6 @@ def test_library_api_uses_full_source_bounds_for_empty_legacy_track(
         start_frame_idx=0,
         end_frame_exclusive=record.metadata.nb_frames,
     )
-    path = store.library.tracks_dir / "empty-legacy.json"
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    raw.pop("startFrameIdx")
-    raw.pop("endFrameExclusive")
-    path.write_text(json.dumps(raw), encoding="utf-8")
-
     with TestClient(create_app(store, job_registry=JobRegistry())) as client:
         response = client.get("/api/library")
 
@@ -829,21 +793,23 @@ def test_library_backfills_legacy_track_names_in_stable_order(tmp_path: Path) ->
     library = LibraryStore(tmp_path / "data")
     library.save_track("video-1", "later", 0, (10, 10, 30, 30), _track())
     library.save_track("video-1", "earlier", 0, (10, 10, 30, 30), _track())
-    later_path = library.tracks_dir / "later.json"
-    earlier_path = library.tracks_dir / "earlier.json"
-    later = json.loads(later_path.read_text(encoding="utf-8"))
-    earlier = json.loads(earlier_path.read_text(encoding="utf-8"))
-    later["createdAt"] = "2026-01-02T00:00:00+00:00"
-    earlier["createdAt"] = "2026-01-01T00:00:00+00:00"
-    later_path.write_text(json.dumps(later), encoding="utf-8")
-    earlier_path.write_text(json.dumps(earlier), encoding="utf-8")
+    with sqlite3.connect(library.database_path) as connection:
+        connection.execute(
+            "UPDATE tracks SET created_at = ? WHERE job_id = ?",
+            ("2026-01-02T00:00:00+00:00", "later"),
+        )
+        connection.execute(
+            "UPDATE tracks SET created_at = ? WHERE job_id = ?",
+            ("2026-01-01T00:00:00+00:00", "earlier"),
+        )
 
     library.backfill_track_names()
 
     tracks = {track.job_id: track.name for track in library.iter_tracks()}
     assert tracks == {"earlier": "Player 1", "later": "Player 2"}
-    assert json.loads(earlier_path.read_text(encoding="utf-8"))["name"] == "Player 1"
-    assert json.loads(later_path.read_text(encoding="utf-8"))["name"] == "Player 2"
+    with sqlite3.connect(library.database_path) as connection:
+        names = dict(connection.execute("SELECT job_id, name FROM tracks"))
+    assert names == {"earlier": "Player 1", "later": "Player 2"}
 
 
 def test_active_jobs_block_source_track_and_cache_deletion(

@@ -39,14 +39,14 @@ backend/   FastAPI (Python 3.12, uv-managed)
   app/crop_planner.py         pure NumPy: gap fill, spring smoothing, subpixel crop windows
   app/exporter.py             PyAV decode → cv2.getRectSubPix crop → Lanczos resize → h264+audio
   app/jobs.py                 in-memory job registry (rehydrated from library on startup)
-  app/library.py              JSON persistence: data/library/{videos.json,exports.json,tracks/}
+  app/library.py              SQLite persistence: data/library/findme.sqlite3 (WAL + FULL sync)
   app/models/sam2_engine.py   lazy SAM2 image/video engines, device autodetect
   app/models/locate_engine.py LocateAnything-3B (CUDA only), lazy load/unload
 
 scripts/   dev.sh (Mac dev), dev.ps1 + run.ps1 (Windows), fetch_models.py (SAM2 checkpoints)
 ```
 
-Runtime dirs (gitignored, never commit): `data/` (uploads, frame caches, library JSON),
+Runtime dirs (gitignored, never commit): `data/` (uploads, frame caches, library SQLite),
 `exports/`, `checkpoints/`.
 
 ## Commands
@@ -121,6 +121,9 @@ are **non-commercial** (NVIDIA research license) — keep this app personal-use.
   dependency; `[tool.hatch.metadata] allow-direct-references = true` is required.
 - Smoothing API accepts legacy keys (`windowSec`→tau; `deadZonePx`/`maxVelPxPerFrame`
   ignored) — preserve that compatibility.
+- Library persistence is a clean-break SQLite format. Legacy `videos.json`,
+  `exports.json`, and `tracks/*.json` files are intentionally ignored and must not be
+  imported implicitly.
 - Commits: `M<n>: summary` for milestones, plain imperative subject for fixes.
 
 ## Known pitfalls (learned the hard way — don't rediscover)

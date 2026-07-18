@@ -263,12 +263,10 @@ def test_video_rename_catalog_failure_preserves_memory_and_catalog(
     store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
     record = store.register_path(tiny_video, "Original")
 
-    def fail_catalog_write(
-        path: Path, entries: list[dict[str, object]]
-    ) -> None:
+    def fail_catalog_write(_operation: object) -> None:
         raise OSError("catalog write failed")
 
-    monkeypatch.setattr(store.library, "_write_list", fail_catalog_write)
+    monkeypatch.setattr(store.library, "_write", fail_catalog_write)
 
     with pytest.raises(OSError, match="catalog write failed"):
         store.rename(record.video_id, "Replacement")
@@ -286,13 +284,9 @@ def test_registration_and_rename_share_one_catalog_transaction_lock(
     original = store.register_path(tiny_video, "Original")
     second_path = tiny_video.with_name("second.mp4")
     shutil.copyfile(tiny_video, second_path)
-    original_write = store.library._write_list
     original_probe = store._probe_video
-    rendezvous = threading.Barrier(2)
-    registered_written = threading.Event()
     probe_reached = threading.Event()
     release_probe = threading.Event()
-    rename_write_reached = threading.Event()
 
     def synchronized_probe(path: Path) -> object:
         if path == second_path:
@@ -300,37 +294,15 @@ def test_registration_and_rename_share_one_catalog_transaction_lock(
             assert release_probe.wait(timeout=3)
         return original_probe(path)
 
-    def synchronized_write(
-        path: Path, entries: list[dict[str, object]]
-    ) -> None:
-        if path != store.library.videos_path:
-            original_write(path, entries)
-            return
-        try:
-            if len(entries) == 1:
-                rename_write_reached.set()
-            rendezvous.wait(timeout=2)
-        except threading.BrokenBarrierError:
-            original_write(path, entries)
-            return
-        if len(entries) == 2:
-            original_write(path, entries)
-            registered_written.set()
-        else:
-            assert registered_written.wait(timeout=1)
-            original_write(path, entries)
-
-    monkeypatch.setattr(store.library, "_write_list", synchronized_write)
     monkeypatch.setattr(store, "_probe_video", synchronized_probe)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         registered_future = pool.submit(store.register_path, second_path, "Second")
         assert probe_reached.wait(timeout=1)
         renamed_future = pool.submit(store.rename, original.video_id, "Renamed")
-        assert rename_write_reached.wait(timeout=1)
+        renamed_future.result(timeout=2)
         release_probe.set()
         registered = registered_future.result(timeout=8)
-        renamed_future.result(timeout=8)
 
     catalog = {item["videoId"]: item["name"] for item in store.library.videos()}
     memory = {record.video_id: record.name for record in store.records()}
@@ -350,38 +322,23 @@ def test_delete_and_rename_share_one_catalog_transaction_lock(
     retained_path = tiny_video.with_name("retained.mp4")
     shutil.copyfile(tiny_video, retained_path)
     retained = store.register_path(retained_path, "Original")
-    original_write = store.library._write_list
-    rendezvous = threading.Barrier(2)
+    original_remove = store.library.remove_video
     delete_write_reached = threading.Event()
-    rename_written = threading.Event()
+    release_delete = threading.Event()
 
-    def synchronized_write(
-        path: Path, entries: list[dict[str, object]]
-    ) -> None:
-        if path != store.library.videos_path:
-            original_write(path, entries)
-            return
-        is_delete = len(entries) == 1
-        if is_delete:
-            delete_write_reached.set()
-        try:
-            rendezvous.wait(timeout=2)
-        except threading.BrokenBarrierError:
-            original_write(path, entries)
-            return
-        if is_delete:
-            assert rename_written.wait(timeout=1)
-            original_write(path, entries)
-        else:
-            original_write(path, entries)
-            rename_written.set()
+    def synchronized_remove(video_id: str) -> None:
+        delete_write_reached.set()
+        assert release_delete.wait(timeout=2)
+        original_remove(video_id)
 
-    monkeypatch.setattr(store.library, "_write_list", synchronized_write)
+    monkeypatch.setattr(store.library, "remove_video", synchronized_remove)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         deleted_future = pool.submit(store.remove, deleted.video_id)
         assert delete_write_reached.wait(timeout=1)
         renamed_future = pool.submit(store.rename, retained.video_id, "Renamed")
+        assert not renamed_future.done()
+        release_delete.set()
         deleted_future.result(timeout=8)
         renamed_future.result(timeout=8)
 
@@ -406,14 +363,12 @@ def test_video_remove_catalog_failure_preserves_state_media_and_caches(
     for cache_dir in cache_dirs:
         cache_dir.mkdir(parents=True)
         (cache_dir / "cached.bin").write_bytes(b"cache")
-    original_write = store.library._write_list
+    original_write = store.library._write
 
-    def fail_catalog_write(
-        path: Path, entries: list[dict[str, object]]
-    ) -> None:
+    def fail_catalog_write(_operation: object) -> None:
         raise OSError("catalog write failed")
 
-    monkeypatch.setattr(store.library, "_write_list", fail_catalog_write)
+    monkeypatch.setattr(store.library, "_write", fail_catalog_write)
 
     with pytest.raises(OSError, match="catalog write failed"):
         store.remove(record.video_id)
@@ -423,7 +378,7 @@ def test_video_remove_catalog_failure_preserves_state_media_and_caches(
     assert record.path.is_file()
     assert all((cache_dir / "cached.bin").is_file() for cache_dir in cache_dirs)
 
-    monkeypatch.setattr(store.library, "_write_list", original_write)
+    monkeypatch.setattr(store.library, "_write", original_write)
     assert store.remove(record.video_id) == record
     assert store.records() == ()
     assert store.library.videos() == []
@@ -544,20 +499,18 @@ def test_path_registration_does_not_publish_after_catalog_write_failure(
     tmp_path: Path, tiny_video: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
-    original_write_list = store.library._write_list
+    original_write = store.library._write
 
-    def fail_catalog_write(
-        path: Path, entries: list[dict[str, object]]
-    ) -> None:
+    def fail_catalog_write(_operation: object) -> None:
         raise OSError("catalog write failed")
 
-    monkeypatch.setattr(store.library, "_write_list", fail_catalog_write)
+    monkeypatch.setattr(store.library, "_write", fail_catalog_write)
 
     with pytest.raises(OSError, match="catalog write failed"):
         store.register_path(tiny_video)
     records_after_failure = store.records()
 
-    monkeypatch.setattr(store.library, "_write_list", original_write_list)
+    monkeypatch.setattr(store.library, "_write", original_write)
     retried = store.register_path(tiny_video)
 
     assert records_after_failure == ()
@@ -569,14 +522,12 @@ def test_upload_registration_cleans_up_and_retries_after_catalog_write_failure(
     tmp_path: Path, tiny_video: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
-    original_write_list = store.library._write_list
+    original_write = store.library._write
 
-    def fail_catalog_write(
-        path: Path, entries: list[dict[str, object]]
-    ) -> None:
+    def fail_catalog_write(_operation: object) -> None:
         raise OSError("catalog write failed")
 
-    monkeypatch.setattr(store.library, "_write_list", fail_catalog_write)
+    monkeypatch.setattr(store.library, "_write", fail_catalog_write)
 
     with tiny_video.open("rb") as source:
         with pytest.raises(OSError, match="catalog write failed"):
@@ -584,7 +535,7 @@ def test_upload_registration_cleans_up_and_retries_after_catalog_write_failure(
     records_after_failure = store.records()
     files_after_failure = tuple(store.upload_dir.iterdir())
 
-    monkeypatch.setattr(store.library, "_write_list", original_write_list)
+    monkeypatch.setattr(store.library, "_write", original_write)
     with tiny_video.open("rb") as source:
         retried = store.register_upload(source, "retried.mp4")
 

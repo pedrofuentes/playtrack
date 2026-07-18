@@ -3,19 +3,21 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import shutil
-import threading
-import uuid
+import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence, TypeVar
 
 if TYPE_CHECKING:
     from .tracking import TrackFrame
 
 logger = logging.getLogger(__name__)
+
+_SCHEMA_VERSION = 1
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,45 +34,173 @@ class SavedTrack:
 
 
 class LibraryStore:
-    """Small, crash-tolerant JSON catalog for reusable videos, tracks, and exports."""
+    """Transactional SQLite catalog for videos, jobs, tracks, and exports."""
 
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = Path(data_dir)
         self.root = self.data_dir / "library"
-        self.tracks_dir = self.root / "tracks"
-        self.videos_path = self.root / "videos.json"
-        self.exports_path = self.root / "exports.json"
-        self._exports_lock = threading.RLock()
+        self.database_path = self.root / "findme.sqlite3"
+        self._initialize_database()
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.database_path, timeout=5.0)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA busy_timeout = 5000")
+        connection.execute("PRAGMA synchronous = FULL")
+        return connection
+
+    def _initialize_database(self) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(self.database_path, timeout=5.0) as connection:
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA synchronous = FULL")
+            connection.execute("PRAGMA foreign_keys = ON")
+            version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            if version not in (0, _SCHEMA_VERSION):
+                raise RuntimeError(
+                    f"Unsupported library database version {version}; expected {_SCHEMA_VERSION}"
+                )
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS videos (
+                    video_id TEXT PRIMARY KEY,
+                    source_kind TEXT NOT NULL,
+                    source_key TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    name TEXT,
+                    width INTEGER NOT NULL,
+                    height INTEGER NOT NULL,
+                    fps REAL NOT NULL,
+                    nb_frames INTEGER NOT NULL,
+                    duration REAL NOT NULL,
+                    opened_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS videos_source_idx
+                    ON videos(source_kind, source_key);
+
+                CREATE TABLE IF NOT EXISTS tracks (
+                    job_id TEXT PRIMARY KEY,
+                    video_id TEXT NOT NULL,
+                    anchor_frame_idx INTEGER NOT NULL,
+                    start_frame_idx INTEGER NOT NULL,
+                    end_frame_exclusive INTEGER NOT NULL,
+                    box_json TEXT NOT NULL,
+                    track_json TEXT NOT NULL,
+                    frame_count INTEGER NOT NULL,
+                    lost_count INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    name TEXT
+                );
+                CREATE INDEX IF NOT EXISTS tracks_video_idx
+                    ON tracks(video_id, created_at, job_id);
+
+                CREATE TABLE IF NOT EXISTS exports (
+                    export_id TEXT PRIMARY KEY,
+                    video_id TEXT NOT NULL,
+                    track_job_id TEXT NOT NULL,
+                    params_json TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    size INTEGER NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS exports_video_idx
+                    ON exports(video_id, created_at, export_id);
+                CREATE INDEX IF NOT EXISTS exports_track_idx
+                    ON exports(track_job_id, created_at, export_id);
+
+                CREATE TABLE IF NOT EXISTS jobs (
+                    job_id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    progress REAL NOT NULL,
+                    message TEXT NOT NULL,
+                    track_json TEXT NOT NULL DEFAULT '[]',
+                    resources_json TEXT NOT NULL DEFAULT '[]',
+                    version INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    terminal_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS jobs_state_idx
+                    ON jobs(kind, state, created_at);
+
+                CREATE TABLE IF NOT EXISTS pending_deletions (
+                    deletion_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    path TEXT,
+                    created_at TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT
+                );
+                CREATE INDEX IF NOT EXISTS pending_deletions_target_idx
+                    ON pending_deletions(kind, target_id);
+                """
+            )
+            connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+
+    def _write(self, operation: Callable[[sqlite3.Connection], _T]) -> _T:
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            result = operation(connection)
+            connection.commit()
+            return result
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def videos(self) -> list[dict[str, Any]]:
-        return self._read_list(self.videos_path)
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM videos ORDER BY opened_at, video_id"
+            ).fetchall()
+        return [_video_dict(row) for row in rows]
 
     def save_video(self, record: Any, *, source_kind: str) -> None:
-        entries = [entry for entry in self.videos() if entry.get("videoId") != record.video_id]
-        entries.append(
-            {
-                "videoId": record.video_id,
-                "sourceKind": source_kind,
-                "sourceKey": record.source_key,
-                "path": str(record.path),
-                "name": record.name,
-                "metadata": {
-                    "width": record.metadata.width,
-                    "height": record.metadata.height,
-                    "fps": record.metadata.fps,
-                    "nbFrames": record.metadata.nb_frames,
-                    "duration": record.metadata.duration,
-                },
-                "openedAt": _now(),
-            }
-        )
-        self._write_list(self.videos_path, entries)
+        opened_at = _now()
+
+        def save(connection: sqlite3.Connection) -> None:
+            connection.execute(
+                """
+                INSERT INTO videos (
+                    video_id, source_kind, source_key, path, name, width, height,
+                    fps, nb_frames, duration, opened_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(video_id) DO UPDATE SET
+                    source_kind = excluded.source_kind,
+                    source_key = excluded.source_key,
+                    path = excluded.path,
+                    name = excluded.name,
+                    width = excluded.width,
+                    height = excluded.height,
+                    fps = excluded.fps,
+                    nb_frames = excluded.nb_frames,
+                    duration = excluded.duration,
+                    opened_at = excluded.opened_at
+                """,
+                (
+                    record.video_id,
+                    source_kind,
+                    record.source_key,
+                    str(record.path),
+                    record.name,
+                    record.metadata.width,
+                    record.metadata.height,
+                    record.metadata.fps,
+                    record.metadata.nb_frames,
+                    record.metadata.duration,
+                    opened_at,
+                ),
+            )
+
+        self._write(save)
 
     def consolidate_sources(self, upload_root: Path) -> None:
         videos = self.videos()
-        if not videos:
-            return
-
         keyed_entries: list[dict[str, Any]] = []
         groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
         for original in videos:
@@ -93,7 +223,6 @@ class LibraryStore:
 
         replacements: dict[str, str] = {}
         redundant_uploads: list[tuple[Path, Path]] = []
-        redundant_ids: set[str] = set()
         for (source_kind, _source_key), entries in groups.items():
             if len(entries) < 2:
                 continue
@@ -111,29 +240,31 @@ class LibraryStore:
                 if duplicate_id == survivor_id:
                     continue
                 replacements[duplicate_id] = survivor_id
-                redundant_ids.add(duplicate_id)
                 if source_kind == "upload":
                     redundant_uploads.append(
                         (Path(str(duplicate.get("path", ""))), survivor_path)
                     )
 
-        consolidated_videos = [
-            entry
-            for entry in keyed_entries
-            if str(entry.get("videoId", "")) not in redundant_ids
-        ]
-        if replacements:
-            self._rewrite_track_video_ids(replacements)
-            exports = self._read_list_strict(self.exports_path, missing_as_empty=True)
-            for entry in exports:
-                video_id = str(entry.get("videoId", ""))
-                if video_id in replacements:
-                    entry["videoId"] = replacements[video_id]
-            self._write_list(self.exports_path, exports)
+        def consolidate(connection: sqlite3.Connection) -> None:
+            for entry in keyed_entries:
+                connection.execute(
+                    "UPDATE videos SET source_key = ? WHERE video_id = ?",
+                    (str(entry.get("sourceKey", "")), str(entry["videoId"])),
+                )
+            for duplicate_id, survivor_id in replacements.items():
+                connection.execute(
+                    "UPDATE tracks SET video_id = ? WHERE video_id = ?",
+                    (survivor_id, duplicate_id),
+                )
+                connection.execute(
+                    "UPDATE exports SET video_id = ? WHERE video_id = ?",
+                    (survivor_id, duplicate_id),
+                )
+                connection.execute(
+                    "DELETE FROM videos WHERE video_id = ?", (duplicate_id,)
+                )
 
-        if consolidated_videos != videos:
-            self._write_list(self.videos_path, consolidated_videos)
-
+        self._write(consolidate)
         for redundant_path, survivor_path in redundant_uploads:
             if (
                 _is_under(redundant_path, upload_root)
@@ -142,21 +273,24 @@ class LibraryStore:
                 redundant_path.unlink(missing_ok=True)
 
     def remove_video(self, video_id: str) -> None:
-        self._write_list(self.videos_path, [v for v in self.videos() if v.get("videoId") != video_id])
+        self._write(
+            lambda connection: connection.execute(
+                "DELETE FROM videos WHERE video_id = ?", (video_id,)
+            )
+        )
 
     def rename_video(self, video_id: str, raw_name: str) -> str | None:
         name = _clean_name(raw_name, label="Source name")
         if name is None:
             raise ValueError("Source name cannot be blank")
-        entries = self.videos()
-        entry = next(
-            (item for item in entries if item.get("videoId") == video_id), None
-        )
-        if entry is None:
-            return None
-        entry["name"] = name
-        self._write_list(self.videos_path, entries)
-        return name
+
+        def rename(connection: sqlite3.Connection) -> bool:
+            cursor = connection.execute(
+                "UPDATE videos SET name = ? WHERE video_id = ?", (name, video_id)
+            )
+            return cursor.rowcount > 0
+
+        return name if self._write(rename) else None
 
     def save_track(
         self,
@@ -178,69 +312,71 @@ class LibraryStore:
             end_frame_exclusive = max(
                 (frame.frame_idx for frame in track), default=anchor_frame_idx
             ) + 1
-        self._write_object(
-            self.tracks_dir / f"{job_id}.json",
-            {
-                "jobId": job_id,
-                "videoId": video_id,
-                "anchorFrameIdx": anchor_frame_idx,
-                "startFrameIdx": start_frame_idx,
-                "endFrameExclusive": end_frame_exclusive,
-                "box": list(box),
-                "track": [frame.to_dict() for frame in track],
-                "createdAt": _now(),
-                "name": name,
-            },
-        )
+        track_payload = [frame.to_dict() for frame in track]
+        created_at = _now()
+
+        def save(connection: sqlite3.Connection) -> None:
+            connection.execute(
+                """
+                INSERT INTO tracks (
+                    job_id, video_id, anchor_frame_idx, start_frame_idx,
+                    end_frame_exclusive, box_json, track_json, frame_count,
+                    lost_count, created_at, name
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(job_id) DO UPDATE SET
+                    video_id = excluded.video_id,
+                    anchor_frame_idx = excluded.anchor_frame_idx,
+                    start_frame_idx = excluded.start_frame_idx,
+                    end_frame_exclusive = excluded.end_frame_exclusive,
+                    box_json = excluded.box_json,
+                    track_json = excluded.track_json,
+                    frame_count = excluded.frame_count,
+                    lost_count = excluded.lost_count,
+                    created_at = excluded.created_at,
+                    name = excluded.name
+                """,
+                (
+                    job_id,
+                    video_id,
+                    anchor_frame_idx,
+                    start_frame_idx,
+                    end_frame_exclusive,
+                    _json(list(box)),
+                    _json(track_payload),
+                    len(track_payload),
+                    sum(bool(frame.lost) for frame in track),
+                    created_at,
+                    name,
+                ),
+            )
+
+        self._write(save)
 
     def iter_tracks(self) -> list[SavedTrack]:
-        if not self.tracks_dir.is_dir():
-            return []
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM tracks ORDER BY created_at, job_id"
+            ).fetchall()
         saved: list[SavedTrack] = []
-        for path in sorted(self.tracks_dir.glob("*.json")):
+        for row in rows:
             try:
-                raw = self._read_object(path)
-                frames = tuple(_track_frame(item) for item in raw["track"])
-                if frames:
-                    inferred_start = min(frame.frame_idx for frame in frames)
-                    inferred_end = max(frame.frame_idx for frame in frames) + 1
-                else:
-                    inferred_start = 0
-                    inferred_end = 0
-                saved.append(
-                    SavedTrack(
-                        job_id=str(raw["jobId"]),
-                        video_id=str(raw["videoId"]),
-                        anchor_frame_idx=int(raw["anchorFrameIdx"]),
-                        start_frame_idx=int(
-                            raw.get("startFrameIdx", inferred_start)
-                        ),
-                        end_frame_exclusive=int(
-                            raw.get("endFrameExclusive", inferred_end)
-                        ),
-                        box=tuple(int(value) for value in raw["box"]),  # type: ignore[arg-type]
-                        track=frames,
-                        created_at=str(raw["createdAt"]),
-                        name=_clean_name(
-                            raw.get("name"),
-                            label="Player name",
-                            validate_length=False,
-                        ),
-                    )
-                )
+                saved.append(_saved_track(row))
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-                logger.warning("Ignoring corrupt library track %s: %s", path, exc)
+                logger.warning(
+                    "Ignoring corrupt library track %s: %s", row["job_id"], exc
+                )
         return saved
 
     def resolve_player_name(self, video_id: str, requested: str | None) -> str:
         cleaned = _clean_name(requested, label="Player name")
         if cleaned is not None:
             return cleaned
-        used = {
-            track.name.casefold()
-            for track in self.iter_tracks()
-            if track.video_id == video_id and track.name is not None
-        }
+        with self._connect() as connection:
+            names = connection.execute(
+                "SELECT name FROM tracks WHERE video_id = ? AND name IS NOT NULL",
+                (video_id,),
+            ).fetchall()
+        used = {str(row["name"]).casefold() for row in names}
         index = 1
         while f"player {index}" in used:
             index += 1
@@ -250,46 +386,67 @@ class LibraryStore:
         name = _clean_name(raw_name, label="Player name")
         if name is None:
             raise ValueError("Player name cannot be blank")
-        path = self.tracks_dir / f"{job_id}.json"
-        if not path.is_file():
-            return None
-        raw = self._read_object(path)
-        raw["name"] = name
-        self._write_object(path, raw)
-        return next(
-            (track for track in self.iter_tracks() if track.job_id == job_id), None
-        )
+
+        def rename(connection: sqlite3.Connection) -> sqlite3.Row | None:
+            cursor = connection.execute(
+                "UPDATE tracks SET name = ? WHERE job_id = ?", (name, job_id)
+            )
+            if cursor.rowcount == 0:
+                return None
+            return connection.execute(
+                "SELECT * FROM tracks WHERE job_id = ?", (job_id,)
+            ).fetchone()
+
+        row = self._write(rename)
+        return _saved_track(row) if row is not None else None
 
     def backfill_track_names(self) -> None:
-        tracks = self.iter_tracks()
-        by_video: dict[str, list[SavedTrack]] = {}
-        for track in tracks:
-            by_video.setdefault(track.video_id, []).append(track)
-        for video_tracks in by_video.values():
-            ordered = sorted(video_tracks, key=lambda item: (item.created_at, item.job_id))
-            used = {
-                track.name.casefold()
-                for track in ordered
-                if track.name is not None
-            }
-            next_index = 1
-            for track in ordered:
-                if track.name is not None:
+        def backfill(connection: sqlite3.Connection) -> None:
+            rows = connection.execute(
+                "SELECT job_id, video_id, name FROM tracks ORDER BY video_id, created_at, job_id"
+            ).fetchall()
+            used_by_video: dict[str, set[str]] = {}
+            next_by_video: dict[str, int] = {}
+            for row in rows:
+                name = row["name"]
+                if name is not None:
+                    used_by_video.setdefault(row["video_id"], set()).add(
+                        str(name).casefold()
+                    )
+            for row in rows:
+                if row["name"] is not None:
                     continue
-                while f"player {next_index}" in used:
-                    next_index += 1
-                name = f"Player {next_index}"
-                path = self.tracks_dir / f"{track.job_id}.json"
-                raw = self._read_object(path)
-                raw["name"] = name
-                self._write_object(path, raw)
+                video_id = str(row["video_id"])
+                used = used_by_video.setdefault(video_id, set())
+                index = next_by_video.get(video_id, 1)
+                while f"player {index}" in used:
+                    index += 1
+                name = f"Player {index}"
+                connection.execute(
+                    "UPDATE tracks SET name = ? WHERE job_id = ?",
+                    (name, row["job_id"]),
+                )
                 used.add(name.casefold())
-                next_index += 1
+                next_by_video[video_id] = index + 1
+
+        self._write(backfill)
 
     def remove_track(self, job_id: str) -> SavedTrack | None:
-        found = next((track for track in self.iter_tracks() if track.job_id == job_id), None)
-        (self.tracks_dir / f"{job_id}.json").unlink(missing_ok=True)
-        return found
+        def remove(connection: sqlite3.Connection) -> sqlite3.Row | None:
+            row = connection.execute(
+                "SELECT * FROM tracks WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if row is not None:
+                connection.execute("DELETE FROM tracks WHERE job_id = ?", (job_id,))
+            return row
+
+        row = self._write(remove)
+        if row is None:
+            return None
+        try:
+            return _saved_track(row)
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return None
 
     def save_export(
         self,
@@ -299,37 +456,75 @@ class LibraryStore:
         params: dict[str, Any],
         path: Path,
     ) -> None:
-        with self._exports_lock:
-            entries = [
-                entry
-                for entry in self.exports()
-                if entry.get("exportId") != export_id
-            ]
-            entries.append(
-                {
-                    "exportId": export_id,
-                    "videoId": video_id,
-                    "trackJobId": track_job_id,
-                    "params": params,
-                    "path": str(path),
-                    "size": path.stat().st_size if path.is_file() else 0,
-                    "createdAt": _now(),
-                }
+        created_at = _now()
+        size = path.stat().st_size if path.is_file() else 0
+
+        def save(connection: sqlite3.Connection) -> None:
+            connection.execute(
+                """
+                INSERT INTO exports (
+                    export_id, video_id, track_job_id, params_json, path, size, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(export_id) DO UPDATE SET
+                    video_id = excluded.video_id,
+                    track_job_id = excluded.track_job_id,
+                    params_json = excluded.params_json,
+                    path = excluded.path,
+                    size = excluded.size,
+                    created_at = excluded.created_at
+                """,
+                (
+                    export_id,
+                    video_id,
+                    track_job_id,
+                    _json(params),
+                    str(path),
+                    size,
+                    created_at,
+                ),
             )
-            self._write_list(self.exports_path, entries)
+
+        self._write(save)
 
     def exports(self) -> list[dict[str, Any]]:
-        return self._read_list(self.exports_path)
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM exports ORDER BY created_at, export_id"
+            ).fetchall()
+        entries: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                params = json.loads(row["params_json"])
+                if not isinstance(params, dict):
+                    raise ValueError("export params must be an object")
+                entries.append(
+                    {
+                        "exportId": row["export_id"],
+                        "videoId": row["video_id"],
+                        "trackJobId": row["track_job_id"],
+                        "params": params,
+                        "path": row["path"],
+                        "size": row["size"],
+                        "createdAt": row["created_at"],
+                    }
+                )
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                logger.warning(
+                    "Ignoring corrupt library export %s: %s", row["export_id"], exc
+                )
+        return entries
 
     def remove_exports(self, predicate: Any) -> list[dict[str, Any]]:
-        with self._exports_lock:
-            entries = self.exports()
-            removed: list[dict[str, Any]] = []
-            retained: list[dict[str, Any]] = []
-            for entry in entries:
-                (removed if predicate(entry) else retained).append(entry)
-            self._write_list(self.exports_path, retained)
-            return removed
+        removed = [entry for entry in self.exports() if predicate(entry)]
+        identifiers = [str(entry["exportId"]) for entry in removed]
+        if identifiers:
+            self._write(
+                lambda connection: connection.executemany(
+                    "DELETE FROM exports WHERE export_id = ?",
+                    ((identifier,) for identifier in identifiers),
+                )
+            )
+        return removed
 
     def clear_caches(self) -> int:
         freed = 0
@@ -347,63 +542,50 @@ class LibraryStore:
             if (self.data_dir / name).exists()
         )
 
-    def _read_list(self, path: Path) -> list[dict[str, Any]]:
-        try:
-            value = self._read_object(path)
-            if not isinstance(value, list):
-                raise ValueError("expected a JSON array")
-            return [entry for entry in value if isinstance(entry, dict)]
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            if path.exists():
-                logger.warning("Ignoring corrupt library catalog %s: %s", path, exc)
-            return []
 
-    def _read_list_strict(
-        self, path: Path, *, missing_as_empty: bool = False
-    ) -> list[dict[str, Any]]:
-        try:
-            value = self._read_object(path)
-        except FileNotFoundError:
-            if missing_as_empty:
-                return []
-            raise
-        if not isinstance(value, list) or any(
-            not isinstance(entry, dict) for entry in value
-        ):
-            raise ValueError(f"Malformed library catalog: {path}")
-        return value
+def _video_dict(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "videoId": row["video_id"],
+        "sourceKind": row["source_kind"],
+        "sourceKey": row["source_key"],
+        "path": row["path"],
+        "name": row["name"],
+        "metadata": {
+            "width": row["width"],
+            "height": row["height"],
+            "fps": row["fps"],
+            "nbFrames": row["nb_frames"],
+            "duration": row["duration"],
+        },
+        "openedAt": row["opened_at"],
+    }
 
-    @staticmethod
-    def _read_object(path: Path) -> Any:
-        return json.loads(path.read_text(encoding="utf-8"))
 
-    @staticmethod
-    def _write_object(path: Path, value: Any) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-        temporary.write_text(json.dumps(value, separators=(",", ":")), encoding="utf-8")
-        os.replace(temporary, path)
-
-    def _write_list(self, path: Path, entries: list[dict[str, Any]]) -> None:
-        self._write_object(path, entries)
-
-    def _rewrite_track_video_ids(self, replacements: dict[str, str]) -> None:
-        if not self.tracks_dir.is_dir():
-            return
-        for path in sorted(self.tracks_dir.glob("*.json")):
-            value = self._read_object(path)
-            if not isinstance(value, dict) or not isinstance(
-                value.get("videoId"), str
-            ):
-                raise ValueError(f"Malformed library track: {path}")
-            video_id = value["videoId"]
-            if video_id in replacements:
-                value["videoId"] = replacements[video_id]
-                self._write_object(path, value)
+def _saved_track(row: sqlite3.Row) -> SavedTrack:
+    raw_track = json.loads(row["track_json"])
+    raw_box = json.loads(row["box_json"])
+    if not isinstance(raw_track, list) or not isinstance(raw_box, list):
+        raise TypeError("track payload must contain JSON arrays")
+    frames = tuple(_track_frame(item) for item in raw_track)
+    box = tuple(int(value) for value in raw_box)
+    if len(box) != 4:
+        raise ValueError("track box must contain four coordinates")
+    return SavedTrack(
+        job_id=str(row["job_id"]),
+        video_id=str(row["video_id"]),
+        anchor_frame_idx=int(row["anchor_frame_idx"]),
+        start_frame_idx=int(row["start_frame_idx"]),
+        end_frame_exclusive=int(row["end_frame_exclusive"]),
+        box=box,  # type: ignore[arg-type]
+        track=frames,
+        created_at=str(row["created_at"]),
+        name=_clean_name(row["name"], label="Player name", validate_length=False),
+    )
 
 
 def _track_frame(value: Any) -> "TrackFrame":
     from .tracking import TrackFrame
+
     if not isinstance(value, dict):
         raise TypeError("track frame must be a JSON object")
     box = value.get("box")
@@ -425,6 +607,10 @@ def _clean_name(
     if validate_length and len(cleaned) > 80:
         raise ValueError(f"{label} must be 80 characters or fewer")
     return cleaned or None
+
+
+def _json(value: Any) -> str:
+    return json.dumps(value, separators=(",", ":"), allow_nan=False)
 
 
 def _sha256_file(path: Path) -> str:
