@@ -22,7 +22,7 @@
 html { scroll-behavior: smooth; }
 body { margin: 0; min-width: 320px; overflow-x: hidden; background: var(--base); }
 body::before { content: ""; position: fixed; inset: 0; z-index: -2; background: radial-gradient(circle at 77% 8%, rgba(247, 200, 78, .08), transparent 30rem), radial-gradient(circle at 8% 43%, rgba(69, 213, 166, .05), transparent 30rem); pointer-events: none; }
-img { display: block; max-width: 100%; }
+img { display: block; max-width: 100%; height: auto; }
 a { color: inherit; text-underline-offset: .2em; }
 button, a { -webkit-tap-highlight-color: transparent; }
 :focus-visible { outline: 3px solid var(--amber-soft); outline-offset: 4px; border-radius: 3px; }

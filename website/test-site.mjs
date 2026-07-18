@@ -73,6 +73,9 @@ if (errors.length === 0) {
   if (!css.includes(':focus-visible')) errors.push('missing visible focus styles')
   if (!css.includes('prefers-reduced-motion')) errors.push('missing reduced-motion styles')
   if (!css.includes('@media')) errors.push('missing responsive styles')
+  if (!/img\s*\{[^}]*height:\s*auto\b/.test(css)) {
+    errors.push('responsive images must preserve their intrinsic aspect ratio with height: auto')
+  }
   if (!script.includes('IntersectionObserver')) errors.push('missing progressive reveal behavior')
   if (!notFound.includes('PlayTrack') || !notFound.includes('href="./"')) {
     errors.push('404 page must link back to the PlayTrack site root')
