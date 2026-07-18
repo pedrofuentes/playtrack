@@ -78,6 +78,7 @@ class _Job:
     terminal_at: str | None = None
     cancel_requested: bool = False
     committing: bool = False
+    worker_active: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,7 +220,7 @@ class JobRegistry:
             return {
                 resource
                 for job in self._jobs.values()
-                if job.state in ("queued", "running")
+                if job.state in ("queued", "running") or job.worker_active
                 for resource in job.resources
             }
 
@@ -350,6 +351,7 @@ class JobRegistry:
                 job = self._jobs.get(task.job_id)
                 if job is None or job.state != "queued":
                     continue
+                job.worker_active = True
                 self._transition_locked(
                     job,
                     state="running",
@@ -357,6 +359,8 @@ class JobRegistry:
                     message=("Starting tracker" if kind == "track" else "Starting export"),
                 )
                 if job.state != "running":
+                    job.worker_active = False
+                    job.resources = frozenset()
                     self._enforce_retention_locked()
                     continue
             self._run_task(task)
@@ -379,6 +383,14 @@ class JobRegistry:
                 self._finish_canceled(task.job_id)
             else:
                 self._finish_failed(task.job_id, str(exc) or type(exc).__name__)
+        finally:
+            with self._condition:
+                job = self._jobs.get(task.job_id)
+                if job is not None:
+                    job.worker_active = False
+                    if job.state in _TERMINAL_STATES:
+                        job.resources = frozenset()
+                self._condition.notify_all()
 
     def _run_track_task(self, task: _Task) -> None:
         worker = task.worker
@@ -540,7 +552,8 @@ class JobRegistry:
             job.version += 1
             job.updated_at = now
             job.terminal_at = now
-            job.resources = frozenset()
+            if not job.worker_active:
+                job.resources = frozenset()
             job.committing = False
             try:
                 self._persist_locked(job)

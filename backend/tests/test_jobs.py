@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -330,3 +331,44 @@ def test_state_persistence_failure_fails_job_and_releases_resources() -> None:
     assert terminal.state == "failed"
     assert terminal.message == "Could not persist job state: database is read-only"
     assert registry.active_resources() == set()
+
+
+def test_cancel_persistence_failure_keeps_lease_until_worker_exits() -> None:
+    class FlakyLibrary:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def load_jobs(self) -> list[object]:
+            return []
+
+        def save_job(self, **_kwargs: object) -> None:
+            self.calls += 1
+            if self.calls == 3:
+                raise OSError("database is read-only")
+
+        def prune_terminal_jobs(self, _retention: int) -> list[str]:
+            return []
+
+    registry = JobRegistry(library=FlakyLibrary())
+    started = threading.Event()
+    release = threading.Event()
+
+    def worker(report: object) -> list[TrackFrame]:
+        started.set()
+        assert release.wait(timeout=2)
+        report(0.5, "Continuing", frame(0))
+        return [frame(0)]
+
+    job_id = registry.submit(worker, resources={"video:v1"})
+    assert started.wait(timeout=1)
+
+    failed_cancel = registry.cancel(job_id)
+
+    assert failed_cancel.state == "failed"
+    assert registry.is_resource_active("video:v1")
+    release.set()
+    deadline = time.monotonic() + 2
+    while registry.is_resource_active("video:v1") and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert registry.get(job_id).state == "canceled"
+    assert not registry.is_resource_active("video:v1")
