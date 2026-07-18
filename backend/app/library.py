@@ -34,6 +34,20 @@ class SavedTrack:
 
 
 @dataclass(frozen=True, slots=True)
+class SavedTrackSummary:
+    job_id: str
+    video_id: str
+    anchor_frame_idx: int
+    start_frame_idx: int
+    end_frame_exclusive: int
+    box: tuple[int, int, int, int]
+    frame_count: int
+    lost_count: int
+    created_at: str
+    name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class PendingDeletion:
     deletion_id: int
     kind: str
@@ -170,6 +184,13 @@ class LibraryStore:
                 "SELECT * FROM videos ORDER BY opened_at, video_id"
             ).fetchall()
         return [_video_dict(row) for row in rows]
+
+    def get_video(self, video_id: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM videos WHERE video_id = ?", (video_id,)
+            ).fetchone()
+        return _video_dict(row) if row is not None else None
 
     def save_video(self, record: Any, *, source_kind: str) -> None:
         opened_at = _now()
@@ -442,6 +463,51 @@ class LibraryStore:
                 )
         return saved
 
+    def track_summaries(self) -> list[SavedTrackSummary]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT job_id, video_id, anchor_frame_idx, start_frame_idx,
+                       end_frame_exclusive, box_json, frame_count, lost_count,
+                       created_at, name
+                FROM tracks
+                ORDER BY created_at, job_id
+                """
+            ).fetchall()
+        summaries: list[SavedTrackSummary] = []
+        for row in rows:
+            try:
+                summaries.append(_saved_track_summary(row))
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                logger.warning(
+                    "Ignoring corrupt library track summary %s: %s",
+                    row["job_id"],
+                    exc,
+                )
+        return summaries
+
+    def get_track_summary(self, job_id: str) -> SavedTrackSummary | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT job_id, video_id, anchor_frame_idx, start_frame_idx,
+                       end_frame_exclusive, box_json, frame_count, lost_count,
+                       created_at, name
+                FROM tracks
+                WHERE job_id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            return _saved_track_summary(row)
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "Ignoring corrupt library track summary %s: %s", job_id, exc
+            )
+            return None
+
     def get_track(self, job_id: str) -> SavedTrack | None:
         with self._connect() as connection:
             row = connection.execute(
@@ -676,44 +742,35 @@ class LibraryStore:
             "createdAt": row["created_at"],
         }
 
-    def remove_exports(
+    def remove_export(
         self,
-        predicate: Any,
+        export_id: str,
         *,
         deletion_path: Callable[[dict[str, Any]], Path | None] | None = None,
-    ) -> list[dict[str, Any]]:
-        removed = [entry for entry in self.exports() if predicate(entry)]
-        identifiers = [str(entry["exportId"]) for entry in removed]
-        if identifiers:
-            def remove(connection: sqlite3.Connection) -> None:
-                connection.executemany(
-                    "DELETE FROM exports WHERE export_id = ?",
-                    ((identifier,) for identifier in identifiers),
-                )
-                connection.executemany(
-                    "DELETE FROM jobs WHERE job_id = ?",
-                    ((identifier,) for identifier in identifiers),
-                )
-                if deletion_path is not None:
-                    for entry in removed:
-                        path = deletion_path(entry)
-                        if path is not None:
-                            connection.execute(
-                                """
-                                INSERT INTO pending_deletions (
-                                    kind, target_id, path, created_at
-                                ) VALUES (?, ?, ?, ?)
-                                """,
-                                (
-                                    "export",
-                                    str(entry["exportId"]),
-                                    str(path),
-                                    _now(),
-                                ),
-                            )
+    ) -> dict[str, Any] | None:
+        def remove(connection: sqlite3.Connection) -> dict[str, Any] | None:
+            row = connection.execute(
+                "SELECT * FROM exports WHERE export_id = ?", (export_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            entry = _export_dict(row, tolerate_corrupt=True)
+            connection.execute(
+                "DELETE FROM exports WHERE export_id = ?", (export_id,)
+            )
+            connection.execute("DELETE FROM jobs WHERE job_id = ?", (export_id,))
+            if deletion_path is not None:
+                path = deletion_path(entry)
+                if path is not None:
+                    self._insert_pending_deletion(
+                        connection,
+                        kind="export",
+                        target_id=export_id,
+                        path=path,
+                    )
+            return entry
 
-            self._write(remove)
-        return removed
+        return self._write(remove)
 
     def pending_deletions(
         self, *, kind: str | None = None, target_id: str | None = None
@@ -976,6 +1033,31 @@ def _saved_track(row: sqlite3.Row) -> SavedTrack:
         end_frame_exclusive=int(row["end_frame_exclusive"]),
         box=box,  # type: ignore[arg-type]
         track=frames,
+        created_at=str(row["created_at"]),
+        name=_clean_name(row["name"], label="Player name", validate_length=False),
+    )
+
+
+def _saved_track_summary(row: sqlite3.Row) -> SavedTrackSummary:
+    raw_box = json.loads(row["box_json"])
+    if not isinstance(raw_box, list):
+        raise TypeError("track box must be a JSON array")
+    box = tuple(int(value) for value in raw_box)
+    if len(box) != 4:
+        raise ValueError("track box must contain four coordinates")
+    frame_count = int(row["frame_count"])
+    lost_count = int(row["lost_count"])
+    if frame_count < 0 or lost_count < 0 or lost_count > frame_count:
+        raise ValueError("track counts are invalid")
+    return SavedTrackSummary(
+        job_id=str(row["job_id"]),
+        video_id=str(row["video_id"]),
+        anchor_frame_idx=int(row["anchor_frame_idx"]),
+        start_frame_idx=int(row["start_frame_idx"]),
+        end_frame_exclusive=int(row["end_frame_exclusive"]),
+        box=box,  # type: ignore[arg-type]
+        frame_count=frame_count,
+        lost_count=lost_count,
         created_at=str(row["created_at"]),
         name=_clean_name(row["name"], label="Player name", validate_length=False),
     )

@@ -721,6 +721,36 @@ def test_library_api_uses_full_source_bounds_for_empty_track(
     assert track["endFrameExclusive"] == record.metadata.nb_frames
 
 
+def test_library_listing_does_not_hydrate_full_track_frames(
+    tmp_path: Path, tiny_video: Path, monkeypatch: object
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    record = store.register_path(tiny_video)
+    store.library.save_track(
+        record.video_id,
+        "large-track",
+        0,
+        (10, 10, 30, 30),
+        [
+            TrackFrame(index, (10, 10, 30, 30), (20.0, 20.0), index == 1)
+            for index in range(3)
+        ],
+    )
+    monkeypatch.setattr(
+        store.library,
+        "iter_tracks",
+        lambda: (_ for _ in ()).throw(AssertionError("decoded full track")),
+    )
+
+    with TestClient(create_app(store, job_registry=JobRegistry())) as client:
+        response = client.get("/api/library")
+
+    assert response.status_code == 200
+    track = response.json()["videos"][0]["tracks"][0]
+    assert track["frameCount"] == 3
+    assert track["lostCount"] == 1
+
+
 def test_library_allocates_persists_and_renames_player_names(tmp_path: Path) -> None:
     library = LibraryStore(tmp_path / "data")
     library.save_track(

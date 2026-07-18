@@ -384,6 +384,21 @@ def test_export_download_disposition_uses_current_names_and_unique_suffixes(
         jobs.restore_completed(export_id, [])
     store.rename(record.video_id, "  Championship Final!!!  ")
     app = create_app(store, job_registry=jobs, exports_dir=exports_dir)
+    monkeypatch.setattr(
+        store.library,
+        "videos",
+        lambda: (_ for _ in ()).throw(AssertionError("scanned video catalog")),
+    )
+    monkeypatch.setattr(
+        store.library,
+        "iter_tracks",
+        lambda: (_ for _ in ()).throw(AssertionError("decoded every track")),
+    )
+    monkeypatch.setattr(
+        store.library,
+        "get_track",
+        lambda _job_id: (_ for _ in ()).throw(AssertionError("decoded full track")),
+    )
 
     with TestClient(app) as client:
         first = client.get(f"/api/exports/{export_ids[0]}.mp4")

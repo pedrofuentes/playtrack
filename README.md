@@ -102,7 +102,9 @@ is hidden, and `POST /api/select/text` returns 501 on non-CUDA hosts.
 1. Put a source video at `examples/example.mp4` before launch (no example clip
    ships with the repo — `examples/*.mp4` is gitignored). The UI opens that path
    automatically when present, and you can also upload a video or open any
-   server path from the Open video panel.
+   server path from the Open video panel. Sources must use a constant frame rate;
+   variable-frame-rate clips are rejected at registration so frame-indexed tracking
+   and export cannot silently drift.
 2. Scrub to a clear frame. Click the player for a SAM 2 mask. On CUDA, you can
    instead describe the player—for example, “the player in the white jersey”—
    and click one of the pink candidate boxes to confirm it.
@@ -206,8 +208,6 @@ per-track JSON files are left untouched but are not imported.
 
 ## Known limitations
 
-- The UI currently opens `examples/example.mp4`; it does not yet expose the
-  backend's local-path/upload endpoints as a file picker.
 - Text selection requires NVIDIA CUDA. macOS and CPU hosts support click
   selection, tracking, crop planning, and export only.
 - Visual-prompt occlusion rescue awaits compatible public weights.

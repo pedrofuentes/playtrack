@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 import hashlib
 import json
 import logging
+import math
 import shutil
 import subprocess
 import threading
@@ -585,7 +587,95 @@ class VideoStore:
 
         if width <= 0 or height <= 0 or fps <= 0 or duration <= 0 or nb_frames <= 0:
             raise InvalidVideoError("Video metadata contains non-positive values")
+        self._validate_constant_frame_rate(path)
         return VideoMetadata(width, height, fps, nb_frames, duration)
+
+    def _validate_constant_frame_rate(self, path: Path) -> None:
+        intervals = _StreamingMedian()
+        minimum = math.inf
+        maximum = -math.inf
+        previous: float | None = None
+        timestamp_count = 0
+        timestamps = self._frame_timestamps(path)
+        try:
+            for timestamp in timestamps:
+                timestamp_count += 1
+                if previous is not None:
+                    interval = timestamp - previous
+                    if not math.isfinite(interval) or interval <= 0:
+                        raise InvalidVideoError(
+                            "Video frame timestamps are missing or non-monotonic"
+                        )
+                    intervals.add(interval)
+                    minimum = min(minimum, interval)
+                    maximum = max(maximum, interval)
+                previous = timestamp
+        finally:
+            close = getattr(timestamps, "close", None)
+            if close is not None:
+                close()
+        if timestamp_count < 2:
+            raise InvalidVideoError("Video has too few timestamped frames")
+        median = intervals.value()
+        tolerance = max(0.0001, median * 0.005)
+        if minimum < median - tolerance or maximum > median + tolerance:
+            raise InvalidVideoError(
+                "Variable frame rate video is not supported; convert it to constant frame rate"
+            )
+
+    def _frame_timestamps(self, path: Path) -> Iterator[float]:
+        command = [
+            self.ffprobe_binary,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "frame=best_effort_timestamp_time",
+            "-of",
+            "csv=p=0",
+            str(path),
+        ]
+        process: subprocess.Popen[str] | None = None
+        try:
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                bufsize=1,
+            )
+            assert process.stdout is not None
+            for line in process.stdout:
+                raw = line.strip().split(",", 1)[0]
+                if not raw or raw == "N/A":
+                    raise InvalidVideoError(
+                        "Video contains a frame without a timestamp"
+                    )
+                try:
+                    timestamp = float(raw)
+                except ValueError as exc:
+                    raise InvalidVideoError(
+                        "ffprobe returned an invalid frame timestamp"
+                    ) from exc
+                if not math.isfinite(timestamp):
+                    raise InvalidVideoError(
+                        "ffprobe returned an invalid frame timestamp"
+                    )
+                yield timestamp
+            if process.wait() != 0:
+                raise InvalidVideoError("Could not probe video frame timestamps")
+        except FileNotFoundError as exc:
+            raise VideoToolError(
+                f"Required video tool not found: {self.ffprobe_binary}"
+            ) from exc
+        finally:
+            if process is not None:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+                if process.stdout is not None:
+                    process.stdout.close()
 
     def _extract_frame_file(
         self, record: VideoRecord, frame_idx: int, destination: Path
@@ -842,6 +932,92 @@ class VideoStore:
         if not isinstance(payload, dict):
             raise InvalidVideoError("ffprobe returned an invalid response")
         return payload
+
+
+class _StreamingMedian:
+    """P² median estimator with constant memory after five observations."""
+
+    def __init__(self) -> None:
+        self._initial: list[float] = []
+        self._heights: list[float] | None = None
+        self._positions = [1, 2, 3, 4, 5]
+        self._desired = [1.0, 2.0, 3.0, 4.0, 5.0]
+        self._increments = [0.0, 0.25, 0.5, 0.75, 1.0]
+
+    def add(self, value: float) -> None:
+        if self._heights is None:
+            self._initial.append(value)
+            if len(self._initial) == 5:
+                self._initial.sort()
+                self._heights = self._initial.copy()
+            return
+
+        heights = self._heights
+        if value < heights[0]:
+            heights[0] = value
+            bucket = 0
+        elif value < heights[1]:
+            bucket = 0
+        elif value < heights[2]:
+            bucket = 1
+        elif value < heights[3]:
+            bucket = 2
+        elif value <= heights[4]:
+            bucket = 3
+        else:
+            heights[4] = value
+            bucket = 3
+
+        for index in range(bucket + 1, 5):
+            self._positions[index] += 1
+        for index, increment in enumerate(self._increments):
+            self._desired[index] += increment
+        for index in range(1, 4):
+            difference = self._desired[index] - self._positions[index]
+            can_move_up = difference >= 1 and (
+                self._positions[index + 1] - self._positions[index] > 1
+            )
+            can_move_down = difference <= -1 and (
+                self._positions[index - 1] - self._positions[index] < -1
+            )
+            if not (can_move_up or can_move_down):
+                continue
+            direction = 1 if difference > 0 else -1
+            candidate = self._parabolic(index, direction)
+            neighbor = heights[index + direction]
+            if heights[index - 1] < candidate < heights[index + 1]:
+                heights[index] = candidate
+            else:
+                distance = self._positions[index + direction] - self._positions[index]
+                heights[index] += direction * (neighbor - heights[index]) / distance
+            self._positions[index] += direction
+
+    def _parabolic(self, index: int, direction: int) -> float:
+        assert self._heights is not None
+        heights = self._heights
+        positions = self._positions
+        left_distance = positions[index] - positions[index - 1]
+        right_distance = positions[index + 1] - positions[index]
+        span = positions[index + 1] - positions[index - 1]
+        return heights[index] + direction / span * (
+            (left_distance + direction)
+            * (heights[index + 1] - heights[index])
+            / right_distance
+            + (right_distance - direction)
+            * (heights[index] - heights[index - 1])
+            / left_distance
+        )
+
+    def value(self) -> float:
+        if self._heights is not None:
+            return self._heights[2]
+        if not self._initial:
+            raise ValueError("median requires at least one observation")
+        ordered = sorted(self._initial)
+        middle = len(ordered) // 2
+        if len(ordered) % 2:
+            return ordered[middle]
+        return (ordered[middle - 1] + ordered[middle]) / 2
 
 
 def _path_source_key(path: Path) -> str:

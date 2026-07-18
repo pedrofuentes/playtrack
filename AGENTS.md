@@ -25,8 +25,7 @@ frontend/  React + Vite + TypeScript SPA
   src/components/
     OpenVideoPanel.tsx        upload (multipart) or open-by-server-path
     VideoStage.tsx            <video> + overlay canvases; wheel zoom / drag pan
-    TrackOverlay.tsx          tracked box synced to currentTime
-    CropOverlay.tsx           planned crop-window rectangle preview
+    PlaybackOverlay.tsx       tracked box + crop window synced to currentTime
     ExportPanel.tsx           dimensions, camera-smoothness slider, export job
     LibraryPanel.tsx          persisted videos/tracks/exports; delete; re-export
 

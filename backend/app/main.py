@@ -936,23 +936,9 @@ def create_app(
         if exported is None:
             raise HTTPException(404, "Exported video not found")
         video_id = exported.get("videoId")
-        source = next(
-            (
-                item
-                for item in store.library.videos()
-                if item.get("videoId") == video_id
-            ),
-            {},
-        )
+        source = store.library.get_video(str(video_id)) or {}
         track_job_id = exported.get("trackJobId")
-        track = next(
-            (
-                saved
-                for saved in store.library.iter_tracks()
-                if saved.job_id == track_job_id
-            ),
-            None,
-        )
+        track = store.library.get_track_summary(str(track_job_id))
         params = exported.get("params")
         if not isinstance(params, dict):
             params = {}
@@ -976,7 +962,7 @@ def create_app(
 
     @app.get("/api/library")
     def get_library() -> dict[str, object]:
-        tracks = store.library.iter_tracks()
+        tracks = store.library.track_summaries()
         exports = store.library.exports()
         catalog: list[dict[str, object]] = []
         for item in store.library.videos():
@@ -1005,16 +991,10 @@ def create_app(
             ):
                 continue
             catalog.append({**item, "videoId": video_id, "metadata": normalized_metadata})
+        catalog_by_id = {str(item["videoId"]): item for item in catalog}
         by_video_tracks: dict[str, list[dict[str, object]]] = {}
         for track in tracks:
-            source = next(
-                (
-                    item
-                    for item in catalog
-                    if str(item.get("videoId", "")) == track.video_id
-                ),
-                {},
-            )
+            source = catalog_by_id.get(track.video_id, {})
             metadata = source.get("metadata", {})
             source_frame_count = (
                 int(metadata.get("nbFrames", 0))
@@ -1023,7 +1003,7 @@ def create_app(
             )
             start_frame_idx = track.start_frame_idx
             end_frame_exclusive = track.end_frame_exclusive
-            if not track.track and end_frame_exclusive <= start_frame_idx:
+            if track.frame_count == 0 and end_frame_exclusive <= start_frame_idx:
                 start_frame_idx = 0
                 end_frame_exclusive = source_frame_count
             by_video_tracks.setdefault(track.video_id, []).append(
@@ -1033,8 +1013,8 @@ def create_app(
                     "startFrameIdx": start_frame_idx,
                     "endFrameExclusive": end_frame_exclusive,
                     "box": list(track.box),
-                    "frameCount": len(track.track),
-                    "lostCount": sum(frame.lost for frame in track.track),
+                    "frameCount": track.frame_count,
+                    "lostCount": track.lost_count,
                     "createdAt": track.created_at,
                     "name": track.name,
                 }
@@ -1044,9 +1024,11 @@ def create_app(
             by_video_exports.setdefault(str(item.get("videoId", "")), []).append(
                 {**item, "sourceExists": Path(str(item.get("path", ""))).is_file()}
             )
-        return {
-            "cacheBytes": store.library.cache_bytes(),
-            "videos": [
+        listed_videos: list[dict[str, object]] = []
+        for item in catalog:
+            source_path = Path(str(item.get("path", "")))
+            source_exists = source_path.is_file()
+            listed_videos.append(
                 {
                     "videoId": str(item["videoId"]),
                     "name": _clean_name(
@@ -1058,14 +1040,16 @@ def create_app(
                     "sourceKind": item.get("sourceKind", "path"),
                     "path": str(item.get("path", "")),
                     "metadata": {"videoId": str(item["videoId"]), **dict(item.get("metadata", {}))},
-                    "size": Path(str(item.get("path", ""))).stat().st_size if Path(str(item.get("path", ""))).is_file() else 0,
+                    "size": source_path.stat().st_size if source_exists else 0,
                     "openedAt": item.get("openedAt"),
-                    "sourceExists": Path(str(item.get("path", ""))).is_file(),
+                    "sourceExists": source_exists,
                     "tracks": by_video_tracks.get(str(item["videoId"]), []),
                     "exports": by_video_exports.get(str(item["videoId"]), []),
                 }
-                for item in catalog
-            ]
+            )
+        return {
+            "cacheBytes": store.library.cache_bytes(),
+            "videos": listed_videos,
         }
 
     def export_deletion_path(entry: dict[str, object]) -> Path | None:
@@ -1155,14 +1139,13 @@ def create_app(
     def delete_library_export(export_id: str) -> Response:
         if jobs.is_resource_active(f"job:{export_id}"):
             raise HTTPException(409, "Export is still being saved")
-        removed = store.library.remove_exports(
-            lambda item: item.get("exportId") == export_id,
+        removed = store.library.remove_export(
+            export_id,
             deletion_path=export_deletion_path,
         )
-        if not removed:
+        if removed is None:
             raise HTTPException(404, "Export not found")
-        for exported in removed:
-            delete_export_file(exported)
+        delete_export_file(removed)
         jobs.remove(export_id, persist=False)
         return Response(status_code=204)
 

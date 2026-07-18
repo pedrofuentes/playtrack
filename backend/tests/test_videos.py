@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -11,7 +12,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from app.videos import VideoStore
+from app.videos import InvalidVideoError, VideoStore
 
 
 def test_registers_local_video_and_returns_metadata(
@@ -36,6 +37,61 @@ def test_registers_local_video_and_returns_metadata(
     assert payload["fps"] == 10.0
     assert payload["nbFrames"] == 4
     assert payload["duration"] == 0.4
+
+
+def test_constant_frame_rate_validation_accepts_timestamp_rounding_jitter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    monkeypatch.setattr(
+        store,
+        "_frame_timestamps",
+        lambda _path: iter((0.0, 0.033367, 0.066733, 0.1001)),
+    )
+
+    store._validate_constant_frame_rate(tmp_path / "rounded.mp4")
+
+
+def test_constant_frame_rate_validation_rejects_variable_intervals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+    monkeypatch.setattr(
+        store,
+        "_frame_timestamps",
+        lambda _path: iter((0.0, 0.04, 0.08, 0.16, 0.20)),
+    )
+
+    with pytest.raises(InvalidVideoError, match="[Vv]ariable frame rate"):
+        store._validate_constant_frame_rate(tmp_path / "variable.mp4")
+
+
+def test_registration_rejects_a_real_variable_frame_rate_clip(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    variable = tmp_path / "variable.mp4"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x64:rate=10:duration=0.5",
+            "-vf",
+            "setpts=if(lt(N\\,2)\\,N/(10*TB)\\,(N-1)/(5*TB))",
+            "-fps_mode",
+            "vfr",
+            "-y",
+            str(variable),
+        ],
+        check=True,
+    )
+    store = VideoStore(repo_root=tmp_path, data_dir=tmp_path / "data")
+
+    with pytest.raises(InvalidVideoError, match="[Vv]ariable frame rate"):
+        store.register_path(variable)
 
 
 def test_path_registration_runs_outside_the_async_event_loop(
