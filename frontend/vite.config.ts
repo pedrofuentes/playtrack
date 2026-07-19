@@ -10,8 +10,7 @@ export default defineConfig({
       registerType: 'autoUpdate',
       injectRegister: false,
       includeAssets: [
-        'brand/playtrack-mark.svg',
-        'brand/playtrack-lockup.svg',
+        'brand/playtrack-player-bright.png',
         'favicon-16.png',
         'favicon-32.png',
         'favicon-48.png',

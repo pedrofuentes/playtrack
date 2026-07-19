@@ -90,7 +90,11 @@ export function WorkspaceShell({
     <main className="workspace-shell">
       <header className="workspace-topbar">
         <div className="playtrack-mark">
-          <img src="/brand/playtrack-mark.svg" alt="" aria-hidden="true" />
+          <img
+            src="/brand/playtrack-player-bright.png"
+            alt=""
+            aria-hidden="true"
+          />
           <span className="sr-only" aria-label="PlayTrack home">PlayTrack</span>
         </div>
         <div className="active-video">
