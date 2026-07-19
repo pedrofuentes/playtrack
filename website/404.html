@@ -10,7 +10,7 @@
     <style>
       main { min-height: 100svh; display: grid; place-items: center; padding: 2rem; text-align: center; }
       .not-found { max-width: 630px; }
-      .not-found img { width: 220px; margin: 0 auto 3rem; }
+      .not-found .complete-logo { width: min(280px, 72vw); margin: 0 auto 2rem; }
       .not-found h1 { margin-bottom: 1.2rem; }
       .not-found p { color: var(--muted); line-height: 1.7; }
       .not-found .button { margin-top: 1rem; }
@@ -19,7 +19,7 @@
   <body>
     <main>
       <div class="not-found">
-        <img src="assets/playtrack-lockup.svg" alt="PlayTrack">
+        <img class="complete-logo" src="assets/playtrack-bright.png" alt="PlayTrack — Follow Every Move" width="1024" height="1024">
         <p class="eyebrow">404 · Out of frame</p>
         <h1>That page left the track.</h1>
         <p>The requested path is not part of the PlayTrack site.</p>

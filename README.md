@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="frontend/public/brand/playtrack-lockup.svg" width="360" alt="PlayTrack">
+  <img src="website/assets/playtrack-bright.png" width="360" alt="PlayTrack — Follow Every Move">
 </p>
 
 <p align="center">

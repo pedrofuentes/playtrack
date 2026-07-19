@@ -6,6 +6,13 @@ const root = dirname(fileURLToPath(import.meta.url))
 const requiredFiles = ['index.html', '404.html', 'styles.css', 'site.js']
 const errors = []
 
+function pngDimensions(path) {
+  const image = readFileSync(path)
+  const signature = image.subarray(0, 8).toString('hex')
+  if (signature !== '89504e470d0a1a0a') throw new Error(`not a PNG: ${path}`)
+  return { width: image.readUInt32BE(16), height: image.readUInt32BE(20) }
+}
+
 for (const file of requiredFiles) {
   if (!existsSync(join(root, file))) errors.push(`missing website/${file}`)
 }
@@ -15,6 +22,49 @@ if (errors.length === 0) {
   const notFound = readFileSync(join(root, '404.html'), 'utf8')
   const css = readFileSync(join(root, 'styles.css'), 'utf8')
   const script = readFileSync(join(root, 'site.js'), 'utf8')
+  const readme = readFileSync(join(root, '..', 'README.md'), 'utf8')
+  const brandFiles = {
+    'assets/playtrack-player-bright.png': { width: 512, height: 512, maxBytes: 1_000_000 },
+    'assets/playtrack-bright.png': { width: 1024, height: 1024, maxBytes: 2_000_000 },
+  }
+  for (const [relative, expected] of Object.entries(brandFiles)) {
+    const path = join(root, relative)
+    if (!existsSync(path)) {
+      errors.push(`missing website/${relative}`)
+      continue
+    }
+    const dimensions = pngDimensions(path)
+    if (dimensions.width !== expected.width || dimensions.height !== expected.height) {
+      errors.push(`website/${relative} must be ${expected.width}x${expected.height}`)
+    }
+    if (readFileSync(path).byteLength > expected.maxBytes) {
+      errors.push(`website/${relative} exceeds ${expected.maxBytes} bytes`)
+    }
+  }
+
+  for (const requiredHeaderMarkup of [
+    'class="brand-mark" src="assets/playtrack-player-bright.png" alt=""',
+    '<span class="brand-name">PlayTrack</span>',
+  ]) {
+    if (!html.includes(requiredHeaderMarkup)) {
+      errors.push(`missing canonical header brand markup: ${requiredHeaderMarkup}`)
+    }
+  }
+  const completeLogoMarkup = 'src="assets/playtrack-bright.png" alt="PlayTrack — Follow Every Move"'
+  if (!html.includes(completeLogoMarkup)) {
+    errors.push('website footer must use the complete canonical logo')
+  }
+  if (!notFound.includes(completeLogoMarkup)) {
+    errors.push('website 404 page must use the complete canonical logo')
+  }
+  if (!readme.includes('website/assets/playtrack-bright.png')) {
+    errors.push('README must use the complete canonical logo')
+  }
+  for (const retired of ['playtrack-lockup.svg', 'playtrack-mark.svg']) {
+    if (html.includes(retired) || notFound.includes(retired) || readme.includes(retired)) {
+      errors.push(`retired brand asset remains: ${retired}`)
+    }
+  }
   const sections = [
     'problem', 'workflow', 'screenshots', 'benefits', 'hardware',
     'install', 'usage', 'limitations', 'community',
@@ -99,7 +149,10 @@ if (errors.length === 0) {
     } else if (!existsSync(join(root, src))) {
       errors.push(`missing local image: ${src}`)
     }
-    if (!alt?.trim()) errors.push(`image missing useful alt text: ${src ?? tag}`)
+    const isDecorativeHeaderMark = tag.includes('class="brand-mark"') && alt === ''
+    if (!alt?.trim() && !isDecorativeHeaderMark) {
+      errors.push(`image missing useful alt text: ${src ?? tag}`)
+    }
   }
 
   for (const match of html.matchAll(/\b(?:src|href)=["']([^"']+)["']/g)) {
