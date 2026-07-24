@@ -40,6 +40,20 @@ case "$bind_host" in
   *) network_mode=1 ;;
 esac
 
+wildcard_host=0
+case "$bind_host" in
+  "0.0.0.0"|"::") wildcard_host=1 ;;
+esac
+
+format_url_host() {
+  case "$1" in
+    *:*) printf '[%s]\n' "$1" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+url_host="$(format_url_host "$bind_host")"
+
 is_private_ipv4() {
   local address="$1"
   local second_octet
@@ -100,17 +114,19 @@ backend_pid=$!
 ) &
 frontend_pid=$!
 
-echo "PlayTrack backend: http://${bind_host}:8000"
-if (( network_mode )); then
+echo "PlayTrack backend: http://${url_host}:8000"
+if (( wildcard_host )); then
   echo "PlayTrack frontend (local): http://127.0.0.1:5173"
   if lan_ip="$(detect_lan_ip)"; then
     echo "PlayTrack frontend (network): http://${lan_ip}:5173"
   else
     echo "PlayTrack frontend (network): http://<this-machine-ip>:5173"
   fi
-  echo "WARNING: Network mode has no authentication. Use only on a trusted local network."
 else
-  echo "PlayTrack frontend: http://${bind_host}:5173"
+  echo "PlayTrack frontend: http://${url_host}:5173"
+fi
+if (( network_mode )); then
+  echo "WARNING: Network mode has no authentication. Use only on a trusted local network."
 fi
 echo "Press Ctrl+C to stop both servers."
 

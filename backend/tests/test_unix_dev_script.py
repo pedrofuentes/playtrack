@@ -19,6 +19,7 @@ def stubbed_launcher(
     *arguments: str,
     host: str | None = None,
     lan_address: str | None = None,
+    exiting_child: str = "backend",
 ) -> tuple[subprocess.CompletedProcess[str], str]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -28,19 +29,33 @@ def stubbed_launcher(
         bin_dir / "uv",
         """#!/bin/sh
 printf 'uv %s\n' "$*" >> "$PLAYTRACK_TEST_LOG"
+trap 'printf "uv terminated\n" >> "$PLAYTRACK_TEST_LOG"; exit 0' TERM INT
+: > "$PLAYTRACK_TEST_BACKEND_READY"
 attempts=0
-while [ ! -f "$PLAYTRACK_TEST_READY" ] && [ "$attempts" -lt 100 ]; do
+while [ ! -f "$PLAYTRACK_TEST_FRONTEND_READY" ] && [ "$attempts" -lt 100 ]; do
   /bin/sleep 0.01
   attempts=$((attempts + 1))
 done
+if [ "$PLAYTRACK_TEST_EXITING_CHILD" = "backend" ]; then
+  exit 0
+fi
+while :; do /bin/sleep 0.1; done
 """,
     )
     executable(
         bin_dir / "npm",
         """#!/bin/sh
 printf 'npm %s\n' "$*" >> "$PLAYTRACK_TEST_LOG"
-: > "$PLAYTRACK_TEST_READY"
 trap 'printf "npm terminated\n" >> "$PLAYTRACK_TEST_LOG"; exit 0' TERM INT
+: > "$PLAYTRACK_TEST_FRONTEND_READY"
+attempts=0
+while [ ! -f "$PLAYTRACK_TEST_BACKEND_READY" ] && [ "$attempts" -lt 100 ]; do
+  /bin/sleep 0.01
+  attempts=$((attempts + 1))
+done
+if [ "$PLAYTRACK_TEST_EXITING_CHILD" = "frontend" ]; then
+  exit 0
+fi
 while :; do /bin/sleep 0.1; done
 """,
     )
@@ -62,7 +77,9 @@ exit 1
     environment = os.environ.copy()
     environment["PATH"] = f"{bin_dir}{os.pathsep}{environment['PATH']}"
     environment["PLAYTRACK_TEST_LOG"] = str(command_log)
-    environment["PLAYTRACK_TEST_READY"] = str(tmp_path / "npm.ready")
+    environment["PLAYTRACK_TEST_BACKEND_READY"] = str(tmp_path / "backend.ready")
+    environment["PLAYTRACK_TEST_FRONTEND_READY"] = str(tmp_path / "frontend.ready")
+    environment["PLAYTRACK_TEST_EXITING_CHILD"] = exiting_child
     if host is None:
         environment.pop("PLAYTRACK_HOST", None)
     else:
@@ -119,6 +136,13 @@ def test_default_mode_binds_both_children_to_localhost(tmp_path: Path) -> None:
     assert "npm terminated" in commands
 
 
+def test_frontend_exit_terminates_backend(tmp_path: Path) -> None:
+    result, commands = stubbed_launcher(tmp_path, exiting_child="frontend")
+
+    assert result.returncode == 1
+    assert "uv terminated" in commands
+
+
 def test_network_mode_binds_both_children_and_reports_lan_url(tmp_path: Path) -> None:
     result, commands = stubbed_launcher(
         tmp_path,
@@ -143,6 +167,29 @@ def test_explicit_host_controls_both_children_and_warns_when_public(tmp_path: Pa
     assert "uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000" in commands
     assert "npm run dev -- --host 0.0.0.0 --port 5173" in commands
     assert "no authentication" in result.stdout
+
+
+def test_specific_non_loopback_host_is_printed_without_lan_discovery(
+    tmp_path: Path,
+) -> None:
+    result, _ = stubbed_launcher(
+        tmp_path,
+        host="192.168.50.40",
+        lan_address="192.168.50.23",
+    )
+
+    assert result.returncode == 1
+    assert "PlayTrack backend: http://192.168.50.40:8000" in result.stdout
+    assert "PlayTrack frontend: http://192.168.50.40:5173" in result.stdout
+    assert "192.168.50.23" not in result.stdout
+
+
+def test_ipv6_host_is_bracketed_in_printed_urls(tmp_path: Path) -> None:
+    result, _ = stubbed_launcher(tmp_path, host="2001:db8::42")
+
+    assert result.returncode == 1
+    assert "PlayTrack backend: http://[2001:db8::42]:8000" in result.stdout
+    assert "PlayTrack frontend: http://[2001:db8::42]:5173" in result.stdout
 
 
 def test_network_mode_starts_when_lan_address_detection_fails(tmp_path: Path) -> None:
