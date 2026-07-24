@@ -73,7 +73,17 @@ backend/.venv/bin/python scripts/fetch_models.py
 ./scripts/dev.sh
 ```
 
-Open <http://127.0.0.1:5173>.
+Open <http://127.0.0.1:5173> on the PlayTrack computer.
+
+To use the development UI from another device on the same trusted local network:
+
+```bash
+./scripts/dev.sh --network
+```
+
+This binds FastAPI to `0.0.0.0:8000` and Vite to `0.0.0.0:5173`. Open the
+network URL printed by the launcher. Network mode has no authentication; never expose
+these ports to the internet or an untrusted network.
 
 ## Use PlayTrack
 
@@ -111,7 +121,7 @@ Defaults live in `backend/app/config.py`.
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `PLAYTRACK_HOST` | `127.0.0.1` | Launcher bind host; `0.0.0.0` exposes PlayTrack on the LAN without authentication. |
+| `PLAYTRACK_HOST` | `127.0.0.1` | Backward-compatible launcher bind override; `scripts/dev.sh --network` is the preferred development interface for explicit `0.0.0.0` LAN binding without authentication. |
 | `PLAYTRACK_ALLOWED_HOSTS` | empty | Comma-separated extra Host header names. |
 | `PLAYTRACK_DATA_DIR` | `<repo>/data` | Uploads, frame caches, and SQLite library. |
 | `PLAYTRACK_CHECKPOINTS_DIR` | `<repo>/checkpoints` | SAM 2 checkpoint directory. |

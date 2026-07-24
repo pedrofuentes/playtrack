@@ -79,10 +79,16 @@ cd ..
 node website/test-site.mjs
 
 # Run the app
-scripts/dev.sh          # Mac dev: uvicorn --reload :8000 + Vite :5173
-scripts/run.ps1         # Windows: single process serving frontend/dist on :8000
+scripts/dev.sh            # Mac dev, localhost: uvicorn --reload :8000 + Vite :5173
+scripts/dev.sh --network  # Explicit trusted-LAN mode: binds both to 0.0.0.0 (no authentication)
+scripts/run.ps1           # Windows: single process serving frontend/dist on :8000
 # manual equivalent: cd backend && uv run uvicorn app.main:app --port 8000
 ```
+
+`scripts/dev.sh` is localhost-only by default. `scripts/dev.sh --network` exposes both
+development ports and prints the LAN frontend URL; use it only on a trusted local network
+because PlayTrack has no authentication. `PLAYTRACK_HOST` remains a backward-compatible
+bind override, but `--network` is the preferred development interface.
 
 The backend serves `frontend/dist` when it exists — rebuild the frontend for UI changes
 to reach the running app; there is no hot reload in production mode.
@@ -96,7 +102,7 @@ the local FastAPI server is required and offer retry when it is unreachable.
 
 | Var | Default | Meaning |
 |---|---|---|
-| `PLAYTRACK_HOST` | `127.0.0.1` | bind host in dev.sh/run.ps1; `0.0.0.0` exposes on LAN (origin/host checks, but no authentication) |
+| `PLAYTRACK_HOST` | `127.0.0.1` | backward-compatible launcher bind override; `scripts/dev.sh --network` is preferred for explicit `0.0.0.0` LAN binding (origin/host checks, but no authentication) |
 | `PLAYTRACK_ALLOWED_HOSTS` | empty | comma-separated extra Host header names accepted by the API boundary |
 | `PLAYTRACK_MAX_UPLOAD_BYTES` | `21474836480` (20 GiB) | maximum multipart video upload size, enforced while streaming |
 | `PLAYTRACK_DATA_DIR` | `<repo>/data` | uploads, frame caches, library persistence |

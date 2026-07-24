@@ -65,3 +65,21 @@ def test_unix_dev_script_supports_safe_network_mode() -> None:
     assert "trusted local network" in script
     assert "PlayTrack backend" in script
     assert "PlayTrack frontend" in script
+
+
+def test_docs_explain_unix_network_mode_and_warning() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+
+    for document in (readme, agents):
+        assert "scripts/dev.sh --network" in document
+        assert "127.0.0.1" in document
+        assert "0.0.0.0" in document
+        assert "5173" in document
+        assert "8000" in document
+        assert "no authentication" in document
+        assert "trusted local network" in document
+
+    assert "preferred development interface" in readme
+    assert "PLAYTRACK_HOST" in readme
+    assert "PLAYTRACK_HOST" in agents
