@@ -50,9 +50,18 @@ def test_dev_script_starts_reload_backend_and_vite_and_cleans_up() -> None:
     assert "PlayTrack" in script
 
 
-def test_unix_dev_script_uses_playtrack_host_and_branding() -> None:
+def test_unix_dev_script_supports_safe_network_mode() -> None:
     script = script_text("dev.sh")
 
     assert "PLAYTRACK_HOST" in script
     assert "FINDME_HOST" not in script
+    assert '"--network"' in script
+    assert '"--help"' in script
+    assert "0.0.0.0" in script
+    assert "127.0.0.1" in script
+    assert 'uv run uvicorn app.main:app --reload --host "$bind_host" --port 8000' in script
+    assert 'npm run dev -- --host "$bind_host" --port 5173' in script
+    assert "no authentication" in script
+    assert "trusted local network" in script
     assert "PlayTrack backend" in script
+    assert "PlayTrack frontend" in script
