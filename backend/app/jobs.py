@@ -5,7 +5,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Callable, Literal, Sequence
 
 from .tracking import TrackFrame
@@ -139,6 +139,7 @@ class JobRegistry:
         }
         self._condition = threading.Condition(threading.RLock())
         self._closed = False
+        self._last_terminal_at: datetime | None = None
         self._rehydrate()
 
     def submit(
@@ -530,8 +531,8 @@ class JobRegistry:
         track: Sequence[TrackFrame],
         message: str,
     ) -> None:
-        now = _now()
         with self._condition:
+            now = _now()
             existing = self._jobs.get(job_id)
             created_at = existing.created_at if existing is not None else now
             job = _Job(
@@ -544,7 +545,7 @@ class JobRegistry:
                 version=(existing.version + 1 if existing is not None else 1),
                 created_at=created_at,
                 updated_at=now,
-                terminal_at=now,
+                terminal_at=self._next_terminal_at_locked(now),
             )
             self._jobs[job_id] = job
             self._persist_locked(job)
@@ -566,7 +567,7 @@ class JobRegistry:
         job.version += 1
         job.updated_at = _now()
         if state in _TERMINAL_STATES:
-            job.terminal_at = job.updated_at
+            job.terminal_at = self._next_terminal_at_locked(job.updated_at)
             job.resources = frozenset()
         self._persist_or_fail_locked(job)
         self._condition.notify_all()
@@ -602,7 +603,7 @@ class JobRegistry:
             )
             job.version += 1
             job.updated_at = now
-            job.terminal_at = now
+            job.terminal_at = self._next_terminal_at_locked(now)
             if not job.worker_active:
                 job.resources = frozenset()
             job.committing = False
@@ -633,7 +634,7 @@ class JobRegistry:
     def _enforce_retention_locked(self) -> None:
         terminal = sorted(
             (job for job in self._jobs.values() if job.state in _TERMINAL_STATES),
-            key=lambda job: (job.terminal_at or "", job.updated_at, job.job_id),
+            key=lambda job: job.terminal_at or "",
             reverse=True,
         )
         for job in terminal[self._terminal_retention :]:
@@ -644,8 +645,12 @@ class JobRegistry:
     def _rehydrate(self) -> None:
         if self._library is None:
             return
+        saved_jobs = self._library.load_jobs()
+        for saved in saved_jobs:
+            if saved["state"] in _TERMINAL_STATES:
+                self._observe_terminal_at_locked(saved["terminalAt"])
         now = _now()
-        for saved in self._library.load_jobs():
+        for saved in saved_jobs:
             kind = saved["kind"]
             state = saved["state"]
             if kind not in ("track", "export") or state not in {
@@ -659,7 +664,7 @@ class JobRegistry:
             if state in ("queued", "running"):
                 state = "failed"
                 message = "Interrupted by backend restart"
-                terminal_at = now
+                terminal_at = self._next_terminal_at_locked(now)
                 resources = frozenset()
                 version = int(saved["version"]) + 1
             else:
@@ -684,6 +689,29 @@ class JobRegistry:
             if saved["state"] in ("queued", "running"):
                 self._persist_locked(job)
         self._enforce_retention_locked()
+
+    def _observe_terminal_at_locked(self, value: object) -> None:
+        if not isinstance(value, str):
+            return
+        try:
+            observed = datetime.fromisoformat(value)
+        except ValueError:
+            return
+        if observed.tzinfo is None:
+            observed = observed.replace(tzinfo=UTC)
+        observed = observed.astimezone(UTC)
+        if self._last_terminal_at is None or observed > self._last_terminal_at:
+            self._last_terminal_at = observed
+
+    def _next_terminal_at_locked(self, wall_time: str) -> str:
+        candidate = datetime.fromisoformat(wall_time)
+        if candidate.tzinfo is None:
+            candidate = candidate.replace(tzinfo=UTC)
+        candidate = candidate.astimezone(UTC)
+        if self._last_terminal_at is not None and candidate <= self._last_terminal_at:
+            candidate = self._last_terminal_at + timedelta(microseconds=1)
+        self._last_terminal_at = candidate
+        return candidate.isoformat(timespec="microseconds")
 
     def _get_job(self, job_id: str) -> _Job:
         try:

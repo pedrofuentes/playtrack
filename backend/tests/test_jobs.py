@@ -3,9 +3,11 @@ from __future__ import annotations
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+import app.jobs as jobs_module
 from app.jobs import JobNotFoundError, JobQueueFullError, JobRegistry
 from app.library import LibraryStore
 from app.tracking import TrackFrame
@@ -285,6 +287,41 @@ def test_terminal_retention_is_bounded() -> None:
         registry.get(identifiers[0])
     assert registry.get(identifiers[1]).state == "completed"
     assert registry.get(identifiers[2]).state == "completed"
+
+
+def test_terminal_retention_uses_transition_order_when_timestamps_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    job_ids = iter(("f" * 32, "8" * 32, "0" * 32))
+    monkeypatch.setattr(
+        jobs_module.uuid,
+        "uuid4",
+        lambda: SimpleNamespace(hex=next(job_ids)),
+    )
+    monkeypatch.setattr(
+        jobs_module, "_now", lambda: "2026-08-28T12:00:00+00:00"
+    )
+    library = LibraryStore(tmp_path / "data")
+    registry = JobRegistry(library=library, terminal_retention=3)
+    identifiers = []
+    for index in range(3):
+        job_id = registry.submit(lambda _report, index=index: [frame(index)])
+        assert registry.wait_until_terminal(job_id, timeout=2).state == "completed"
+        identifiers.append(job_id)
+
+    restarted = JobRegistry(library=library, terminal_retention=2)
+    retained_in_memory = set()
+    for job_id in identifiers:
+        try:
+            restarted.get(job_id)
+        except JobNotFoundError:
+            pass
+        else:
+            retained_in_memory.add(job_id)
+    retained_in_sqlite = {saved["jobId"] for saved in library.load_jobs()}
+    expected = set(identifiers[1:])
+
+    assert (retained_in_memory, retained_in_sqlite) == (expected, expected)
 
 
 def test_terminal_jobs_rehydrate_from_sqlite(tmp_path: Path) -> None:
