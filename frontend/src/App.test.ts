@@ -48,7 +48,7 @@ vi.mock('./components/VideoStage', async () => {
   }
 })
 
-import App, { libraryVideoName } from './App'
+import App, { JobPanel, libraryVideoName } from './App'
 import { workspaceStage } from './workflow'
 
 function workspace(overrides: Record<string, unknown> = {}) {
@@ -92,6 +92,7 @@ function workspace(overrides: Record<string, unknown> = {}) {
     startTrack: vi.fn(),
     retryTrack: vi.fn(),
     beginFraming: vi.fn(),
+    activeJobs: [],
     setCropWindows: vi.fn(),
     setExportJob: vi.fn(),
     beginExportSubmission: vi.fn().mockReturnValue(1),
@@ -472,4 +473,55 @@ it('disables Library mutations and cache clearing during active jobs', async () 
   await act(async () => container.querySelector<HTMLButtonElement>('button[title="Settings"]')?.click())
   expect(namedButton('Clear frame cache')?.disabled).toBe(true)
   await act(async () => root.unmount())
+})
+
+describe('JobPanel', () => {
+  const foreign = {
+    jobId: 'track-elsewhere',
+    kind: 'track' as const,
+    state: 'running' as const,
+    progress: 0.9,
+    message: 'Tracking forward',
+  }
+
+  it('lists a tracking job this page did not start', () => {
+    const markup = renderToStaticMarkup(createElement(JobPanel, {
+      trackJob: null,
+      exportJob: null,
+      frameCount: 0,
+      activeJobs: [foreign],
+    }))
+
+    expect(markup).toContain('Tracking forward')
+    expect(markup).toContain('90%')
+    expect(markup).not.toContain('No tracking or export job yet')
+  })
+
+  it('reports an empty surface only when the server has no work either', () => {
+    const markup = renderToStaticMarkup(createElement(JobPanel, {
+      trackJob: null,
+      exportJob: null,
+      frameCount: 0,
+      activeJobs: [],
+    }))
+
+    expect(markup).toContain('No tracking or export job yet')
+  })
+
+  it('does not list this page\'s own job a second time', () => {
+    const markup = renderToStaticMarkup(createElement(JobPanel, {
+      trackJob: {
+        jobId: foreign.jobId,
+        state: 'running' as const,
+        progress: 0.9,
+        message: 'Tracking forward',
+        track: [],
+      },
+      exportJob: null,
+      frameCount: 100,
+      activeJobs: [foreign],
+    }))
+
+    expect(markup.match(/Tracking forward/g)).toHaveLength(1)
+  })
 })

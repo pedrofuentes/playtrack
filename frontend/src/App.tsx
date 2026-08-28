@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 
 import {
   exportDownloadUrl,
+  type JobSummary,
   type LibraryVideo,
   type TrackJobUpdate,
   videoFileUrl,
@@ -206,7 +207,7 @@ export default function App() {
           />
         </div>
       )}
-      jobs={<JobPanel trackJob={workspace.trackJob} exportJob={workspace.exportJob} frameCount={workspace.video ? frameRangeCount(workspace.range) : 0} />}
+      jobs={<JobPanel trackJob={workspace.trackJob} exportJob={workspace.exportJob} frameCount={workspace.video ? frameRangeCount(workspace.range) : 0} activeJobs={workspace.activeJobs} />}
       settings={(
         <SettingsPanel
           cacheBytes={workspace.library.cacheBytes}
@@ -251,22 +252,45 @@ function EmptyWorkspace({ loading, loadingLabel, error, backendUnavailable, onUp
   )
 }
 
-function JobPanel({ trackJob, exportJob, frameCount }: {
+export function JobPanel({ trackJob, exportJob, frameCount, activeJobs }: {
   trackJob: TrackJobUpdate | null
   exportJob: TrackJobUpdate | null
   frameCount: number
+  activeJobs: JobSummary[]
 }) {
   const job = exportJob ?? trackJob
-  if (!job) return <p className="empty-copy">No tracking or export job yet.</p>
+  // Jobs this page started are already rendered live from the job socket above.
+  const elsewhere = activeJobs.filter(
+    (entry) => entry.jobId !== trackJob?.jobId && entry.jobId !== exportJob?.jobId,
+  )
+  if (!job && elsewhere.length === 0) {
+    return <p className="empty-copy">No tracking or export job yet.</p>
+  }
   const title = exportJob ? 'Exporting video' : 'Tracking player'
   return (
-    <section className="job-panel">
-      <div className="job-heading"><h3>{title}</h3><span className={`status-pill state-${job.state}`}>{job.state}</span></div>
-      <strong className="job-percentage">{Math.round(job.progress * 100)}%</strong>
-      <progress max={1} value={job.progress} />
-      <p>{job.message}</p>
-      {!exportJob && frameCount > 0 && <span>{Math.round(job.progress * frameCount)} / {frameCount} frames</span>}
-    </section>
+    <>
+      {job && (
+        <section className="job-panel">
+          <div className="job-heading"><h3>{title}</h3><span className={`status-pill state-${job.state}`}>{job.state}</span></div>
+          <strong className="job-percentage">{Math.round(job.progress * 100)}%</strong>
+          <progress max={1} value={job.progress} />
+          <p>{job.message}</p>
+          {!exportJob && frameCount > 0 && <span>{Math.round(job.progress * frameCount)} / {frameCount} frames</span>}
+        </section>
+      )}
+      {elsewhere.map((entry) => (
+        <section className="job-panel" key={entry.jobId}>
+          <div className="job-heading">
+            <h3>{entry.kind === 'export' ? 'Exporting video' : 'Tracking player'}</h3>
+            <span className={`status-pill state-${entry.state}`}>{entry.state}</span>
+          </div>
+          <strong className="job-percentage">{Math.round(entry.progress * 100)}%</strong>
+          <progress max={1} value={entry.progress} />
+          <p>{entry.message}</p>
+          <span className="job-origin">Started outside this page</span>
+        </section>
+      ))}
+    </>
   )
 }
 

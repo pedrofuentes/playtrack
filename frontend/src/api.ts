@@ -36,6 +36,14 @@ export interface TrackJobUpdate {
   track: TrackFrame[]
 }
 
+export interface JobSummary {
+  jobId: string
+  kind: 'track' | 'export'
+  state: TrackJobState
+  progress: number
+  message: string
+}
+
 export interface JobWatcher {
   close(): void
 }
@@ -216,6 +224,14 @@ export async function getJob(jobId: string): Promise<TrackJobUpdate> {
     throw new Error(await responseError(response, 'Could not fetch job'))
   }
   return (await response.json()) as TrackJobUpdate
+}
+
+export async function listJobs(): Promise<JobSummary[]> {
+  const response = await fetch('/api/jobs')
+  if (!response.ok) {
+    throw new Error(await responseError(response, 'Could not fetch jobs'))
+  }
+  return ((await response.json()) as { jobs: JobSummary[] }).jobs
 }
 
 export async function cancelJob(jobId: string): Promise<TrackJobUpdate> {

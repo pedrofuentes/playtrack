@@ -128,6 +128,7 @@ def test_openapi_exposes_the_click_only_public_http_contract(tmp_path: Path) -> 
         "/api/select/click",
         "/api/track",
         "/api/track/{job_id}",
+        "/api/jobs",
         "/api/jobs/{job_id}",
         "/api/jobs/{job_id}/cancel",
         "/api/export/plan",

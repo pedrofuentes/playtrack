@@ -620,6 +620,10 @@ def create_app(
                 raise HTTPException(404, str(exc)) from exc
             return saved[1]
 
+    @app.get("/api/jobs")
+    def list_jobs() -> dict[str, object]:
+        return {"jobs": [job.summary_dict() for job in jobs.list_active()]}
+
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str) -> dict[str, object]:
         try:

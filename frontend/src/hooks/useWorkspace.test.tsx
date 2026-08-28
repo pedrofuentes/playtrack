@@ -13,6 +13,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchCropPlan: vi.fn(),
   getLibrary: vi.fn(),
   getTrack: vi.fn(),
+  listJobs: vi.fn(),
   registerVideo: vi.fn(),
   selectByClick: vi.fn(),
   startExport: vi.fn(),
@@ -106,6 +107,7 @@ beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   controller = null
   apiMocks.getLibrary.mockResolvedValue({ videos: [], cacheBytes: 0 })
+  apiMocks.listJobs.mockResolvedValue([])
   apiMocks.registerVideo.mockResolvedValue(video)
   apiMocks.uploadVideo.mockResolvedValue(video)
   apiMocks.selectByClick.mockResolvedValue({ box: [1, 2, 3, 4], maskPng: '', score: 0.9 })
@@ -129,6 +131,50 @@ afterEach(() => {
 })
 
 describe('useWorkspace', () => {
+  it('surfaces active jobs the server is running that this page did not start', async () => {
+    const foreign = {
+      jobId: 'track-elsewhere',
+      kind: 'track' as const,
+      state: 'running' as const,
+      progress: 0.9,
+      message: 'Tracking forward',
+    }
+    apiMocks.listJobs.mockResolvedValue([foreign])
+
+    const root = await mountController()
+    await act(async () => { await Promise.resolve() })
+
+    expect(controller?.activeJobs).toEqual([foreign])
+    // A job belonging to another video must not hijack this page's editor.
+    expect(controller?.trackJob).toBeNull()
+    expect(controller?.stage).toBe('select')
+    await act(async () => root.unmount())
+  })
+
+  it('keeps active job progress fresh while the server is still working', async () => {
+    vi.useFakeTimers()
+    const running = {
+      jobId: 'track-elsewhere',
+      kind: 'track' as const,
+      state: 'running' as const,
+      progress: 0.9,
+      message: 'Tracking forward',
+    }
+    apiMocks.listJobs.mockResolvedValue([running])
+
+    const root = await mountController()
+    await act(async () => { await Promise.resolve() })
+    expect(controller?.activeJobs[0]?.progress).toBe(0.9)
+
+    apiMocks.listJobs.mockResolvedValue([{ ...running, progress: 0.95 }])
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000)
+    })
+
+    expect(controller?.activeJobs[0]?.progress).toBe(0.95)
+    await act(async () => root.unmount())
+  })
+
   it('reports a distinct backend-unavailable state for network startup failures', async () => {
     apiMocks.registerVideo.mockRejectedValueOnce(new TypeError('Failed to fetch'))
 

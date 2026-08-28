@@ -405,3 +405,55 @@ def test_track_endpoints_validate_video_box_and_job(
     assert missing_video.status_code == 404
     assert invalid_box.status_code == 422
     assert missing_job.status_code == 404
+
+
+def test_active_jobs_are_listed_for_clients_that_did_not_start_them(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    client, video_id, tracker = make_tracking_client(tmp_path, tiny_video)
+    jobs = client.app.state.job_registry
+    with client:
+        started = client.post(
+            "/api/track",
+            json={"videoId": video_id, "frameIdx": 1, "box": [100, 50, 140, 100]},
+        )
+        job_id = started.json()["jobId"]
+        assert tracker.published.wait(timeout=2)
+
+        listed = client.get("/api/jobs")
+        tracker.release.set()
+        jobs.wait_until_terminal(job_id, timeout=2)
+
+    assert listed.status_code == 200
+    assert listed.json() == {
+        "jobs": [
+            {
+                "jobId": job_id,
+                "kind": "track",
+                "state": "running",
+                "progress": 0.5,
+                "message": "Tracking forward",
+            }
+        ]
+    }
+
+
+def test_finished_jobs_are_not_listed_as_active(
+    tmp_path: Path, tiny_video: Path
+) -> None:
+    client, video_id, tracker = make_tracking_client(tmp_path, tiny_video)
+    jobs = client.app.state.job_registry
+    with client:
+        started = client.post(
+            "/api/track",
+            json={"videoId": video_id, "frameIdx": 1, "box": [100, 50, 140, 100]},
+        )
+        job_id = started.json()["jobId"]
+        assert tracker.published.wait(timeout=2)
+        tracker.release.set()
+        assert jobs.wait_until_terminal(job_id, timeout=2).state == "completed"
+
+        listed = client.get("/api/jobs")
+
+    assert listed.status_code == 200
+    assert listed.json() == {"jobs": []}

@@ -47,6 +47,7 @@ class _JobCanceled(Exception):
 @dataclass(frozen=True, slots=True)
 class JobSnapshot:
     job_id: str
+    kind: JobKind
     state: JobState
     progress: float
     message: str
@@ -60,6 +61,16 @@ class JobSnapshot:
             "progress": self.progress,
             "message": self.message,
             "track": [frame.to_dict() for frame in self.track],
+        }
+
+    def summary_dict(self) -> dict[str, object]:
+        """Track-free payload for listing jobs; tracks arrive over the socket."""
+        return {
+            "jobId": self.job_id,
+            "kind": self.kind,
+            "state": self.state,
+            "progress": self.progress,
+            "message": self.message,
         }
 
 
@@ -230,6 +241,17 @@ class JobRegistry:
     def get(self, job_id: str) -> JobSnapshot:
         with self._condition:
             return self._snapshot(self._get_job(job_id))
+
+    def list_active(self) -> tuple[JobSnapshot, ...]:
+        """Queued and running jobs, oldest first, for clients that lost the id."""
+        with self._condition:
+            return tuple(
+                self._snapshot(job)
+                for job in sorted(
+                    self._jobs.values(), key=lambda job: (job.created_at, job.job_id)
+                )
+                if job.state not in _TERMINAL_STATES
+            )
 
     def wait_for_update(
         self, job_id: str, after_version: int, timeout: float = 30.0
@@ -644,6 +666,7 @@ class JobRegistry:
     def _snapshot(job: _Job) -> JobSnapshot:
         return JobSnapshot(
             job_id=job.job_id,
+            kind=job.kind,
             state=job.state,
             progress=job.progress,
             message=job.message,

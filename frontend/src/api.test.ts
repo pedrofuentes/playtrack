@@ -5,6 +5,7 @@ import {
   exportDownloadUrl,
   getLibrary,
   fetchCropPlan,
+  listJobs,
   registerVideo,
   renameLibrarySource,
   selectByClick,
@@ -410,5 +411,42 @@ describe('library API', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'Championship Final' }),
     })
+  })
+})
+
+describe('listJobs', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('returns the active jobs the server is still working on', async () => {
+    const jobs = [
+      {
+        jobId: 'track-9',
+        kind: 'track',
+        state: 'running',
+        progress: 0.9,
+        message: 'Tracking forward',
+      },
+    ]
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ jobs }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(listJobs()).resolves.toEqual(jobs)
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/jobs')
+  })
+
+  it('reports a readable error when the job list cannot be fetched', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      json: vi.fn().mockResolvedValue({ detail: 'server restarting' }),
+    }))
+
+    await expect(listJobs()).rejects.toThrow('server restarting')
   })
 })

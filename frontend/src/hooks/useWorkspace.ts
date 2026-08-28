@@ -7,10 +7,12 @@ import {
   type CropWindow,
   getLibrary,
   getTrack,
+  type JobSummary,
   type JobWatcher,
   type LibraryResponse,
   type LibraryTrack,
   type LibraryVideo,
+  listJobs,
   registerVideo,
   selectByClick,
   startTracking,
@@ -28,6 +30,7 @@ import {
 import { isJobActive, type WorkspaceStage, workspaceStage } from '../workflow'
 
 const EXAMPLE_PATH = 'examples/example.mp4'
+const ACTIVE_JOB_POLL_MS = 2000
 
 export interface WorkspaceController {
   video: VideoMetadata | null
@@ -40,6 +43,7 @@ export interface WorkspaceController {
   playerName: string
   library: LibraryResponse
   trackJob: TrackJobUpdate | null
+  activeJobs: JobSummary[]
   trackMessage: string | null
   trackError: string | null
   trackStarting: boolean
@@ -93,6 +97,7 @@ export function useWorkspace(): WorkspaceController {
   const [playerName, setPlayerNameState] = useState('')
   const [library, setLibrary] = useState<LibraryResponse>({ videos: [], cacheBytes: 0 })
   const [trackJob, setTrackJob] = useState<TrackJobUpdate | null>(null)
+  const [activeJobs, setActiveJobs] = useState<JobSummary[]>([])
   const [trackMessage, setTrackMessage] = useState<string | null>(null)
   const [trackError, setTrackError] = useState<string | null>(null)
   const [trackStarting, setTrackStarting] = useState(false)
@@ -299,10 +304,29 @@ export function useWorkspace(): WorkspaceController {
     }
   }, [clearDownstreamState])
 
+  const refreshActiveJobs = useCallback(async () => {
+    try {
+      setActiveJobs(await listJobs())
+    } catch {
+      // A transient list failure must not disturb the editor; keep the last view.
+    }
+  }, [])
+
   useEffect(() => {
     void openPath(EXAMPLE_PATH)
     refreshLibrary()
-  }, [openPath, refreshLibrary])
+    void refreshActiveJobs()
+  }, [openPath, refreshActiveJobs, refreshLibrary])
+
+  // Poll only while the server reports work in flight, so an idle page is silent.
+  useEffect(() => {
+    if (activeJobs.length === 0) return
+    const timer = globalThis.setInterval(
+      () => { void refreshActiveJobs() },
+      ACTIVE_JOB_POLL_MS,
+    )
+    return () => globalThis.clearInterval(timer)
+  }, [activeJobs.length, refreshActiveJobs])
 
   useEffect(() => () => {
     openGeneration.current += 1
@@ -484,6 +508,7 @@ export function useWorkspace(): WorkspaceController {
     playerName,
     library,
     trackJob,
+    activeJobs,
     trackMessage,
     trackError,
     trackStarting,
@@ -521,7 +546,7 @@ export function useWorkspace(): WorkspaceController {
     resetSelection,
     clearCaches,
   }), [
-    beginExportSubmission, clearCaches, cropWindows, currentFrame,
+    activeJobs, beginExportSubmission, clearCaches, cropWindows, currentFrame,
     exportJob, exportStarting, finishExportSubmission,
     framing, library, loading, loadingLabel, openError, openLibraryPlayer,
     openLibraryVideo, openPath, openUpload, range, refreshLibrary, resetRange, resetSelection,
