@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.main import create_app
+from app.main import SPAStaticFiles, create_app
 from app.videos import VideoStore
 
 
@@ -51,3 +51,10 @@ def test_api_routes_take_precedence_and_missing_assets_do_not_fall_back(
     assert health.json() == {"status": "ok"}
     assert missing_api.status_code == 404
     assert missing_asset.status_code == 404
+
+
+def test_spa_route_check_rejects_windows_normalized_api_paths() -> None:
+    # Starlette's StaticFiles.get_path() applies os.path.normpath, so on
+    # Windows the path arrives with backslash separators.
+    scope = {"method": "GET", "path": "/api/not-a-route"}
+    assert not SPAStaticFiles._is_spa_route("api\\not-a-route", scope)

@@ -108,7 +108,11 @@ class SPAStaticFiles(StaticFiles):
     def _is_spa_route(path: str, scope: dict[str, Any]) -> bool:
         if scope.get("method") not in ("GET", "HEAD"):
             return False
-        normalized = path.lstrip("/")
+        # Starlette's StaticFiles.get_path() runs os.path.normpath on the
+        # route-relative URL path, so on Windows `path` arrives with
+        # backslash separators; restore URL separators before judging
+        # segments.
+        normalized = path.replace("\\", "/").lstrip("/")
         first_segment = normalized.partition("/")[0]
         if first_segment in {"api", "assets", "ws"}:
             return False
