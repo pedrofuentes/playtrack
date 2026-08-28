@@ -2,12 +2,66 @@ from __future__ import annotations
 
 import os
 import gc
+import logging
 import threading
 from contextlib import ExitStack
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# SAM2 keeps activations, the memory bank, and autocast copies alongside the
+# stacked video tensor; require this much slack beyond the tensor itself.
+_VIDEO_OFFLOAD_HEADROOM_BYTES = 3 * 1024**3
+
+
+def video_fits_in_vram(frame_count: int, *, image_size: int, free_bytes: int) -> bool:
+    """Whether SAM2's stacked float32 [N, 3, S, S] video tensor fits free VRAM
+    with enough headroom left for the model and runtime allocations."""
+    tensor_bytes = frame_count * 3 * image_size * image_size * 4
+    return tensor_bytes + _VIDEO_OFFLOAD_HEADROOM_BYTES <= free_bytes
+
+
+def resolve_video_offload(
+    device: str,
+    *,
+    requested_video: bool,
+    requested_state: bool,
+    frame_count: int,
+    image_size: int,
+    free_vram_bytes: int | None,
+) -> tuple[bool, bool]:
+    """Final (offload_video, offload_state) flags for SAM2 init_state.
+
+    MPS always offloads: its stacked video tensor exceeds MPSGraph's INT_MAX
+    above ~750 frames. CUDA escalates only when the video would otherwise
+    live on the GPU but lacks headroom (930 frames ~= 11,160 MiB against an
+    11,264 MiB card plus a ~2,900 MiB loaded model froze an RTX 2080 Ti
+    desktop via WDDM oversubscription). A tripped guard enables both flags —
+    the only configuration verified stable on 11 GB. Requests are only
+    honored upward; requested video offload already keeps the tensor on CPU,
+    so nothing else is escalated.
+    """
+    if device == "mps":
+        return True, True
+    if (
+        device == "cuda"
+        and not requested_video
+        and free_vram_bytes is not None
+        and not video_fits_in_vram(
+            frame_count, image_size=image_size, free_bytes=free_vram_bytes
+        )
+    ):
+        logger.warning(
+            "SAM2 video tensor for %d frames does not fit free VRAM (%d MiB); "
+            "enabling CPU offload",
+            frame_count,
+            free_vram_bytes // (1024 * 1024),
+        )
+        return True, True
+    return requested_video, requested_state
 
 
 class SAM2EngineError(RuntimeError):
@@ -245,14 +299,28 @@ class SAM2VideoEngine:
                             dtype=getattr(torch, profile.autocast_dtype),
                         )
                     )
-                # MPS cannot hold the stacked full-video tensor once it
-                # exceeds INT_MAX elements (~750 frames at 1024x1024), so
-                # frames must stay on CPU regardless of configuration.
-                force_offload = profile.device == "mps"
+                frame_count = sum(
+                    1
+                    for entry in Path(frame_directory).iterdir()
+                    if entry.suffix.lower() in {".jpg", ".jpeg"}
+                )
+                free_vram_bytes = (
+                    torch.cuda.mem_get_info()[0]
+                    if profile.device == "cuda"
+                    else None
+                )
+                offload_video, offload_state = resolve_video_offload(
+                    profile.device,
+                    requested_video=self.offload_video_to_cpu,
+                    requested_state=self.offload_state_to_cpu,
+                    frame_count=frame_count,
+                    image_size=int(getattr(predictor, "image_size", 1024)),
+                    free_vram_bytes=free_vram_bytes,
+                )
                 state = predictor.init_state(
                     video_path=str(frame_directory),
-                    offload_video_to_cpu=self.offload_video_to_cpu or force_offload,
-                    offload_state_to_cpu=self.offload_state_to_cpu or force_offload,
+                    offload_video_to_cpu=offload_video,
+                    offload_state_to_cpu=offload_state,
                 )
                 predictor.add_new_points_or_box(
                     inference_state=state,
