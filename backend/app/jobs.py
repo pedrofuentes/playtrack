@@ -20,6 +20,7 @@ ProgressReporter = Callable[[float, str], None]
 ProgressWorker = Callable[[str, ProgressReporter], None]
 ProgressCompletion = Callable[[str], None]
 _TERMINAL_STATES = frozenset({"completed", "failed", "canceled"})
+_PROGRESS_CHECKPOINT_SECONDS = 5.0
 
 
 class JobNotFoundError(KeyError):
@@ -90,6 +91,7 @@ class _Job:
     cancel_requested: bool = False
     committing: bool = False
     worker_active: bool = False
+    checkpointed_at: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,11 +113,17 @@ class JobRegistry:
         queue_capacity: int = 2,
         terminal_retention: int = 100,
         worker_idle_timeout: float = 1.0,
+        progress_checkpoint_seconds: float = _PROGRESS_CHECKPOINT_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if queue_capacity < 0:
             raise ValueError("queue_capacity cannot be negative")
         if terminal_retention < 0:
             raise ValueError("terminal_retention cannot be negative")
+        if progress_checkpoint_seconds < 0:
+            raise ValueError("progress_checkpoint_seconds cannot be negative")
+        self._progress_checkpoint_seconds = progress_checkpoint_seconds
+        self._clock = clock
         self._library = library
         self._queue_capacity = queue_capacity
         self._terminal_retention = terminal_retention
@@ -429,6 +437,7 @@ class JobRegistry:
                     job.version += 1
                     job.updated_at = _now()
                     self._condition.notify_all()
+                self._checkpoint_progress_locked(job)
 
         result = worker(report)  # type: ignore[arg-type]
         with self._condition:
@@ -459,6 +468,7 @@ class JobRegistry:
                 job.version += 1
                 job.updated_at = _now()
                 self._condition.notify_all()
+                self._checkpoint_progress_locked(job)
 
         worker(task.job_id, report)  # type: ignore[call-arg]
         with self._condition:
@@ -560,6 +570,25 @@ class JobRegistry:
             job.resources = frozenset()
         self._persist_or_fail_locked(job)
         self._condition.notify_all()
+
+    def _checkpoint_progress_locked(self, job: _Job) -> None:
+        """Persist mid-flight progress at a bounded cadence.
+
+        Workers report once per frame and every save rewrites the whole track,
+        so writing each report would cost O(frames^2). Checkpointing on a
+        wall-clock interval instead bounds how much of a long track a backend
+        restart can erase, without a write per frame.
+        """
+        if self._library is None:
+            return
+        now = self._clock()
+        if (
+            job.checkpointed_at is not None
+            and now - job.checkpointed_at < self._progress_checkpoint_seconds
+        ):
+            return
+        job.checkpointed_at = now
+        self._persist_or_fail_locked(job)
 
     def _persist_or_fail_locked(self, job: _Job) -> bool:
         try:

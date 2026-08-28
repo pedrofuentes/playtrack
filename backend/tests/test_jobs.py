@@ -393,3 +393,69 @@ def test_cancel_persistence_failure_keeps_lease_until_worker_exits() -> None:
         time.sleep(0.01)
     assert registry.get(job_id).state == "canceled"
     assert not registry.is_resource_active("video:v1")
+
+
+def test_interrupted_job_keeps_the_frames_it_had_checkpointed(tmp_path: Path) -> None:
+    library = LibraryStore(tmp_path / "data")
+    registry = JobRegistry(library=library, progress_checkpoint_seconds=0.0)
+    reported = threading.Event()
+    release = threading.Event()
+
+    def worker(report: object) -> list[TrackFrame]:
+        report(0.25, "Tracking forward", frame(1))
+        report(0.5, "Tracking forward", frame(2))
+        reported.set()
+        assert release.wait(timeout=2)
+        return [frame(1), frame(2)]
+
+    job_id = registry.submit(worker)
+    assert reported.wait(timeout=2)
+
+    # A restart mid-flight must keep the frames the tracker already produced.
+    restarted = JobRegistry(library=library)
+    restored = restarted.get(job_id)
+    release.set()
+
+    assert restored.state == "failed"
+    assert restored.message == "Interrupted by backend restart"
+    assert restored.progress == 0.5
+    assert [item.frame_idx for item in restored.track] == [1, 2]
+
+
+def test_progress_checkpoints_are_rate_limited_instead_of_one_write_per_frame() -> None:
+    class RecordingLibrary:
+        def __init__(self) -> None:
+            self.saves: list[tuple[str, float]] = []
+
+        def load_jobs(self) -> list[object]:
+            return []
+
+        def save_job(self, **kwargs: object) -> None:
+            self.saves.append((str(kwargs["state"]), float(kwargs["progress"])))
+
+        def prune_terminal_jobs(self, _retention: int) -> list[str]:
+            return []
+
+    library = RecordingLibrary()
+    now = [0.0]
+    registry = JobRegistry(
+        library=library,
+        progress_checkpoint_seconds=5.0,
+        clock=lambda: now[0],
+    )
+
+    def worker(report: object) -> list[TrackFrame]:
+        for index in range(10):
+            now[0] = float(index)
+            report((index + 1) / 10, "Tracking forward", frame(index))
+        return [frame(index) for index in range(10)]
+
+    job_id = registry.submit(worker)
+    registry.wait_until_terminal(job_id, timeout=2)
+
+    # Ten frames spanning nine seconds checkpoint twice, not ten times.
+    checkpoints = [
+        progress for state, progress in library.saves
+        if state == "running" and progress > 0
+    ]
+    assert checkpoints == [0.1, 0.6]
