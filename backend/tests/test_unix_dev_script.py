@@ -4,6 +4,13 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
+
+pytestmark = pytest.mark.skipif(
+    os.name != "posix",
+    reason="dev.sh launcher tests spawn /bin/bash and POSIX stub scripts",
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEV_SCRIPT = REPO_ROOT / "scripts" / "dev.sh"

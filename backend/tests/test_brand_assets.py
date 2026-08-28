@@ -41,7 +41,7 @@ def test_brand_builder_emits_expected_assets_and_dimensions(tmp_path: Path) -> N
         "frontend/public/pwa-maskable-192x192.png": (192, 192),
         "frontend/public/pwa-maskable-512x512.png": (512, 512),
     }
-    assert {str(path.relative_to(repo_root)) for path in outputs} == set(expected)
+    assert {path.relative_to(repo_root).as_posix() for path in outputs} == set(expected)
     for relative, dimensions in expected.items():
         with Image.open(repo_root / relative) as image:
             assert image.size == dimensions
