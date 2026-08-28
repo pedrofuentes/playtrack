@@ -44,16 +44,13 @@ From PowerShell in the repository root:
 uv python install 3.12
 uv sync --project backend --python 3.12 --extra dev
 
-uv pip install --python backend\.venv\Scripts\python.exe --reinstall `
-  torch==2.5.1 torchvision==0.20.1 `
-  --index-url https://download.pytorch.org/whl/cu121
-
 backend\.venv\Scripts\python.exe scripts\fetch_models.py
 powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1
 ```
 
 `run.ps1` checks the toolchain, installs/builds the frontend when needed, starts
 PlayTrack at <http://127.0.0.1:8000>, waits for health, and opens the browser.
+On Windows, uv installs CUDA (cu124) PyTorch wheels automatically; no manual torch install is needed.
 
 For development with FastAPI reload and Vite hot reload:
 
@@ -133,7 +130,7 @@ Defaults live in `backend/app/config.py`.
 | `PLAYTRACK_MAX_EXPORT_WIDTH` / `PLAYTRACK_MAX_EXPORT_HEIGHT` | `4096` / `2160` | Output dimension bounds. |
 | `PLAYTRACK_MAX_EXPORT_PIXELS` | `8847360` | Output pixels per frame. |
 | `TRACKING_MAX_DIM` | `2048` | Maximum tracking-cache frame dimension. |
-| `SAM2_OFFLOAD_VIDEO_TO_CPU` / `SAM2_OFFLOAD_STATE_TO_CPU` | `0` | SAM 2 memory offload; forced on MPS. |
+| `SAM2_OFFLOAD_VIDEO_TO_CPU` / `SAM2_OFFLOAD_STATE_TO_CPU` | `0` | SAM 2 memory offload; forced on MPS, auto-enabled on CUDA when the video tensor cannot fit free VRAM. |
 
 This release is a clean environment-variable rename: obsolete `FINDME_*` settings are
 not accepted. Unbranded `SAM2_*` and `TRACKING_MAX_DIM` settings remain.
@@ -166,12 +163,12 @@ FindMe specs under `docs/superpowers/` are historical records from before the re
 
 ## Known limitations
 
-- Full 930-frame tracking takes about 20 minutes on Apple Silicon. Use short ranges to iterate.
+- Full 930-frame tracking takes about 20 minutes on Apple Silicon and about 3 minutes on an RTX 2080 Ti. Use short ranges to iterate.
 - SAM 2 can switch identity when players overlap without producing lost frames. Re-anchor
   after the collision; multi-anchor splicing is the planned fix.
 - Tracking/export each have one worker and two queue slots. Overload returns retryable HTTP 429.
 - Variable-frame-rate sources are rejected so frame-indexed tracking and export cannot drift.
-- RTX 2080 Ti support exists in code, but SAM 2 speed and peak VRAM remain unverified on that hardware.
+- Verified on RTX 2080 Ti (2026-08-28): 930-frame track in about 3 minutes (~4.8 fps) at ~4.3 GB peak VRAM with automatic CPU offload.
 - PlayTrack has no authentication. Do not expose it to the public internet.
 
 ## Contributing and security
