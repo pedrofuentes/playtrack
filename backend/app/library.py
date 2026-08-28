@@ -5,6 +5,7 @@ import json
 import logging
 import shutil
 import sqlite3
+from contextlib import closing
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -39,10 +40,14 @@ def _migrate_legacy_database(root: Path) -> None:
     partial.unlink(missing_ok=True)
     try:
         source_uri = f"{legacy.resolve().as_uri()}?mode=ro"
-        with sqlite3.connect(source_uri, uri=True, timeout=5.0) as source:
-            with sqlite3.connect(partial, timeout=5.0) as target:
-                _backup_database(source, target)
-        with sqlite3.connect(partial, timeout=5.0) as migrated:
+        # sqlite3.connect used as a context manager only manages the
+        # transaction; the connection must be closed explicitly or Windows
+        # keeps the files locked during replace()/unlink() below (WinError 32).
+        with closing(sqlite3.connect(source_uri, uri=True, timeout=5.0)) as source:
+            with closing(sqlite3.connect(partial, timeout=5.0)) as target:
+                with target:
+                    _backup_database(source, target)
+        with closing(sqlite3.connect(partial, timeout=5.0)) as migrated:
             result = migrated.execute("PRAGMA integrity_check").fetchone()
         if result is None or result[0] != "ok":
             detail = "no result" if result is None else str(result[0])
