@@ -471,3 +471,27 @@ def test_rejects_small_internal_audio_dropout(tmp_path: Path) -> None:
             source_start_frame=8,
             source_total_frames=32,
         )
+
+
+def test_export_embeds_playtrack_attribution_metadata(tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    destination = tmp_path / "export.mp4"
+    _write_synthetic_video(source)
+    windows = [
+        CropWindow(frame_idx=index, x=16, y=0, width=64, height=64)
+        for index in range(32)
+    ]
+
+    export_video(
+        source,
+        destination,
+        windows,
+        output_width=48,
+        output_height=32,
+        fps=8.0,
+    )
+
+    with av.open(str(destination)) as exported:
+        metadata = dict(exported.metadata)
+
+    assert metadata.get("comment") == "Created with PlayTrack (https://pf.run/playtrack)"

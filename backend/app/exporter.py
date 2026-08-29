@@ -13,6 +13,8 @@ class ExportError(RuntimeError):
 
 ExportProgress = Callable[[float, str], None]
 
+ATTRIBUTION_COMMENT = "Created with PlayTrack (https://pf.run/playtrack)"
+
 
 def export_video(
     source_path: Path,
@@ -63,6 +65,9 @@ def export_video(
         with av.open(str(source_path), mode="r") as source, av.open(
             str(temporary), mode="w"
         ) as output:
+            # libavformat force-overwrites the "encoder" tag with its own ident
+            # unless bitexact mode is on, so the comment tag carries attribution.
+            output.metadata["comment"] = ATTRIBUTION_COMMENT
             if not source.streams.video:
                 raise ExportError("Source has no video stream")
             input_video = source.streams.video[0]
