@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import gc
+import importlib
 import logging
 import threading
 from contextlib import ExitStack
@@ -22,6 +23,14 @@ def video_fits_in_vram(frame_count: int, *, image_size: int, free_bytes: int) ->
     with enough headroom left for the model and runtime allocations."""
     tensor_bytes = frame_count * 3 * image_size * image_size * 4
     return tensor_bytes + _VIDEO_OFFLOAD_HEADROOM_BYTES <= free_bytes
+
+
+def _sam2_cuda_extension_available() -> bool:
+    try:
+        extension = importlib.import_module("sam2._C")
+    except (ImportError, OSError):
+        return False
+    return callable(getattr(extension, "get_connected_componnets", None))
 
 
 def resolve_video_offload(
@@ -54,11 +63,15 @@ def resolve_video_offload(
             frame_count, image_size=image_size, free_bytes=free_vram_bytes
         )
     ):
+        tensor_mib = frame_count * 3 * image_size * image_size * 4 // 1024**2
+        headroom_mib = _VIDEO_OFFLOAD_HEADROOM_BYTES // 1024**2
+        free_mib = free_vram_bytes // 1024**2
         logger.warning(
-            "SAM2 video tensor for %d frames does not fit free VRAM (%d MiB); "
-            "enabling CPU offload",
-            frame_count,
-            free_vram_bytes // (1024 * 1024),
+            "SAM2 safety guard: %d MiB video tensor plus %d MiB headroom "
+            "exceeds %d MiB free VRAM; enabling CPU offload",
+            tensor_mib,
+            headroom_mib,
+            free_mib,
         )
         return True, True
     return requested_video, requested_state
@@ -375,13 +388,22 @@ class SAM2VideoEngine:
         if profile.device == "cuda" and profile.compute_capability is not None:
             SAM2Engine._configure_cuda_attention(torch, profile)
         try:
-            self._predictor = build_sam2_video_predictor(
+            predictor = build_sam2_video_predictor(
                 self.model_config,
                 str(self.checkpoint_path),
                 device=profile.device,
             )
         except Exception as exc:
             raise SAM2EngineError(f"Could not load SAM 2 video predictor: {exc}") from exc
+        if (
+            getattr(predictor, "fill_hole_area", 0) > 0
+            and not _sam2_cuda_extension_available()
+        ):
+            predictor.fill_hole_area = 0
+            logger.info(
+                "SAM2 optional small-hole filling is disabled because sam2._C is unavailable"
+            )
+        self._predictor = predictor
         return self._predictor
 
 

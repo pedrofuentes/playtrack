@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
+import app.models.sam2_engine as sam2_engine
 from app.models.sam2_engine import (
     DeviceProfile,
     SAM2Engine,
@@ -121,6 +123,101 @@ def test_full_video_tensor_fails_required_headroom() -> None:
     # 11,264 MiB card, but it leaves ~104 MiB — nowhere near enough for the
     # already-loaded model (~2,900 MiB baseline) plus headroom.
     assert not video_fits_in_vram(930, image_size=1024, free_bytes=11_264 * 1024**2)
+
+
+def test_sam2_cuda_extension_probe_rejects_missing_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing(name: str) -> object:
+        raise ImportError(name)
+
+    monkeypatch.setattr(sam2_engine.importlib, "import_module", missing)
+
+    assert sam2_engine._sam2_cuda_extension_available() is False
+
+
+def test_sam2_cuda_extension_probe_accepts_connected_components(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extension = SimpleNamespace(get_connected_componnets=lambda *_args: None)
+    monkeypatch.setattr(
+        sam2_engine.importlib, "import_module", lambda name: extension
+    )
+
+    assert sam2_engine._sam2_cuda_extension_available() is True
+
+
+def _install_fake_video_predictor_builder(
+    monkeypatch: pytest.MonkeyPatch, predictor: SimpleNamespace
+) -> None:
+    build_sam = ModuleType("sam2.build_sam")
+    build_sam.build_sam2_video_predictor = lambda *_args, **_kwargs: predictor
+    sam2 = ModuleType("sam2")
+    sam2.build_sam = build_sam
+    monkeypatch.setitem(sys.modules, "sam2", sam2)
+    monkeypatch.setitem(sys.modules, "sam2.build_sam", build_sam)
+
+
+def test_video_predictor_disables_only_hole_filling_without_extension(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkpoint = tmp_path / "model.pt"
+    checkpoint.write_bytes(b"")
+    predictor = SimpleNamespace(
+        fill_hole_area=8,
+        dynamic_multimask_via_stability=True,
+        binarize_mask_from_pts_for_mem_enc=True,
+    )
+    _install_fake_video_predictor_builder(monkeypatch, predictor)
+    engine = SAM2VideoEngine(checkpoint, "cfg")
+    engine._profile = DeviceProfile("cpu", None, "small", None)
+    monkeypatch.setattr(
+        sam2_engine, "_sam2_cuda_extension_available", lambda: False, raising=False
+    )
+
+    assert engine._ensure_predictor(fake_torch()) is predictor
+    assert predictor.fill_hole_area == 0
+    assert predictor.dynamic_multimask_via_stability is True
+    assert predictor.binarize_mask_from_pts_for_mem_enc is True
+
+
+def test_video_predictor_keeps_hole_filling_with_extension(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkpoint = tmp_path / "model.pt"
+    checkpoint.write_bytes(b"")
+    predictor = SimpleNamespace(
+        fill_hole_area=8,
+        dynamic_multimask_via_stability=True,
+        binarize_mask_from_pts_for_mem_enc=True,
+    )
+    _install_fake_video_predictor_builder(monkeypatch, predictor)
+    engine = SAM2VideoEngine(checkpoint, "cfg")
+    engine._profile = DeviceProfile("cpu", None, "small", None)
+    monkeypatch.setattr(
+        sam2_engine, "_sam2_cuda_extension_available", lambda: True, raising=False
+    )
+
+    assert engine._ensure_predictor(fake_torch()) is predictor
+    assert predictor.fill_hole_area == 8
+
+
+def test_cuda_offload_warning_reports_memory_budget(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING", logger="app.models.sam2_engine"):
+        result = resolve_video_offload(
+            "cuda",
+            requested_video=False,
+            requested_state=False,
+            frame_count=930,
+            image_size=1024,
+            free_vram_bytes=9_603 * 1024**2,
+        )
+
+    assert result == (True, True)
+    assert len(caplog.records) == 1
+    assert "11160 MiB video tensor" in caplog.messages[0]
+    assert "3072 MiB headroom" in caplog.messages[0]
+    assert "9603 MiB free VRAM" in caplog.messages[0]
 
 
 def test_short_clip_video_tensor_fits_with_headroom() -> None:

@@ -165,6 +165,10 @@ the local FastAPI server is required and offer retry when it is unreachable.
 
 - **MPS long-video crash**: SAM2's stacked video tensor exceeds MPSGraph's INT_MAX above
   ~750 frames; `sam2_engine.py` force-enables CPU offload on MPS. Don't remove it.
+- **Windows optional CUDA extension**: native Windows environments may lack SAM 2's
+  optional `sam2._C` CUDA extension. PlayTrack then disables only small-hole filling while
+  preserving other post-processing; do not add a CUDA-toolkit/compiler requirement merely
+  to enable it.
 - **CUDA VRAM freeze**: without CPU offload, SAM2 stacks the whole video as one float32
   tensor inside `init_state` (930 frames ≈ 11,160 MiB — nearly all of an 11,264 MiB
   card, leaving no room for the loaded model). Windows/WDDM then oversubscribes GPU
