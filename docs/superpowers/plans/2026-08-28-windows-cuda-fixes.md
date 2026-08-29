@@ -622,7 +622,7 @@ This re-runs the exact scenario that previously froze the machine. **Job cancell
    ```
 4. In a second console: `nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv -l 5` (observation only — a 5 s poll can miss a fast allocation; do not rely on it as protection).
 5. Start a full track of the 930-frame video through the UI or API (`POST /api/track` with the existing video and a click selection; `GET /api/jobs` shows the job id).
-6. **The warning must appear before frame loading starts.** The backend log must show `SAM2 video tensor for 930 frames does not fit free VRAM ... enabling CPU offload` *before* SAM2's `frame loading (JPEG)` progress output begins. If frame loading starts without the warning, immediately kill the backend:
+6. **The warning must appear before frame loading starts.** The backend log must show the VRAM-guard warning — as of commit 36f1362: `SAM2 safety guard: ... enabling CPU offload` — *before* SAM2's `frame loading (JPEG)` progress output begins. If frame loading starts without the warning, immediately kill the backend:
    ```powershell
    Stop-Process -Id <recorded PID> -Force
    ```

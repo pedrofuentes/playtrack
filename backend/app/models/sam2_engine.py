@@ -28,7 +28,7 @@ def video_fits_in_vram(frame_count: int, *, image_size: int, free_bytes: int) ->
 def _sam2_cuda_extension_available() -> bool:
     try:
         extension = importlib.import_module("sam2._C")
-    except (ImportError, OSError):
+    except Exception:  # optional native module — probing it must never be fatal
         return False
     return callable(getattr(extension, "get_connected_componnets", None))
 

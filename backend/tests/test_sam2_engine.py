@@ -125,13 +125,14 @@ def test_full_video_tensor_fails_required_headroom() -> None:
     assert not video_fits_in_vram(930, image_size=1024, free_bytes=11_264 * 1024**2)
 
 
-def test_sam2_cuda_extension_probe_rejects_missing_module(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("error", [ImportError, OSError, RuntimeError])
+def test_sam2_cuda_extension_probe_never_raises(
+    monkeypatch: pytest.MonkeyPatch, error: type[Exception]
 ) -> None:
-    def missing(name: str) -> object:
-        raise ImportError(name)
+    def failing(name: str) -> object:
+        raise error(name)
 
-    monkeypatch.setattr(sam2_engine.importlib, "import_module", missing)
+    monkeypatch.setattr(sam2_engine.importlib, "import_module", failing)
 
     assert sam2_engine._sam2_cuda_extension_available() is False
 
@@ -140,22 +141,32 @@ def test_sam2_cuda_extension_probe_accepts_connected_components(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     extension = SimpleNamespace(get_connected_componnets=lambda *_args: None)
-    monkeypatch.setattr(
-        sam2_engine.importlib, "import_module", lambda name: extension
-    )
+
+    def import_module(name: str) -> SimpleNamespace:
+        assert name == "sam2._C"
+        return extension
+
+    monkeypatch.setattr(sam2_engine.importlib, "import_module", import_module)
 
     assert sam2_engine._sam2_cuda_extension_available() is True
 
 
 def _install_fake_video_predictor_builder(
     monkeypatch: pytest.MonkeyPatch, predictor: SimpleNamespace
-) -> None:
+) -> dict[str, object]:
+    received: dict[str, object] = {}
+
+    def build(*args: object, **kwargs: object) -> SimpleNamespace:
+        received["kwargs"] = dict(kwargs)
+        return predictor
+
     build_sam = ModuleType("sam2.build_sam")
-    build_sam.build_sam2_video_predictor = lambda *_args, **_kwargs: predictor
+    build_sam.build_sam2_video_predictor = build
     sam2 = ModuleType("sam2")
     sam2.build_sam = build_sam
     monkeypatch.setitem(sys.modules, "sam2", sam2)
     monkeypatch.setitem(sys.modules, "sam2.build_sam", build_sam)
+    return received
 
 
 def test_video_predictor_disables_only_hole_filling_without_extension(
@@ -168,7 +179,7 @@ def test_video_predictor_disables_only_hole_filling_without_extension(
         dynamic_multimask_via_stability=True,
         binarize_mask_from_pts_for_mem_enc=True,
     )
-    _install_fake_video_predictor_builder(monkeypatch, predictor)
+    received = _install_fake_video_predictor_builder(monkeypatch, predictor)
     engine = SAM2VideoEngine(checkpoint, "cfg")
     engine._profile = DeviceProfile("cpu", None, "small", None)
     monkeypatch.setattr(
@@ -176,6 +187,8 @@ def test_video_predictor_disables_only_hole_filling_without_extension(
     )
 
     assert engine._ensure_predictor(fake_torch()) is predictor
+    # Upstream post-processing stays on its defaults; only hole filling is cut.
+    assert "apply_postprocessing" not in received["kwargs"]
     assert predictor.fill_hole_area == 0
     assert predictor.dynamic_multimask_via_stability is True
     assert predictor.binarize_mask_from_pts_for_mem_enc is True
