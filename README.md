@@ -34,7 +34,8 @@ selection and tracking through MPS.
 
 Requirements:
 
-- Windows 10 or newer with a current NVIDIA driver.
+- Windows 10 or newer with an NVIDIA driver from the 580 family or newer
+  (required by the CUDA 13.2 PyTorch wheels that `uv sync` installs).
 - [uv](https://docs.astral.sh/uv/getting-started/installation/), Git, and Node.js 20+.
 
 From PowerShell in the repository root:

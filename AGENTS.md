@@ -126,7 +126,7 @@ the local FastAPI server is required and offer retry when it is unreachable.
 
 | Device | SAM 2.1 | Notes |
 |---|---|---|
-| CUDA Turing (target: RTX 2080 Ti, 11 GB) | base-plus, fp16, SDPA | flash-attn unsupported; CPU offload auto-engages when the stacked video tensor exceeds free VRAM |
+| CUDA Turing (target: RTX 2080 Ti, 11 GB) | base-plus, fp16, SDPA | flash-attn unsupported; CPU offload auto-engages when the stacked video tensor exceeds free VRAM; Windows locks torch 2.13.0+cu132 (still ships sm_75, needs a 580-family+ driver — verified on driver 610.74, 2026-08-28) |
 | CUDA Ampere+ | large, bf16 | SDPA |
 | MPS (Mac dev) | base-plus | CPU offload forced |
 | CPU | small | compatibility path; slow |
