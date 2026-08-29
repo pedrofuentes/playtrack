@@ -12,6 +12,10 @@
 
 **Provenance:** adversarially reviewed by Codex on 2026-08-28 (1 blocker, 10 major findings); all incorporated. The cu132 wheel availability below was independently verified from macOS on 2026-08-28.
 
+**Attempt log:**
+- Attempt 1 (2026-08-28): reverted at Task 5 Step 1 — a false gate failure. The pytest run reported `279 skipped` in 2.15 s because `ffmpeg`/`ffprobe` were not on `PATH` in that console: `backend/tests/conftest.py` has a session-scoped autouse fixture that skips EVERY test when `shutil.which("ffmpeg")` fails. The run was also started from the repo root, so pytest never loaded `backend/pyproject.toml` (hence the `Unknown pytest.mark.integration` warnings). Neither is a torch problem. Everything before that gate PASSED: driver 610.74, cu132 discovered as winner, lock re-pointed cleanly (no cu124 remnants, macOS tree unchanged, sympy fork unified, no new transitives), and the GPU canary fully passed on the 2080 Ti (`sm_75` in arch list, SDPA ok, GEMM ok). Task 0/2 fixes below prevent a recurrence.
+- Attempt 2 shortcuts: reuse the recorded Task 1 baseline verbatim (request `{"videoId":"394e1b8fc8944415a1f0dc274761a573","frameIdx":602,"x":1250,"y":825}`, score `0.79443359375`, box `[738,709,1762,1020]`) — do NOT redo Task 1. Task 2's discovery stands (`cu132`); re-running it is optional. Redo Tasks 3–6 in full: the revert restored `pyproject.toml`/`uv.lock`, so the re-point and re-lock must happen again (uv's cache makes the downloads fast). Before branching, refresh the branch from origin/main: `git -C $RepoRoot switch main`, `git -C $RepoRoot pull`, `git -C $RepoRoot branch -D fix/windows-torch-index-upgrade`, then branch as in Global Constraints.
+
 ## Background
 
 - `backend/pyproject.toml` pins a Windows-only uv source: index `pytorch-cu124` (`https://download.pytorch.org/whl/cu124`, `explicit = true`) for `torch` and `torchvision`, resolving `torch 2.6.0+cu124` / `torchvision 0.21.0+cu124` on win32. macOS/Linux resolve `torch 2.13.0` / `torchvision 0.28.0` from PyPI.
@@ -87,6 +91,20 @@ Gates: `backend/pyproject.toml` and `backend/uv.lock` must NOT appear as modifie
 nvidia-smi --query-gpu=name,driver_version --format=csv
 ```
 Record the output. Gate: the driver must satisfy the CUDA 13.x requirement (580-family or newer). If it does not, STOP before any edit or download and report the version — choosing `cu126` instead (driver family 525+) is a fallback the Mac maintainer must approve first; do not decide it alone.
+
+- [ ] **Step 3: ffmpeg on PATH (in EVERY console that will run pytest)**
+
+`backend/tests/conftest.py` skips the ENTIRE suite (session-scoped autouse fixture) when `ffmpeg`/`ffprobe` are not on `PATH` — a mass-skip run exits 0 and proves nothing. Ensure both resolve, falling back to the portable install from `scripts/setup.ps1`:
+
+```powershell
+if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue) -or -not (Get-Command ffprobe -ErrorAction SilentlyContinue)) {
+  $env:Path = (Join-Path $RepoRoot '.tools\ffmpeg\bin') + ';' + $env:Path
+}
+(Get-Command ffmpeg).Source
+(Get-Command ffprobe).Source
+ffmpeg -version | Select-Object -First 1
+```
+Gate: both commands resolve and print a version. If not, run `scripts\setup.ps1` to install the portable FFmpeg, then repeat. This is an environment precondition — its failure is never a reason to run the Revert procedure. `$env:Path` edits are per-console: re-run this block in any new console before pytest.
 
 ---
 
@@ -215,10 +233,15 @@ Gate: every assert passes and both ops print finite numbers. `no kernel image is
 
 - [ ] **Step 1: Full backend suite** (weights present; CUDA integration tests run):
 
+Run from `$Backend` so pytest loads `backend/pyproject.toml` (markers, testpaths) — `uv run --project` does NOT change the working directory — and with ffmpeg on PATH per Task 0 Step 3:
+
 ```powershell
-uv run --project $Backend --extra dev pytest -q
+(Get-Command ffmpeg -ErrorAction SilentlyContinue).Source   # must print a path; if empty, redo Task 0 Step 3 in THIS console
+Push-Location $Backend
+uv run --extra dev pytest -q
+Pop-Location
 ```
-Gate: **0 failed**, 10 skipped (launcher tests). Any torch-related failure: **Revert procedure** and report the exact failures — do not patch app code in this plan.
+Gate: **0 failed**, exactly **10 skipped** (the POSIX launcher tests), everything else **passed**. A run where every collected test skips (e.g. `279 skipped` with no passes) means the environment is broken — ffmpeg missing from PATH or config not loaded — and is an environment failure to fix and retry, **NOT** a torch gate failure: do not revert for it. Any torch-related test failure: **Revert procedure** and report the exact failures — do not patch app code in this plan.
 
 - [ ] **Step 2: Repeat the Task 1 baseline selection, verbatim**
 
