@@ -4,6 +4,7 @@ import ipaddress
 import logging
 import uuid
 from collections.abc import Iterable
+from urllib.parse import urlsplit
 
 from starlette.datastructures import FormData, MutableHeaders
 from starlette.formparsers import MultiPartException, MultiPartParser
@@ -12,9 +13,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 
-_DEVELOPMENT_ORIGINS = frozenset(
-    {"http://localhost:5173", "http://127.0.0.1:5173"}
-)
+_DEV_SERVER_PORT = 5173
 _PRIVATE_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -140,7 +139,7 @@ class RequestBoundaryMiddleware:
         origin = headers.get("origin")
         fetch_site = headers.get("sec-fetch-site", "").strip().lower()
         if fetch_site == "cross-site" or (
-            origin is not None and not _origin_allowed(origin, scope, raw_host)
+            origin is not None and not self._origin_allowed(origin, scope, raw_host)
         ):
             await self._reject(
                 scope, receive, send, 403, "Cross-site requests are not allowed"
@@ -148,6 +147,36 @@ class RequestBoundaryMiddleware:
             return
 
         await self.app(scope, receive, send)
+
+    def _origin_allowed(self, origin: str, scope: Scope, raw_host: str) -> bool:
+        normalized = origin.strip().rstrip("/").lower()
+        scheme = str(scope.get("scheme", "http")).lower()
+        if scheme == "ws":
+            scheme = "http"
+        elif scheme == "wss":
+            scheme = "https"
+        if normalized == f"{scheme}://{raw_host.lower()}":
+            return True
+        return self._dev_server_origin(normalized)
+
+    def _dev_server_origin(self, origin: str) -> bool:
+        """Recognize the Vite dev server's own origin.
+
+        Its proxy rewrites Host to the backend's address, so a same-origin
+        browser request arrives with an Origin the Host header can no longer
+        confirm. Hold that origin to the same host allow-list instead.
+        """
+        parts = urlsplit(origin)
+        if parts.scheme != "http" or parts.path or parts.query or parts.fragment:
+            return False
+        try:
+            port = parts.port
+        except ValueError:
+            return False
+        if port != _DEV_SERVER_PORT:
+            return False
+        host = (parts.hostname or "").rstrip(".")
+        return bool(host) and self._host_allowed(host)
 
     def _host_allowed(self, host: str) -> bool:
         if host in {"localhost", "testserver"} or host in self.allowed_hosts:
@@ -199,15 +228,3 @@ def _host_name(raw_host: str) -> str | None:
     if not host or any(character in host for character in "/\\@"):
         return None
     return host
-
-
-def _origin_allowed(origin: str, scope: Scope, raw_host: str) -> bool:
-    normalized = origin.strip().rstrip("/").lower()
-    if normalized in _DEVELOPMENT_ORIGINS:
-        return True
-    scheme = str(scope.get("scheme", "http")).lower()
-    if scheme == "ws":
-        scheme = "http"
-    elif scheme == "wss":
-        scheme = "https"
-    return normalized == f"{scheme}://{raw_host.lower()}"

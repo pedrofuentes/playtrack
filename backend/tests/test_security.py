@@ -164,3 +164,73 @@ def test_unexpected_errors_are_correlated_without_disclosing_details(
     assert "secret path" not in response.text
     assert payload["errorId"] in caplog.text
     assert "secret path /private/source.mp4" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://10.0.10.10:5173",
+        "http://192.168.1.20:5173",
+        "http://172.16.1.4:5173",
+        "http://[fe80::1]:5173",
+        "http://localhost:5173",
+    ],
+)
+def test_allows_dev_server_origin_behind_host_rewriting_proxy(
+    tmp_path: Path, origin: str
+) -> None:
+    with make_client(tmp_path) as client:
+        response = client.get(
+            "/api/health",
+            headers={
+                "Host": "127.0.0.1:8000",
+                "Origin": origin,
+                "Sec-Fetch-Site": "same-origin",
+            },
+        )
+
+    assert response.status_code == 200
+
+
+def test_allows_configured_dns_dev_server_origin(tmp_path: Path) -> None:
+    with make_client(tmp_path, allowed_hosts=("playtrack.lan",)) as client:
+        response = client.get(
+            "/api/health",
+            headers={"Host": "127.0.0.1:8000", "Origin": "http://playtrack.lan:5173"},
+        )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://8.8.8.8:5173",
+        "http://attacker.example:5173",
+        "https://10.0.10.10:5173",
+        "http://10.0.10.10:9999",
+        "http://10.0.10.10",
+        "null",
+    ],
+)
+def test_rejects_foreign_and_non_dev_server_origins(
+    tmp_path: Path, origin: str
+) -> None:
+    with make_client(tmp_path) as client:
+        response = client.get(
+            "/api/health", headers={"Host": "127.0.0.1:8000", "Origin": origin}
+        )
+
+    assert response.status_code == 403
+
+
+def test_allows_dev_server_websocket_origin_behind_proxy(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        with pytest.raises(WebSocketDisconnect) as raised:
+            with client.websocket_connect(
+                "/ws/jobs/missing",
+                headers={"Host": "127.0.0.1:8000", "Origin": "http://10.0.10.10:5173"},
+            ):
+                pass
+
+    assert raised.value.code == 4404
