@@ -30,6 +30,11 @@ def test_run_script_checks_tools_builds_stale_frontend_and_opens_browser() -> No
     assert "PLAYTRACK_HOST" in script
     assert "FINDME_HOST" not in script
     assert "PlayTrack" in script
+    assert "windows-tools.ps1" in script
+    assert "Set-PlayTrackVideoToolEnvironment" in script
+    assert script.index("Set-PlayTrackVideoToolEnvironment") < script.index(
+        "Starting PlayTrack"
+    )
 
 
 def test_dev_script_starts_reload_backend_and_vite_and_cleans_up() -> None:
@@ -48,6 +53,54 @@ def test_dev_script_starts_reload_backend_and_vite_and_cleans_up() -> None:
     assert "Stop-ProcessTree" in script
     assert "finally" in script
     assert "PlayTrack" in script
+    assert "windows-tools.ps1" in script
+    assert "Set-PlayTrackVideoToolEnvironment" in script
+    assert script.index("Set-PlayTrackVideoToolEnvironment") < script.index(
+        "Starting the PlayTrack backend"
+    )
+
+
+def test_windows_setup_bootstraps_project_and_pinned_ffmpeg() -> None:
+    setup = script_text("setup.ps1")
+
+    assert "$ErrorActionPreference = 'Stop'" in setup
+    assert "windows-tools.ps1" in setup
+    assert "Install-PlayTrackFfmpeg" in setup
+    assert all(token in setup for token in ("uv", "python", "install", "3.12"))
+    assert all(token in setup for token in ("uv", "sync", "--project", "backend"))
+    assert all(token in setup for token in ("npm", "ci"))
+    assert "fetch_models.py" in setup
+    assert "PlayTrack setup is complete" in setup
+
+
+def test_windows_video_tool_helper_preserves_overrides_and_local_fallback() -> None:
+    helper = script_text("windows-tools.ps1")
+
+    assert "PLAYTRACK_FFMPEG" in helper
+    assert "PLAYTRACK_FFPROBE" in helper
+    assert ".tools\\ffmpeg" in helper
+    assert "ffmpeg-9.0.1-essentials_build.zip" in helper
+    assert (
+        "FEC81AE03971D9DD4BE3EBE02E263BD2EC1D789483F931BDBA5F5715E65DA2E9"
+        in helper
+    )
+    assert "Get-FileHash" in helper
+    assert "Expand-Archive" in helper
+    assert "Set-PlayTrackVideoToolEnvironment" in helper
+
+
+def test_docs_make_setup_the_windows_entrypoint() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    windows_quick_start = readme.split("### Windows + NVIDIA CUDA", 1)[1].split(
+        "### macOS + Apple Silicon", 1
+    )[0]
+
+    for document in (readme, agents):
+        assert "scripts/setup.ps1" in document.replace("\\", "/")
+        assert ".tools/ffmpeg" in document
+    assert "ffmpeg` and `ffprobe` on `PATH`" not in windows_quick_start
+    assert "scripts\\setup.ps1" in windows_quick_start
 
 
 def test_unix_dev_script_supports_safe_network_mode() -> None:

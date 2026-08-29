@@ -45,7 +45,7 @@ backend/   FastAPI (Python 3.12, uv-managed)
   app/library.py              SQLite persistence: data/library/playtrack.sqlite3 (WAL + FULL sync)
   app/models/sam2_engine.py   lazy SAM2 image/video engines, device autodetect
 
-scripts/   dev.sh (Mac dev), dev.ps1 + run.ps1 (Windows), fetch_models.py (SAM2 checkpoints)
+scripts/   dev.sh (Mac dev), setup.ps1 + dev.ps1 + run.ps1 (Windows), fetch_models.py (SAM2 checkpoints)
 
 website/  dependency-free GitHub Pages product site
   index.html                  semantic product/install/limitations/community content
@@ -57,7 +57,7 @@ website/  dependency-free GitHub Pages product site
 ```
 
 Runtime dirs (gitignored, never commit): `data/` (uploads, frame caches, library SQLite),
-`exports/`, `checkpoints/`.
+`exports/`, `checkpoints/`, `.tools/ffmpeg/` (portable Windows video tools).
 
 ## Commands
 
@@ -81,9 +81,16 @@ node website/test-site.mjs
 # Run the app
 scripts/dev.sh            # Mac dev, localhost: uvicorn --reload :8000 + Vite :5173
 scripts/dev.sh --network  # Explicit trusted-LAN mode: binds both to 0.0.0.0 (no authentication)
+scripts/setup.ps1         # Windows one-time setup, including repo-local FFmpeg
 scripts/run.ps1           # Windows: single process serving frontend/dist on :8000
+scripts/dev.ps1           # Windows: uvicorn reload :8000 + Vite :5173
 # manual equivalent: cd backend && uv run uvicorn app.main:app --port 8000
 ```
+
+The Windows launchers resolve `PLAYTRACK_FFMPEG` / `PLAYTRACK_FFPROBE` overrides,
+then system `PATH`, then the portable `.tools/ffmpeg` installed by `setup.ps1`. They
+validate both tools before starting FastAPI so video I/O cannot fail later because a
+launcher silently omitted the dependency.
 
 `scripts/dev.sh` is localhost-only by default. `scripts/dev.sh --network` exposes both
 development ports and prints the LAN frontend URL; use it only on a trusted local network
@@ -111,7 +118,7 @@ the local FastAPI server is required and offer retry when it is unreachable.
 | `PLAYTRACK_SAM2_CROP_SIZE` | `1024` | click-select high-res crop size (source px) |
 | `SAM2_OFFLOAD_VIDEO_TO_CPU` / `SAM2_OFFLOAD_STATE_TO_CPU` | `0` | forced on automatically on MPS, and on CUDA when the stacked video tensor cannot fit free VRAM |
 | `TRACKING_MAX_DIM` | `2048` | tracking frame-cache resolution (4096 ≈ 2× slower, no accuracy gain — measured) |
-| `PLAYTRACK_FFMPEG` / `PLAYTRACK_FFPROBE` | `ffmpeg`/`ffprobe` | binary paths |
+| `PLAYTRACK_FFMPEG` / `PLAYTRACK_FFPROBE` | `ffmpeg`/`ffprobe` | binary paths; Windows launchers fall back to `.tools/ffmpeg` |
 | `PLAYTRACK_MAX_EXPORT_WIDTH` / `PLAYTRACK_MAX_EXPORT_HEIGHT` | `4096` / `2160` | maximum output dimensions |
 | `PLAYTRACK_MAX_EXPORT_PIXELS` | `8847360` | maximum output pixels per frame |
 

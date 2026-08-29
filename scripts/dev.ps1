@@ -9,6 +9,8 @@ $BackendDir = Join-Path $RepoRoot 'backend'
 $FrontendDir = Join-Path $RepoRoot 'frontend'
 $BackendUrl = 'http://127.0.0.1:8000'
 $FrontendUrl = 'http://127.0.0.1:5173'
+$WindowsTools = Join-Path $PSScriptRoot 'windows-tools.ps1'
+. $WindowsTools
 $backendProcess = $null
 $frontendProcess = $null
 
@@ -129,6 +131,7 @@ try {
         -Description 'npm (included with Node.js)' `
         -InstallUrl 'https://nodejs.org/en/download'
     Assert-NodeVersion -Command $node
+    Set-PlayTrackVideoToolEnvironment -RepoRoot $RepoRoot
 
     $backendPython = Join-Path $BackendDir '.venv\Scripts\python.exe'
     if (-not (Test-Path -LiteralPath $backendPython -PathType Leaf)) {

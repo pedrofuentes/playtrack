@@ -11,6 +11,8 @@ $FrontendDir = Join-Path $RepoRoot 'frontend'
 $BindHost = if ($env:PLAYTRACK_HOST) { $env:PLAYTRACK_HOST } else { '127.0.0.1' }
 $BrowseHost = if ($BindHost -eq '0.0.0.0') { '127.0.0.1' } else { $BindHost }
 $AppUrl = "http://${BrowseHost}:8000"
+$WindowsTools = Join-Path $PSScriptRoot 'windows-tools.ps1'
+. $WindowsTools
 $backendProcess = $null
 
 function Get-RequiredCommand {
@@ -177,6 +179,7 @@ try {
         -Description 'npm (included with Node.js)' `
         -InstallUrl 'https://nodejs.org/en/download'
     Assert-NodeVersion -Command $node
+    Set-PlayTrackVideoToolEnvironment -RepoRoot $RepoRoot
 
     $backendPython = Join-Path $BackendDir '.venv\Scripts\python.exe'
     if (-not (Test-Path -LiteralPath $backendPython -PathType Leaf)) {

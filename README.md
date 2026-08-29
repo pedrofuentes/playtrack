@@ -36,20 +36,21 @@ Requirements:
 
 - Windows 10 or newer with a current NVIDIA driver.
 - [uv](https://docs.astral.sh/uv/getting-started/installation/), Git, and Node.js 20+.
-- `ffmpeg` and `ffprobe` on `PATH`.
 
 From PowerShell in the repository root:
 
 ```powershell
-uv python install 3.12
-uv sync --project backend --python 3.12 --extra dev
-
-backend\.venv\Scripts\python.exe scripts\fetch_models.py
+powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1
 ```
 
-`run.ps1` checks the toolchain, installs/builds the frontend when needed, starts
-PlayTrack at <http://127.0.0.1:8000>, waits for health, and opens the browser.
+`setup.ps1` installs Python 3.12, synchronizes the backend, installs frontend
+dependencies, fetches the SAM 2 checkpoint, and installs a pinned portable FFmpeg
+build under the gitignored `.tools/ffmpeg` directory. It does not require administrator
+rights or modify the system `PATH`.
+
+`run.ps1` checks the toolchain and video tools, installs/builds the frontend when
+needed, starts PlayTrack at <http://127.0.0.1:8000>, waits for health, and opens the browser.
 On Windows, uv installs CUDA (cu124) PyTorch wheels automatically; no manual torch install is needed.
 
 For development with FastAPI reload and Vite hot reload:
@@ -125,7 +126,7 @@ Defaults live in `backend/app/config.py`.
 | `PLAYTRACK_SAM2_CHECKPOINT` | base-plus checkpoint | Checkpoint override. |
 | `PLAYTRACK_SAM2_CONFIG` | base-plus config | SAM 2 model config override. |
 | `PLAYTRACK_SAM2_CROP_SIZE` | `1024` | High-resolution click-selection crop in source pixels. |
-| `PLAYTRACK_FFMPEG` / `PLAYTRACK_FFPROBE` | `ffmpeg` / `ffprobe` | Video tool binaries. |
+| `PLAYTRACK_FFMPEG` / `PLAYTRACK_FFPROBE` | `ffmpeg` / `ffprobe` | Video tool binaries. Windows launchers resolve explicit overrides first, then `PATH`, then `.tools/ffmpeg`. |
 | `PLAYTRACK_MAX_UPLOAD_BYTES` | `21474836480` | Streaming upload limit (20 GiB). |
 | `PLAYTRACK_MAX_EXPORT_WIDTH` / `PLAYTRACK_MAX_EXPORT_HEIGHT` | `4096` / `2160` | Output dimension bounds. |
 | `PLAYTRACK_MAX_EXPORT_PIXELS` | `8847360` | Output pixels per frame. |
@@ -153,7 +154,7 @@ prefer the canonical database. Legacy JSON catalogs remain intentionally ignored
 frontend/   React + Vite + TypeScript editor + generateSW PWA
 backend/    FastAPI + SAM 2 + PyAV/OpenCV
 website/    Dependency-free static product site for GitHub Pages
-scripts/    macOS/Windows launchers and model fetcher
+scripts/    macOS/Windows setup, launchers, and model fetcher
 ```
 
 HTTP routes, payloads, WebSocket protocols, smoothing compatibility keys, and runtime
