@@ -63,7 +63,7 @@ rights or modify the system `PATH`.
 
 `run.ps1` checks the toolchain and video tools, installs/builds the frontend when
 needed, starts PlayTrack at <http://127.0.0.1:8000>, waits for health, and opens the browser.
-On Windows, uv installs CUDA (cu124) PyTorch wheels automatically; no manual torch install is needed.
+On Windows, uv installs CUDA (cu132) PyTorch wheels automatically; no manual torch install is needed.
 
 For development with FastAPI reload and Vite hot reload:
 
