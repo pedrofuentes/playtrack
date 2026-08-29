@@ -140,27 +140,42 @@
       <section id="install" class="section install" aria-labelledby="install-title">
         <div class="section-heading reveal">
           <p class="eyebrow">Install from source</p>
-          <h2 id="install-title">One local app. Two supported paths.</h2>
-          <p>PlayTrack is currently a developer-friendly source install. You will need Git, Python 3.12, uv, Node.js, and FFmpeg.</p>
+          <h2 id="install-title">One local app. Three ways in.</h2>
+          <p>PlayTrack is currently a developer-friendly source install. You will need Git, uv, Node.js 20+, and FFmpeg on macOS.</p>
         </div>
         <div class="install-grid">
           <article class="code-card reveal">
             <div><span class="platform">Windows</span><span>PowerShell</span></div>
             <pre><code>git clone https://github.com/pedrofuentes/playtrack
 cd playtrack
-python scripts/fetch_models.py
-.\scripts\run.ps1</code></pre>
-            <p>The launcher checks tools, creates the backend environment, builds the frontend when needed, and opens PlayTrack.</p>
+powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1</code></pre>
+            <p>Setup installs Python 3.12, backend and frontend dependencies, the SAM 2 checkpoint, and portable FFmpeg. Run serves PlayTrack at http://127.0.0.1:8000.</p>
           </article>
           <article class="code-card reveal">
             <div><span class="platform">macOS</span><span>Terminal</span></div>
             <pre><code>git clone https://github.com/pedrofuentes/playtrack
 cd playtrack
-(cd backend &amp;&amp; uv sync --extra dev)
-(cd frontend &amp;&amp; npm install)
-python3 scripts/fetch_models.py
-scripts/dev.sh</code></pre>
+uv python install 3.12
+uv sync --project backend --python 3.12 --extra dev
+npm ci --prefix frontend
+backend/.venv/bin/python scripts/fetch_models.py
+./scripts/dev.sh</code></pre>
             <p>The development launcher runs FastAPI on port 8000 and Vite on port 5173.</p>
+          </article>
+          <article class="code-card agent-card reveal">
+            <div>
+              <span><span class="platform">Any OS</span> <span>AI coding agent</span></span>
+              <button type="button" class="copy-button" aria-live="polite">Copy prompt</button>
+            </div>
+            <pre><code>Install and run PlayTrack from https://github.com/pedrofuentes/playtrack on this machine.
+
+1. Detect my OS and check prerequisites: Git, Node.js 20+, and uv (plus FFmpeg on macOS). Tell me before installing anything missing.
+2. Clone the repository and work from the repo root.
+3. Windows: run powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1, then start the app with powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1
+4. macOS: run uv python install 3.12, then uv sync --project backend --python 3.12 --extra dev, then npm ci --prefix frontend, then backend/.venv/bin/python scripts/fetch_models.py, then start the app with ./scripts/dev.sh
+5. Wait for the server to start, confirm the page responds, and give me the URL to open (Windows: http://127.0.0.1:8000, macOS: http://127.0.0.1:5173).</code></pre>
+            <p>Prefer to delegate? Paste this prompt into Claude Code, Codex, or any AI coding agent running on the target machine. Setup downloads the SAM 2 checkpoint (about 309 MB).</p>
           </article>
         </div>
       </section>

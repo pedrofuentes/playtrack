@@ -91,6 +91,8 @@ if (errors.length === 0) {
     'Scrub to a clear frame and click the player.',
     'Windows',
     'macOS',
+    'Install and run PlayTrack from',
+    'copy-button',
   ]
   for (const text of requiredText) {
     if (!html.includes(text)) errors.push(`missing required content: ${text}`)
@@ -173,6 +175,7 @@ if (errors.length === 0) {
     errors.push('responsive images must preserve their intrinsic aspect ratio with height: auto')
   }
   if (!script.includes('IntersectionObserver')) errors.push('missing progressive reveal behavior')
+  if (!script.includes('navigator.clipboard')) errors.push('missing clipboard copy behavior')
   if (!notFound.includes('PlayTrack') || !notFound.includes('href="./"')) {
     errors.push('404 page must link back to the PlayTrack site root')
   }
