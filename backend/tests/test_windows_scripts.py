@@ -103,6 +103,19 @@ def test_docs_make_setup_the_windows_entrypoint() -> None:
     assert "scripts\\setup.ps1" in windows_quick_start
 
 
+def test_windows_docs_explain_process_scoped_execution_policy() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    windows_quick_start = readme.split("### Windows + NVIDIA CUDA", 1)[1].split(
+        "### macOS + Apple Silicon", 1
+    )[0]
+    normalized_quick_start = " ".join(windows_quick_start.split())
+
+    assert "only to the newly launched PowerShell process" in normalized_quick_start
+    assert "does not change your saved execution policy" in normalized_quick_start
+    assert "\n.\\scripts\\dev.ps1\n" in windows_quick_start
+    assert "Group Policy" in normalized_quick_start
+
+
 def test_unix_dev_script_supports_safe_network_mode() -> None:
     script = script_text("dev.sh")
 

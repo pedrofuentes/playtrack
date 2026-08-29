@@ -44,6 +44,18 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1
 ```
 
+The explicit `powershell -ExecutionPolicy Bypass -File` form works when unsigned
+local scripts would otherwise be blocked. `Bypass` applies only to the newly launched
+PowerShell process and does not change your saved execution policy. A policy enforced
+through Group Policy can still take precedence. If your current PowerShell session
+already permits local scripts, these shorter forms are equivalent:
+
+```powershell
+.\scripts\setup.ps1
+.\scripts\run.ps1
+.\scripts\dev.ps1
+```
+
 `setup.ps1` installs Python 3.12, synchronizes the backend, installs frontend
 dependencies, fetches the SAM 2 checkpoint, and installs a pinned portable FFmpeg
 build under the gitignored `.tools/ffmpeg` directory. It does not require administrator
