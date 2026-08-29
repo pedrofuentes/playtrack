@@ -331,7 +331,9 @@ def test_legacy_equal_terminal_timestamps_prune_identically_everywhere(
     # in-memory and SQLite prunes must still agree on which jobs survive.
     library = LibraryStore(tmp_path / "data")
     stamp = "2026-08-28T12:00:00+00:00"
-    identifiers = ("f" * 32, "8" * 32, "0" * 32)
+    # Ascending insertion order: SQLite's natural row order would keep the
+    # WRONG rows if the SQL prune ever lost its job_id DESC tie-break.
+    identifiers = ("0" * 32, "8" * 32, "f" * 32)
     for job_id in identifiers:
         library.save_job(
             job_id=job_id,
@@ -360,6 +362,91 @@ def test_legacy_equal_terminal_timestamps_prune_identically_everywhere(
     retained_in_sqlite = {saved["jobId"] for saved in library.load_jobs()}
 
     assert retained_in_memory == retained_in_sqlite == {"f" * 32, "8" * 32}
+
+
+def test_rehydrated_failed_job_keeps_saved_updated_at_for_pruning(
+    tmp_path: Path,
+) -> None:
+    # A job that had ALREADY failed before restart must not get a fresh
+    # updated_at in memory only — the memory and SQLite prunes would then
+    # tie-break tied terminal timestamps differently.
+    library = LibraryStore(tmp_path / "data")
+    stamp = "2026-08-28T12:00:00+00:00"
+    rows = (
+        ("0" * 32, "failed"),
+        ("8" * 32, "completed"),
+        ("f" * 32, "completed"),
+    )
+    for job_id, state in rows:
+        library.save_job(
+            job_id=job_id,
+            kind="track",
+            state=state,
+            progress=1.0,
+            message="Done",
+            track=[],
+            resources=[],
+            version=1,
+            created_at=stamp,
+            updated_at=stamp,
+            terminal_at=stamp,
+        )
+
+    restarted = JobRegistry(library=library, terminal_retention=2)
+
+    retained_in_memory = set()
+    for job_id, _state in rows:
+        try:
+            restarted.get(job_id)
+        except JobNotFoundError:
+            pass
+        else:
+            retained_in_memory.add(job_id)
+    retained_in_sqlite = {saved["jobId"] for saved in library.load_jobs()}
+
+    assert retained_in_memory == retained_in_sqlite == {"f" * 32, "8" * 32}
+
+
+def test_monotonic_terminal_clock_survives_backward_wall_clock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A saved terminal timestamp ahead of the wall clock (clock step, other
+    # machine) must still yield strictly increasing new terminal timestamps.
+    library = LibraryStore(tmp_path / "data")
+    future = "2026-08-28T13:00:00.000000+00:00"
+    library.save_job(
+        job_id="a" * 32,
+        kind="track",
+        state="completed",
+        progress=1.0,
+        message="Done",
+        track=[],
+        resources=[],
+        version=1,
+        created_at=future,
+        updated_at=future,
+        terminal_at=future,
+    )
+    library.save_job(
+        job_id="b" * 32,
+        kind="track",
+        state="running",
+        progress=0.5,
+        message="Tracking",
+        track=[],
+        resources=[],
+        version=1,
+        created_at=future,
+        updated_at=future,
+        terminal_at=None,
+    )
+    monkeypatch.setattr(jobs_module, "_now", lambda: "2026-08-28T12:00:00+00:00")
+
+    restarted = JobRegistry(library=library)
+
+    assert restarted.get("b" * 32).state == "failed"
+    saved = {row["jobId"]: row for row in library.load_jobs()}
+    assert saved["b" * 32]["terminalAt"] == "2026-08-28T13:00:00.000001+00:00"
 
 
 def test_terminal_jobs_rehydrate_from_sqlite(tmp_path: Path) -> None:

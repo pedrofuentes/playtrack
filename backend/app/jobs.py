@@ -140,7 +140,8 @@ class JobRegistry:
         self._condition = threading.Condition(threading.RLock())
         self._closed = False
         self._last_terminal_at: datetime | None = None
-        self._rehydrate()
+        with self._condition:
+            self._rehydrate()
 
     def submit(
         self,
@@ -661,7 +662,8 @@ class JobRegistry:
                 "canceled",
             }:
                 continue
-            if state in ("queued", "running"):
+            interrupted = state in ("queued", "running")
+            if interrupted:
                 state = "failed"
                 message = "Interrupted by backend restart"
                 terminal_at = self._next_terminal_at_locked(now)
@@ -682,11 +684,11 @@ class JobRegistry:
                 version=version,
                 resources=resources,
                 created_at=str(saved["createdAt"]),
-                updated_at=now if state == "failed" else str(saved["updatedAt"]),
+                updated_at=now if interrupted else str(saved["updatedAt"]),
                 terminal_at=terminal_at,
             )
             self._jobs[job.job_id] = job
-            if saved["state"] in ("queued", "running"):
+            if interrupted:
                 self._persist_locked(job)
         self._enforce_retention_locked()
 
