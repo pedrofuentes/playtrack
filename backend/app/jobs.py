@@ -634,7 +634,7 @@ class JobRegistry:
     def _enforce_retention_locked(self) -> None:
         terminal = sorted(
             (job for job in self._jobs.values() if job.state in _TERMINAL_STATES),
-            key=lambda job: job.terminal_at or "",
+            key=lambda job: (job.terminal_at or "", job.updated_at, job.job_id),
             reverse=True,
         )
         for job in terminal[self._terminal_retention :]:

@@ -986,7 +986,7 @@ class LibraryStore:
                 """
                 SELECT job_id FROM jobs
                 WHERE state IN ('completed', 'failed', 'canceled')
-                ORDER BY terminal_at DESC
+                ORDER BY terminal_at DESC, updated_at DESC, job_id DESC
                 LIMIT -1 OFFSET ?
                 """,
                 (retention,),
