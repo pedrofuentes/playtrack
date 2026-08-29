@@ -186,8 +186,9 @@ the local FastAPI server is required and offer retry when it is unreachable.
   and raising `TRACKING_MAX_DIM` to 4096 does not fix it (verified on the example at
   ~frame 650). The real fix is the planned multi-anchor splicing feature.
 - The macOS `av`/`cv2` duplicate-dylib objc warning on export is benign noise.
-- Full-video tracking takes ~20 min on Apple Silicon (930 frames) — design UX and tests
-  accordingly; CI-scale tests must use short synthetic clips.
+- Full-video tracking takes ~20 min on Apple Silicon and ~3–4 min on the RTX 2080 Ti
+  (930 frames) — design UX and tests accordingly; CI-scale tests must use short
+  synthetic clips.
 
 ## Status and open work
 

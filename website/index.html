@@ -184,7 +184,7 @@ scripts/dev.sh</code></pre>
           <h2 id="limitations-title">Honest constraints beat surprise failures.</h2>
         </div>
         <div class="limit-grid">
-          <article class="reveal"><h3>Tracking is compute-heavy</h3><p>The 930-frame example takes about 20 minutes on Apple Silicon. Short ranges are the fastest way to iterate.</p></article>
+          <article class="reveal"><h3>Tracking is compute-heavy</h3><p>The 930-frame example takes about 3 minutes on an RTX 2080 Ti&mdash;versus about 20 minutes on Apple Silicon. Short ranges are still the fastest way to iterate.</p></article>
           <article class="reveal"><h3>Collisions can switch identity</h3><p>When players overlap, SAM 2 can emerge following the wrong person without reporting lost frames. Multi-anchor splicing is the planned fix.</p></article>
           <article class="reveal"><h3>Local means unauthenticated</h3><p>The default binds to localhost. LAN exposure has origin and host checks but no login; do not expose it to the public internet.</p></article>
           <article class="reveal"><h3>Bring your own footage</h3><p>No source video ships with PlayTrack. Use footage you are authorized to process and share.</p></article>
