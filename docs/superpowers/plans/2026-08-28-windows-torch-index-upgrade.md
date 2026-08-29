@@ -14,7 +14,8 @@
 
 **Attempt log:**
 - Attempt 1 (2026-08-28): reverted at Task 5 Step 1 — a false gate failure. The pytest run reported `279 skipped` in 2.15 s because `ffmpeg`/`ffprobe` were not on `PATH` in that console: `backend/tests/conftest.py` has a session-scoped autouse fixture that skips EVERY test when `shutil.which("ffmpeg")` fails. The run was also started from the repo root, so pytest never loaded `backend/pyproject.toml` (hence the `Unknown pytest.mark.integration` warnings). Neither is a torch problem. Everything before that gate PASSED: driver 610.74, cu132 discovered as winner, lock re-pointed cleanly (no cu124 remnants, macOS tree unchanged, sympy fork unified, no new transitives), and the GPU canary fully passed on the 2080 Ti (`sm_75` in arch list, SDPA ok, GEMM ok). Task 0/2 fixes below prevent a recurrence.
-- Attempt 2 shortcuts: reuse the recorded Task 1 baseline verbatim (request `{"videoId":"394e1b8fc8944415a1f0dc274761a573","frameIdx":602,"x":1250,"y":825}`, score `0.79443359375`, box `[738,709,1762,1020]`) — do NOT redo Task 1. Task 2's discovery stands (`cu132`); re-running it is optional. Redo Tasks 3–6 in full: the revert restored `pyproject.toml`/`uv.lock`, so the re-point and re-lock must happen again (uv's cache makes the downloads fast). Before branching, refresh the branch from origin/main: `git -C $RepoRoot switch main`, `git -C $RepoRoot pull`, `git -C $RepoRoot branch -D fix/windows-torch-index-upgrade`, then branch as in Global Constraints.
+- Attempt 2 (2026-08-28): reverted at Task 5 Step 4's visual gate — again a false failure, this time caused by attempt 1's baseline itself. The click `(1250, 825)` on frame 602 had selected the LOWER BOARDS, not a player: its box `[738,709,1762,1020]` is 1024×311 px in footage where players are ~60–100 px tall. SAM2 then correctly tracked that static structure (center-x travel ~16 px over 930 frames) and the export correctly framed it — the "static crop" was faithful tracking of a bad anchor. That baseline is VOID; Task 1 below now prescribes a verified player anchor with objective gates. Every torch gate PASSED on cu132: suite 269 passed / 10 skipped, selection score delta +0.00049 vs cu124 with an identical box, full track 3m22.8s / peak 4783 MiB with the guard firing before frame loading, clean h264+aac export metadata.
+- Attempt 3 shortcuts: Task 2's discovery stands (`cu132`; re-running optional). REDO Task 1 with the new anchor procedure below on the current reverted cu124 environment, then Tasks 3–6 in full. Refresh the branch from origin/main first: `git -C $RepoRoot switch main`, `git -C $RepoRoot pull`, `git -C $RepoRoot branch -D fix/windows-torch-index-upgrade`, then branch as in Global Constraints.
 
 ## Background
 
@@ -112,7 +113,17 @@ Gate: both commands resolve and print a version. If not, run `scripts\setup.ps1`
 
 This is the reproducible acceptance anchor for Task 5 — capture it before anything changes.
 
-- [ ] **Step 1**: Start the backend (`powershell -ExecutionPolicy Bypass -File (Join-Path $RepoRoot 'scripts\run.ps1')` in a second console), then run ONE click selection through the API on the 930-frame example video: record the exact `videoId`, `frameIdx`, `x`, `y` you used, and the returned `box` and `score`. Save the exact request JSON to reuse verbatim in Task 5.
+- [ ] **Step 1**: Start the backend (`powershell -ExecutionPolicy Bypass -File (Join-Path $RepoRoot 'scripts\run.ps1')` in a second console), then run ONE click selection through the API on the 930-frame example video, using this exact anchor:
+
+```json
+{"videoId": "<your registered id>", "frameIdx": 602, "x": 1092, "y": 716}
+```
+
+Provenance: `(1092, 716)` is the center of anchor box `[1055,673,1129,759]` from the known-good 117-frame July library track on this same footage (anchor frame 602), verified visually on 2026-08-28 to sit on the black-jersey player #66. Coordinates are source pixels of the 4096×1024 video, so they transfer between machines.
+
+Selection gate (objective): the returned box must be player-sized — **width ≤ 200 px AND height ≤ 200 px** (attempt 1's boards box was 1024×311; expect roughly 40–120 px per side). If oversized, retry with ±10 px jitter around the anchor; if still failing, fall back to anchor frame 0 at `(1476, 621)` (center of the first box of the known-good full-930-frame track). An oversized box is an anchor failure to fix and retry — never a reason to revert.
+
+Record the exact request JSON and the returned `box` and `score`; Task 5 reuses the request verbatim.
 - [ ] **Step 2**: Stop that backend (its own console, Ctrl+C; verify port 8000 is free again).
 
 ---
@@ -262,13 +273,15 @@ Send the exact Task 1 request. Gate: score within ±0.05 of the baseline and the
 
 With both offload vars still unset (the guard is silent otherwise — see Background): start the track; watch the backend log for the `SAM2 safety guard: ... enabling CPU offload` line BEFORE SAM2's `frame loading (JPEG)` output; `nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv -l 5` is observation only. If frame loading starts without the warning: `Stop-Process -Id <recorded PID> -Force`, then confirm with `nvidia-smi` that GPU memory returned to baseline. Expected healthy: peak ~4–5.5 GB, ~3–4.5 minutes. Record wall-clock and peak VRAM.
 
+After completion, fetch the saved track and compute the movement gate: `max(center.x) - min(center.x)` across the 930 frames must be **≥ 300 px**. Calibration on this footage: a real player track travels ~1884 px; attempt 2's static boards track traveled ~16 px. A static track means the anchor failed — redo Task 1's selection gate and retry the track; it is NOT a torch failure and never a reason to revert.
+
 - [ ] **Step 4: Export and inspect**
 
 Export the completed track; then:
 ```powershell
 ffprobe -v error -show_entries stream=codec_name,width,height,nb_frames -of default=noprint_wrappers=1 (Join-Path $RepoRoot 'exports\<job_id>.mp4')
 ```
-Gate: h264 at the requested dimensions, 930 video frames, audio stream present; open it and visually confirm the crop follows the tracked player.
+Gate: h264 at the requested dimensions, 930 video frames, audio stream present; open it and visually confirm the crop moves with play and follows the selected player. Known expected behavior on this footage (documented cu124 behavior — see AGENTS.md pitfalls): around frame ~650 two players collide and the track may exit the collision following the WRONG player, with zero `lost` frames. If that reproduces on cu132 it is behavioral parity — a pass, not a failure. This gate exists to catch a crop that ignores the players entirely or diverges from the saved track boxes.
 
 - [ ] **Step 5: Frontend and website gates** (AGENTS.md requires them before claiming done):
 
