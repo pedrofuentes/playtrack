@@ -95,7 +95,7 @@ class ClickSelector:
             ) from exc
 
         with Image.open(extracted.path) as source_image:
-            rgb_image = np.asarray(source_image.convert("RGB"))
+            rgb_image = np.array(source_image.convert("RGB"), copy=True)
         try:
             prediction = self.engine_provider().predict(
                 rgb_image, crop_point[0], crop_point[1]
