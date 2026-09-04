@@ -105,7 +105,7 @@ export function WorkspaceShell({
         <div className="topbar-actions">
           <span className="shortcut-hint">Ctrl/⌘ K</span>
           <label className={`button secondary${openingDisabled ? ' is-disabled' : ''}`}>
-            Open video
+            Upload video
             <input
               className="sr-only"
               type="file"

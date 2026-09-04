@@ -20,8 +20,6 @@ import { useWorkspaceShortcuts } from './hooks/useWorkspaceShortcuts'
 import { frameRangeCount } from './frameRange'
 import { summarizeTrack } from './trackHealth'
 
-const EXAMPLE_PATH = 'examples/example.mp4'
-
 export default function App() {
   const workspace = useWorkspace()
   const [surface, setSurface] = useState<WorkspaceSurface>('editor')
@@ -103,6 +101,7 @@ export default function App() {
       backendUnavailable={workspace.backendUnavailable}
       onUpload={workspace.openUpload}
       onOpenPath={workspace.openPath}
+      onRetryConnection={workspace.retryConnection}
     />
   )
 
@@ -135,8 +134,8 @@ export default function App() {
   ) : (
     <section className="empty-inspector">
       <p className="section-label">Get started</p>
-      <h2>Open a video</h2>
-      <p>Choose panoramic sports footage to begin selecting and tracking a player.</p>
+      <h2>Upload a video</h2>
+      <p>Choose a video to begin selecting and tracking a player.</p>
     </section>
   )
 
@@ -175,18 +174,21 @@ export default function App() {
       timeline={timeline}
       library={(
         <div className="library-drawer-content">
-          <OpenVideoPanel
-            variant="drawer"
-            disabled={workspace.loading || workspace.videoSwitchLocked}
-            onUpload={async (file, name) => {
-              await workspace.openUpload(file, name)
-              setSurface('editor')
-            }}
-            onOpenPath={async (path, name) => {
-              await workspace.openPath(path, name)
-              setSurface('editor')
-            }}
-          />
+          <details className="library-upload-disclosure">
+            <summary>Upload a new video</summary>
+            <OpenVideoPanel
+              variant="drawer"
+              disabled={workspace.loading || workspace.videoSwitchLocked}
+              onUpload={async (file, name) => {
+                await workspace.openUpload(file, name)
+                setSurface('editor')
+              }}
+              onOpenPath={async (path, name) => {
+                await workspace.openPath(path, name)
+                setSurface('editor')
+              }}
+            />
+          </details>
           <LibraryPanel
             library={workspace.library}
             openingDisabled={workspace.loading || workspace.videoSwitchLocked}
@@ -226,9 +228,18 @@ interface EmptyWorkspaceProps {
   backendUnavailable: boolean
   onUpload: (file: File, name?: string) => Promise<void>
   onOpenPath: (path: string, name?: string) => Promise<void>
+  onRetryConnection: () => Promise<void>
 }
 
-function EmptyWorkspace({ loading, loadingLabel, error, backendUnavailable, onUpload, onOpenPath }: EmptyWorkspaceProps) {
+function EmptyWorkspace({
+  loading,
+  loadingLabel,
+  error,
+  backendUnavailable,
+  onUpload,
+  onOpenPath,
+  onRetryConnection,
+}: EmptyWorkspaceProps) {
   if (loading) return <div className="empty-workspace"><div className="activity-spinner" /><p>{loadingLabel}</p></div>
   if (backendUnavailable) {
     return (
@@ -237,17 +248,16 @@ function EmptyWorkspace({ loading, loadingLabel, error, backendUnavailable, onUp
         <h1>PlayTrack server is offline</h1>
         <p>Start the local PlayTrack server, then retry. The installed app shell works offline, but video processing always runs on your computer.</p>
         <code>scripts/dev.sh</code>
-        <button type="button" className="primary-action" onClick={() => void onOpenPath(EXAMPLE_PATH)}>Retry connection</button>
+        <button type="button" className="primary-action" onClick={() => void onRetryConnection()}>Retry connection</button>
       </div>
     )
   }
   return (
     <div className="empty-workspace">
       <div className="empty-symbol" aria-hidden="true">＋</div>
-      <h1>{error ? 'Could not open video' : 'Open panoramic footage'}</h1>
-      <p>{error ?? 'Drop in a sports video and turn it into a player-following virtual camera.'}</p>
+      <h1>{error ? 'Could not add video' : 'Upload a video'}</h1>
+      <p>{error ?? 'Drop in footage and turn it into a player-following virtual camera.'}</p>
       <OpenVideoPanel disabled={false} variant="empty" onUpload={onUpload} onOpenPath={onOpenPath} />
-      {error && <button type="button" className="secondary-action" onClick={() => void onOpenPath(EXAMPLE_PATH)}>Retry example</button>}
     </div>
   )
 }
@@ -275,7 +285,9 @@ export function JobPanel({ trackJob, exportJob, frameCount, activeJobs }: {
           <strong className="job-percentage">{Math.round(job.progress * 100)}%</strong>
           <progress max={1} value={job.progress} />
           <p>{job.message}</p>
-          {!exportJob && frameCount > 0 && <span>{Math.round(job.progress * frameCount)} / {frameCount} frames</span>}
+          {!exportJob && frameCount > 0 && (
+            <span>{Math.min(frameCount, trackJob?.track.length ?? 0)} / {frameCount} frames</span>
+          )}
         </section>
       )}
       {elsewhere.map((entry) => (

@@ -121,6 +121,13 @@ interface WebSocketLocation {
   host: string
 }
 
+export async function checkHealth(): Promise<void> {
+  const response = await fetch('/api/health')
+  if (!response.ok) {
+    throw new Error(`PlayTrack server is unavailable (${response.status})`)
+  }
+}
+
 export async function registerVideo(path: string, name?: string): Promise<VideoMetadata> {
   const trimmedName = name?.trim()
   const response = await fetch('/api/videos', {

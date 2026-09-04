@@ -9,6 +9,7 @@ import { type ExportPanelHandle, ExportPanel } from '../components/ExportPanel'
 import { type WorkspaceController, useWorkspace } from './useWorkspace'
 
 const apiMocks = vi.hoisted(() => ({
+  checkHealth: vi.fn(),
   clearFrameCaches: vi.fn(),
   fetchCropPlan: vi.fn(),
   getLibrary: vi.fn(),
@@ -91,7 +92,7 @@ function Harness() {
   return null
 }
 
-async function mountController() {
+async function mountController({ openVideo = true } = {}) {
   const container = document.createElement('div')
   document.body.append(container)
   const root = createRoot(container)
@@ -100,12 +101,18 @@ async function mountController() {
     await Promise.resolve()
     await Promise.resolve()
   })
+  if (openVideo) {
+    await act(async () => {
+      await controller?.openPath('examples/example.mp4')
+    })
+  }
   return root
 }
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   controller = null
+  apiMocks.checkHealth.mockResolvedValue(undefined)
   apiMocks.getLibrary.mockResolvedValue({ videos: [], cacheBytes: 0 })
   apiMocks.listJobs.mockResolvedValue([])
   apiMocks.registerVideo.mockResolvedValue(video)
@@ -131,6 +138,18 @@ afterEach(() => {
 })
 
 describe('useWorkspace', () => {
+  it('starts empty while checking the backend and loading library data', async () => {
+    const root = await mountController({ openVideo: false })
+
+    expect(apiMocks.checkHealth).toHaveBeenCalledOnce()
+    expect(apiMocks.getLibrary).toHaveBeenCalledOnce()
+    expect(apiMocks.listJobs).toHaveBeenCalledOnce()
+    expect(apiMocks.registerVideo).not.toHaveBeenCalled()
+    expect(controller?.video).toBeNull()
+    expect(controller?.loading).toBe(false)
+    await act(async () => root.unmount())
+  })
+
   it('surfaces active jobs the server is running that this page did not start', async () => {
     const foreign = {
       jobId: 'track-elsewhere',
@@ -176,12 +195,48 @@ describe('useWorkspace', () => {
   })
 
   it('reports a distinct backend-unavailable state for network startup failures', async () => {
-    apiMocks.registerVideo.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    apiMocks.checkHealth.mockRejectedValueOnce(new TypeError('Failed to fetch'))
 
-    const root = await mountController()
+    const root = await mountController({ openVideo: false })
 
     expect(controller?.backendUnavailable).toBe(true)
     expect(controller?.openError).toBe('The PlayTrack server is not responding.')
+    await act(async () => root.unmount())
+  })
+
+  it('ignores a stale startup health failure after an upload succeeds', async () => {
+    const health = deferred<void>()
+    apiMocks.checkHealth.mockReturnValueOnce(health.promise)
+    const root = await mountController({ openVideo: false })
+
+    await act(async () => {
+      await controller?.openUpload(new File(['video'], 'match.mp4', { type: 'video/mp4' }))
+    })
+    await act(async () => {
+      health.reject(new TypeError('Failed to fetch'))
+      await Promise.resolve()
+    })
+
+    expect(controller?.video).toEqual(video)
+    expect(controller?.backendUnavailable).toBe(false)
+    expect(controller?.openError).toBeNull()
+    await act(async () => root.unmount())
+  })
+
+  it('retries backend connectivity without opening the example video', async () => {
+    apiMocks.checkHealth
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(undefined)
+    const root = await mountController({ openVideo: false })
+
+    await act(async () => {
+      await controller?.retryConnection()
+    })
+
+    expect(apiMocks.checkHealth).toHaveBeenCalledTimes(2)
+    expect(apiMocks.registerVideo).not.toHaveBeenCalled()
+    expect(controller?.backendUnavailable).toBe(false)
+    expect(controller?.openError).toBeNull()
     await act(async () => root.unmount())
   })
 

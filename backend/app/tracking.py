@@ -31,6 +31,8 @@ class TrackFrame:
 
 
 PropagationDirection = Literal["forward", "backward"]
+_FRAME_LOADING_PROGRESS_WEIGHT = 0.1
+FrameLoadProgress = Callable[[int, int], None]
 
 
 class VideoPropagationEngine(Protocol):
@@ -41,10 +43,11 @@ class VideoPropagationEngine(Protocol):
         box: tuple[int, int, int, int],
         *,
         directions: tuple[PropagationDirection, ...],
+        on_frame_load: FrameLoadProgress | None = None,
     ) -> object: ...
 
 
-TrackUpdate = Callable[[float, str, TrackFrame], None]
+TrackUpdate = Callable[[float, str, TrackFrame | None], None]
 
 
 def persist_completed_track(
@@ -204,11 +207,23 @@ class VideoTracker:
             )
             for direction in directions
         }
+
+        def report_frame_load(completed: int, total: int) -> None:
+            if on_update is None or total <= 0:
+                return
+            bounded_completed = min(max(completed, 0), total)
+            on_update(
+                _FRAME_LOADING_PROGRESS_WEIGHT * bounded_completed / total,
+                f"Loading frames {bounded_completed} of {total}",
+                None,
+            )
+
         propagation = engine.propagate_directions(
             sequence.path,
             local_anchor_frame_idx,
             tracking_box,
             directions=directions,
+            on_frame_load=report_frame_load if on_update is not None else None,
         )
         try:
             for direction, observed_local_idx, mask in propagation:
@@ -229,7 +244,10 @@ class VideoTracker:
                 merged[observed_source_idx] = frame
                 if on_update is not None:
                     on_update(
-                        len(merged) / total_frames,
+                        _FRAME_LOADING_PROGRESS_WEIGHT
+                        + (1.0 - _FRAME_LOADING_PROGRESS_WEIGHT)
+                        * len(merged)
+                        / total_frames,
                         f"Tracking {direction}",
                         frame,
                     )

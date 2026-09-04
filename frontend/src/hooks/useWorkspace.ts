@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   cancelJob,
+  checkHealth,
   clearFrameCaches,
   type ClickSelection,
   type CropWindow,
@@ -29,8 +30,8 @@ import {
 } from '../frameRange'
 import { isJobActive, type WorkspaceStage, workspaceStage } from '../workflow'
 
-const EXAMPLE_PATH = 'examples/example.mp4'
 const ACTIVE_JOB_POLL_MS = 2000
+const BACKEND_UNAVAILABLE_MESSAGE = 'The PlayTrack server is not responding.'
 
 export interface WorkspaceController {
   video: VideoMetadata | null
@@ -62,6 +63,7 @@ export interface WorkspaceController {
   openPath(path: string, name?: string): Promise<void>
   openLibraryVideo(video: LibraryVideo): Promise<void>
   openLibraryPlayer(video: LibraryVideo, player: LibraryTrack): Promise<boolean>
+  retryConnection(): Promise<void>
   refreshLibrary(): void
   selectAt(point: Point, frameIdx: number): void
   setPlayerName(name: string): void
@@ -104,8 +106,8 @@ export function useWorkspace(): WorkspaceController {
   const [exportStarting, setExportStarting] = useState(false)
   const [trackStartedAt, setTrackStartedAt] = useState<number | null>(null)
   const [cropWindows, setCropWindowsState] = useState<CropWindow[]>([])
-  const [loading, setLoading] = useState(true)
-  const [loadingLabel, setLoadingLabel] = useState(`Opening ${EXAMPLE_PATH}…`)
+  const [loading, setLoading] = useState(false)
+  const [loadingLabel, setLoadingLabel] = useState('')
   const [openError, setOpenError] = useState<string | null>(null)
   const [backendUnavailable, setBackendUnavailable] = useState(false)
   const [framing, setFraming] = useState(false)
@@ -115,6 +117,7 @@ export function useWorkspace(): WorkspaceController {
   const trackJobRef = useRef(trackJob)
   trackJobRef.current = trackJob
   const openGeneration = useRef(0)
+  const connectionProbeGeneration = useRef(0)
   const exportSubmissionCounter = useRef(0)
   const exportSubmissionToken = useRef<number | null>(null)
   const rangeRef = useRef(range)
@@ -211,7 +214,7 @@ export function useWorkspace(): WorkspaceController {
       setBackendUnavailable(unavailable)
       setOpenError(
         unavailable
-          ? 'The PlayTrack server is not responding.'
+          ? BACKEND_UNAVAILABLE_MESSAGE
           : reason instanceof Error ? reason.message : `Could not open ${fallbackName}`,
       )
     } finally {
@@ -312,11 +315,46 @@ export function useWorkspace(): WorkspaceController {
     }
   }, [])
 
+  const probeConnection = useCallback(async (showActivity: boolean) => {
+    const openGenerationAtStart = openGeneration.current
+    const probeGeneration = ++connectionProbeGeneration.current
+    const isCurrent = () => (
+      openGenerationAtStart === openGeneration.current
+      && probeGeneration === connectionProbeGeneration.current
+    )
+    if (showActivity) {
+      loadingRef.current = true
+      setLoading(true)
+      setLoadingLabel('Checking PlayTrack server…')
+    }
+    try {
+      await checkHealth()
+      if (!isCurrent()) return
+      setBackendUnavailable(false)
+      setOpenError((current) => (
+        current === BACKEND_UNAVAILABLE_MESSAGE ? null : current
+      ))
+      if (showActivity) {
+        refreshLibrary()
+        void refreshActiveJobs()
+      }
+    } catch {
+      if (!isCurrent()) return
+      setBackendUnavailable(true)
+      setOpenError(BACKEND_UNAVAILABLE_MESSAGE)
+    } finally {
+      if (showActivity && isCurrent()) {
+        loadingRef.current = false
+        setLoading(false)
+      }
+    }
+  }, [refreshActiveJobs, refreshLibrary])
+
   useEffect(() => {
-    void openPath(EXAMPLE_PATH)
+    void probeConnection(false)
     refreshLibrary()
     void refreshActiveJobs()
-  }, [openPath, refreshActiveJobs, refreshLibrary])
+  }, [probeConnection, refreshActiveJobs, refreshLibrary])
 
   // Poll only while the server reports work in flight, so an idle page is silent.
   useEffect(() => {
@@ -330,6 +368,7 @@ export function useWorkspace(): WorkspaceController {
 
   useEffect(() => () => {
     openGeneration.current += 1
+    connectionProbeGeneration.current += 1
     selectionRequest.current?.abort()
     trackSocket.current?.close()
   }, [])
@@ -527,6 +566,7 @@ export function useWorkspace(): WorkspaceController {
     openPath,
     openLibraryVideo,
     openLibraryPlayer,
+    retryConnection: () => probeConnection(true),
     refreshLibrary,
     selectAt,
     setPlayerName,
@@ -549,7 +589,7 @@ export function useWorkspace(): WorkspaceController {
     activeJobs, beginExportSubmission, clearCaches, cropWindows, currentFrame,
     exportJob, exportStarting, finishExportSubmission,
     framing, library, loading, loadingLabel, openError, openLibraryPlayer,
-    openLibraryVideo, openPath, openUpload, range, refreshLibrary, resetRange, resetSelection,
+    openLibraryVideo, openPath, openUpload, probeConnection, range, refreshLibrary, resetRange, resetSelection,
     playerName, selectAt, selection, selectionError,
     selectionLoading, setPlayerName, setRange, setRangeIn, setRangeOut, stage, startTrack, cancelTrack, trackError, trackJob, trackMessage,
     trackStartedAt, trackStarting, video, videoName, videoSwitchLocked,

@@ -40,6 +40,30 @@ def test_registry_runs_worker_and_keeps_sorted_partial_track() -> None:
     assert snapshot.version >= 4
 
 
+def test_registry_reports_progress_without_adding_a_track_frame() -> None:
+    registry = JobRegistry()
+    reported = threading.Event()
+    release = threading.Event()
+
+    def worker(report: object) -> list[TrackFrame]:
+        report(0.05, "Loading frames 1 of 20", None)
+        reported.set()
+        assert release.wait(timeout=2)
+        return []
+
+    job_id = registry.submit(worker)
+    assert reported.wait(timeout=2)
+
+    loading = registry.get(job_id)
+    assert loading.state == "running"
+    assert loading.progress == 0.05
+    assert loading.message == "Loading frames 1 of 20"
+    assert loading.track == ()
+
+    release.set()
+    assert registry.wait_until_terminal(job_id, timeout=2).state == "completed"
+
+
 def test_registry_uses_playtrack_worker_names() -> None:
     registry = JobRegistry()
     started = threading.Event()

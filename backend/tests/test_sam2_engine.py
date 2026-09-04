@@ -370,6 +370,27 @@ class RecordingVideoPredictor:
         state.pop("tracking", None)
 
 
+class LoadingVideoPredictor(RecordingVideoPredictor):
+    def init_state(
+        self,
+        *,
+        video_path: str,
+        offload_video_to_cpu: bool,
+        offload_state_to_cpu: bool,
+    ) -> dict[str, object]:
+        from sam2.utils import misc as sam2_misc
+
+        for _index in sam2_misc.tqdm(
+            range(3), desc="frame loading (JPEG)", disable=True
+        ):
+            pass
+        return super().init_state(
+            video_path=video_path,
+            offload_video_to_cpu=offload_video_to_cpu,
+            offload_state_to_cpu=offload_state_to_cpu,
+        )
+
+
 class RecordingCudaMemory:
     def __init__(self, free_bytes: int) -> None:
         self.free_bytes = free_bytes
@@ -428,6 +449,77 @@ def test_cuda_propagation_wires_offload_into_init_state(
         "offload_video_to_cpu": True,
         "offload_state_to_cpu": True,
     }
+
+
+def test_video_engine_reports_each_sam2_frame_loaded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sam2.utils import misc as sam2_misc
+
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    for index in range(3):
+        (frames / f"{index:05d}.jpg").write_bytes(b"")
+    engine = SAM2VideoEngine(tmp_path / "missing.pt", "cfg")
+    engine._predictor = LoadingVideoPredictor()
+    engine._profile = DeviceProfile("cpu", None, "small", None)
+    monkeypatch.setattr(
+        SAM2Engine,
+        "_import_torch",
+        staticmethod(lambda: fake_video_torch(0)),
+    )
+    original_tqdm = sam2_misc.tqdm
+    updates: list[tuple[int, int]] = []
+
+    assert list(
+        engine.propagate_directions(
+            frames,
+            0,
+            (10, 10, 20, 20),
+            directions=("forward",),
+            on_frame_load=lambda completed, total: updates.append((completed, total)),
+        )
+    ) == []
+
+    assert updates == [(1, 3), (2, 3), (3, 3)]
+    assert sam2_misc.tqdm is original_tqdm
+
+
+def test_video_engine_restores_sam2_progress_when_loading_callback_stops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sam2.utils import misc as sam2_misc
+
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    for index in range(3):
+        (frames / f"{index:05d}.jpg").write_bytes(b"")
+    engine = SAM2VideoEngine(tmp_path / "missing.pt", "cfg")
+    engine._predictor = LoadingVideoPredictor()
+    engine._profile = DeviceProfile("cpu", None, "small", None)
+    monkeypatch.setattr(
+        SAM2Engine,
+        "_import_torch",
+        staticmethod(lambda: fake_video_torch(0)),
+    )
+    original_tqdm = sam2_misc.tqdm
+
+    def stop_loading(completed: int, _total: int) -> None:
+        if completed == 2:
+            raise RuntimeError("cancel loading")
+
+    with pytest.raises(RuntimeError, match="cancel loading"):
+        list(
+            engine.propagate_directions(
+                frames,
+                0,
+                (10, 10, 20, 20),
+                directions=("forward",),
+                on_frame_load=stop_loading,
+            )
+        )
+
+    assert sam2_misc.tqdm is original_tqdm
 
 
 def test_bidirectional_propagation_reuses_frames_and_clears_state(

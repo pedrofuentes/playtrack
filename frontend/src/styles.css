@@ -309,6 +309,10 @@ progress { width: 100%; height: 0.45rem; accent-color: var(--mint); }
 .drawer-content { padding: 0.85rem; }
 
 .library-drawer-content { display: grid; gap: 1rem; }
+.library-upload-disclosure { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); }
+.library-upload-disclosure > summary { padding: 0.7rem 0.8rem; color: #c8d0d8; font-size: 0.72rem; font-weight: 750; cursor: pointer; }
+.library-upload-disclosure[open] > summary { border-bottom: 1px solid var(--border); }
+.library-upload-disclosure > .open-video-panel { padding: 0.8rem; }
 .open-video-panel { display: grid; gap: 0.7rem; }
 .open-video-panel.is-dragging { border-color: var(--amber) !important; background: rgba(241, 194, 78, 0.08) !important; }
 .open-video-panel .label { margin: 0; }

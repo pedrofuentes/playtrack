@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from inspect import signature
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Callable
 
 import numpy as np
 import pytest
@@ -100,6 +101,7 @@ class FakeVideoEngine:
         box: tuple[int, int, int, int],
         *,
         directions: tuple[str, ...],
+        on_frame_load: Callable[[int, int], None] | None = None,
     ) -> object:
         assert frame_directory == Path("/tmp/tracking-frames")
         self.calls.append((anchor_frame_idx, box, directions))
@@ -188,6 +190,7 @@ class RangeVideoEngine:
         box: tuple[int, int, int, int],
         *,
         directions: tuple[str, ...],
+        on_frame_load: Callable[[int, int], None] | None = None,
     ) -> object:
         self.calls.append((anchor_frame_idx, box, directions))
         for direction in directions:
@@ -241,6 +244,7 @@ class TinyMaskEngine(FakeVideoEngine):
         box: tuple[int, int, int, int],
         *,
         directions: tuple[str, ...],
+        on_frame_load: Callable[[int, int], None] | None = None,
     ) -> object:
         self.calls.append((anchor_frame_idx, box, directions))
         for direction in directions:
@@ -291,6 +295,7 @@ class ClosingVideoEngine(FakeVideoEngine):
         box: tuple[int, int, int, int],
         *,
         directions: tuple[str, ...],
+        on_frame_load: Callable[[int, int], None] | None = None,
     ) -> object:
         try:
             yield "forward", anchor_frame_idx, rectangle_mask(
@@ -327,3 +332,57 @@ def test_tracker_closes_engine_iterator_when_progress_reporting_stops() -> None:
         )
 
     assert engine.closed is True
+
+
+class LoadingVideoEngine(FakeVideoEngine):
+    def propagate_directions(
+        self,
+        frame_directory: Path,
+        anchor_frame_idx: int,
+        box: tuple[int, int, int, int],
+        *,
+        directions: tuple[str, ...],
+        on_frame_load: Callable[[int, int], None] | None = None,
+    ) -> object:
+        assert on_frame_load is not None
+        on_frame_load(1, 5)
+        on_frame_load(5, 5)
+        yield from super().propagate_directions(
+            frame_directory,
+            anchor_frame_idx,
+            box,
+            directions=directions,
+            on_frame_load=on_frame_load,
+        )
+
+
+def test_tracker_maps_loading_and_propagation_into_one_monotonic_progress_bar() -> None:
+    sequence = TrackingFrameSequence(
+        path=Path("/tmp/tracking-frames"),
+        width=100,
+        height=50,
+        frame_count=5,
+        scale_x=0.5,
+        scale_y=0.5,
+    )
+    updates: list[tuple[float, str, TrackFrame | None]] = []
+    tracker = VideoTracker(FakeStore(sequence), engine_provider=LoadingVideoEngine)
+
+    tracker.track(
+        "video-1",
+        frame_idx=2,
+        box=(20, 20, 40, 40),
+        on_update=lambda progress, message, frame: updates.append(
+            (progress, message, frame)
+        ),
+    )
+
+    assert updates[0] == (0.02, "Loading frames 1 of 5", None)
+    assert updates[1] == (0.1, "Loading frames 5 of 5", None)
+    assert updates[2][0] == pytest.approx(0.28)
+    assert updates[2][1] == "Tracking forward"
+    assert updates[2][2] is not None
+    assert updates[-1][0] == 1.0
+    assert [progress for progress, _message, _frame in updates] == sorted(
+        progress for progress, _message, _frame in updates
+    )

@@ -54,6 +54,8 @@ it('provides stable top bar, editor regions, and labeled activity navigation', (
   expect(markup).toContain('Inspector')
   expect(markup).toContain('Timeline')
   expect(markup).toContain('Ctrl/⌘ K')
+  expect(markup).toContain('Upload video')
+  expect(markup).not.toContain('Open video')
   expect(markup).not.toContain('Library contents')
 })
 

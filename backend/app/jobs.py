@@ -13,7 +13,7 @@ from .tracking import TrackFrame
 
 JobState = Literal["queued", "running", "completed", "failed", "canceled"]
 JobKind = Literal["track", "export"]
-JobReporter = Callable[[float, str, TrackFrame], None]
+JobReporter = Callable[[float, str, TrackFrame | None], None]
 JobWorker = Callable[[JobReporter], Sequence[TrackFrame]]
 TrackCompletion = Callable[[str, Sequence[TrackFrame]], None]
 ProgressReporter = Callable[[float, str], None]
@@ -427,14 +427,17 @@ class JobRegistry:
     def _run_track_task(self, task: _Task) -> None:
         worker = task.worker
 
-        def report(progress: float, message: str, frame: TrackFrame) -> None:
+        def report(
+            progress: float, message: str, frame: TrackFrame | None
+        ) -> None:
             with self._condition:
                 job = self._get_job(task.job_id)
                 if job.cancel_requested:
                     raise _JobCanceled()
                 job.progress = min(max(float(progress), job.progress), 1.0)
                 job.message = message
-                job.track[frame.frame_idx] = frame
+                if frame is not None:
+                    job.track[frame.frame_idx] = frame
                 if job.progress < 1.0:
                     job.version += 1
                     job.updated_at = _now()

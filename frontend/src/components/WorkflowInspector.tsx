@@ -122,19 +122,29 @@ function TrackingInspector({
   const active = trackJob?.state === 'queued' || trackJob?.state === 'running'
   const elapsed = useElapsedSeconds(trackStartedAt, active)
   const progress = trackJob?.progress ?? 0
-  const processed = Math.min(trackFrameCount, Math.round(progress * trackFrameCount))
+  const processed = Math.min(trackFrameCount, trackJob?.track.length ?? 0)
+  const loadingMessage = trackJob?.message.startsWith('Loading frames ')
+    ? trackJob.message
+    : null
 
   return (
     <div className="inspector-body">
       <p className="section-label">SAM 2 propagation</p>
-      <h3>{trackJob?.state === 'failed' || trackJob?.state === 'canceled' ? 'Tracking stopped' : `${processed} of ${trackFrameCount} frames`}</h3>
+      <h3>{trackJob?.state === 'failed' || trackJob?.state === 'canceled'
+        ? 'Tracking stopped'
+        : loadingMessage ?? `${processed} of ${trackFrameCount} frames tracked`}</h3>
       <div className="job-progress-copy">
         <strong>{Math.round(progress * 100)}%</strong>
         {elapsed !== null && <span>{formatElapsed(elapsed)} elapsed</span>}
       </div>
       <progress max={1} value={progress} aria-label="Tracking progress" />
+      {loadingMessage && (
+        <p className="operation-status">{processed} of {trackFrameCount} frames tracked</p>
+      )}
       {active && <button type="button" className="secondary-action" onClick={onCancelTrack}>Cancel tracking</button>}
-      {trackMessage && !trackError && <p className="operation-status">{trackMessage}</p>}
+      {trackMessage && !trackError && trackMessage !== loadingMessage && (
+        <p className="operation-status">{trackMessage}</p>
+      )}
       {trackError && (
         <div className="error-card">
           <strong>{trackError}</strong>

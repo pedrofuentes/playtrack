@@ -75,7 +75,7 @@ export function OpenVideoPanel({
       onDragLeave={() => setDragging(false)}
       onDrop={(event) => void dropFile(event)}
     >
-      <p className="label">Open video</p>
+      <p className="label">Upload video</p>
       <label className="source-name-field" htmlFor={sourceNameInputId}>
         <span>Source name (optional)</span>
         <input
@@ -98,19 +98,8 @@ export function OpenVideoPanel({
           onChange={(event) => void chooseFile(event)}
         />
       </label>
-      {variant === 'empty' && <div className="panel-divider"><span>or</span></div>}
-      {variant === 'drawer' ? (
-        <details className="open-path-options">
-          <summary>More options</summary>
-          <PathForm
-            inputId={pathInputId}
-            path={path}
-            unavailable={unavailable}
-            onPathChange={setPath}
-            onSubmit={submitPath}
-          />
-        </details>
-      ) : (
+      <details className="open-path-options">
+        <summary>More options</summary>
         <PathForm
           inputId={pathInputId}
           path={path}
@@ -118,7 +107,7 @@ export function OpenVideoPanel({
           onPathChange={setPath}
           onSubmit={submitPath}
         />
-      )}
+      </details>
       {busy && (
         <p className="hint" role="status">
           {busy === 'upload' ? 'Uploading…' : 'Opening…'}

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   cancelJob,
+  checkHealth,
   exportDownloadUrl,
   getLibrary,
   fetchCropPlan,
@@ -17,6 +18,27 @@ import {
   watchTrackJob,
 } from './api'
 import type { LibraryResponse } from './api'
+
+describe('checkHealth', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('checks the local backend without opening a video', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(checkHealth()).resolves.toBeUndefined()
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/health')
+  })
+
+  it('rejects an unhealthy response with a useful message', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }))
+
+    await expect(checkHealth()).rejects.toThrow('PlayTrack server is unavailable (503)')
+  })
+})
 
 describe('uploadVideo', () => {
   afterEach(() => {
@@ -216,6 +238,16 @@ describe('watchTrackJob', () => {
       version: 3,
       jobId: 'job-1',
       state: 'running',
+      progress: 0.3,
+      message: 'Loading frames 3 of 10',
+      track: [],
+      removedFrameIdxs: [],
+    })
+    socket.emit({
+      type: 'delta',
+      version: 4,
+      jobId: 'job-1',
+      state: 'running',
       progress: 0.5,
       message: 'Continuing',
       track: [
@@ -223,10 +255,19 @@ describe('watchTrackJob', () => {
       ],
       removedFrameIdxs: [1],
     })
-    socket.emit({ type: 'heartbeat', version: 3, jobId: 'job-1' })
+    socket.emit({ type: 'heartbeat', version: 4, jobId: 'job-1' })
 
-    expect(updates).toHaveLength(2)
+    expect(updates).toHaveLength(3)
     expect(updates[1]).toEqual({
+      jobId: 'job-1',
+      state: 'running',
+      progress: 0.3,
+      message: 'Loading frames 3 of 10',
+      track: [
+        { frameIdx: 1, box: [1, 2, 3, 4], center: [2, 3], lost: false },
+      ],
+    })
+    expect(updates[2]).toEqual({
       jobId: 'job-1',
       state: 'running',
       progress: 0.5,

@@ -81,6 +81,7 @@ function workspace(overrides: Record<string, unknown> = {}) {
     openPath: vi.fn(),
     openLibraryVideo: vi.fn(),
     openLibraryPlayer: vi.fn(),
+    retryConnection: vi.fn(),
     refreshLibrary: vi.fn(),
     selectAt: vi.fn(),
     setPlayerName: vi.fn(),
@@ -178,25 +179,37 @@ it('renders the pro-editor shell without expanded secondary surfaces', () => {
   const markup = renderToStaticMarkup(createElement(App))
   expect(markup).toContain('class="workspace-shell"')
   expect(markup).toContain('aria-label="Editor tools"')
-  expect(markup).toContain('Open video')
+  expect(markup).toContain('Upload video')
+  expect(markup).toContain('Upload a video')
+  expect(markup.toLowerCase()).not.toContain('panoramic')
+  expect(markup).not.toContain('Open video')
   expect(markup).not.toContain('Recent videos')
   expect(markup).not.toContain('Virtual camera export')
   expect(markup).not.toContain('Last source click')
 })
 
-it('renders cached-shell guidance and retry when the local backend is offline', () => {
+it('renders cached-shell guidance and retries connectivity without opening a video', async () => {
   const retry = vi.fn()
+  const openPath = vi.fn()
   appMocks.workspace = workspace({
     backendUnavailable: true,
     openError: 'The PlayTrack server is not responding.',
-    openPath: retry,
+    retryConnection: retry,
+    openPath,
   })
+  const container = document.createElement('div')
+  const root = createRoot(container)
 
-  const markup = renderToStaticMarkup(createElement(App))
+  await act(async () => root.render(createElement(App)))
 
-  expect(markup).toContain('PlayTrack server is offline')
-  expect(markup).toContain('Start the local PlayTrack server')
-  expect(markup).toContain('Retry connection')
+  expect(container.textContent).toContain('PlayTrack server is offline')
+  expect(container.textContent).toContain('Start the local PlayTrack server')
+  const retryButton = [...container.querySelectorAll('button')]
+    .find((button) => button.textContent === 'Retry connection')!
+  await act(async () => retryButton.click())
+  expect(retry).toHaveBeenCalledOnce()
+  expect(openPath).not.toHaveBeenCalled()
+  await act(async () => root.unmount())
 })
 
 it.each([
@@ -400,12 +413,31 @@ it('reports tracking progress over the selected range', () => {
       state: 'running',
       progress: 0.5,
       message: 'tracking',
-      track: [],
+      track: Array.from({ length: 50 }, (_value, index) => ({
+        frameIdx: 100 + index,
+        box: [1, 2, 3, 4],
+        center: [2, 3],
+        lost: false,
+      })),
     },
   })
 
   const markup = renderToStaticMarkup(createElement(App))
   expect(markup).toContain('50 of 100 frames')
+})
+
+it('keeps Library search visible while its upload controls start collapsed', async () => {
+  const container = document.createElement('div')
+  const root = createRoot(container)
+
+  await act(async () => root.render(createElement(App)))
+  await act(async () => container.querySelector<HTMLButtonElement>('button[title="Library"]')?.click())
+
+  const upload = container.querySelector<HTMLDetailsElement>('.library-upload-disclosure')
+  expect(upload?.open).toBe(false)
+  expect(upload?.querySelector('summary')?.textContent).toBe('Upload a new video')
+  expect(container.querySelector<HTMLInputElement>('.library-search input')).not.toBeNull()
+  await act(async () => root.unmount())
 })
 
 it('disables Library opens while any workspace open is loading', async () => {
@@ -523,5 +555,27 @@ describe('JobPanel', () => {
     }))
 
     expect(markup.match(/Tracking forward/g)).toHaveLength(1)
+  })
+
+  it('counts actual tracked frames instead of weighted overall progress', () => {
+    const markup = renderToStaticMarkup(createElement(JobPanel, {
+      trackJob: {
+        jobId: 'track-1',
+        state: 'running' as const,
+        progress: 0.08,
+        message: 'Loading frames 80 of 100',
+        track: [
+          { frameIdx: 1, box: [1, 2, 3, 4] as const, center: [2, 3] as const, lost: false },
+          { frameIdx: 2, box: [1, 2, 3, 4] as const, center: [2, 3] as const, lost: false },
+          { frameIdx: 3, box: [1, 2, 3, 4] as const, center: [2, 3] as const, lost: false },
+        ],
+      },
+      exportJob: null,
+      frameCount: 100,
+      activeJobs: [],
+    }))
+
+    expect(markup).toContain('3 / 100 frames')
+    expect(markup).not.toContain('8 / 100 frames')
   })
 })

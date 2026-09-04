@@ -25,6 +25,8 @@ describe('OpenVideoPanel', () => {
     )
 
     expect(markup).toContain('type="file"')
+    expect(markup).toContain('Upload video')
+    expect(markup).not.toContain('>Open video<')
     expect(markup).toContain('accept="video/mp4,video/*"')
     expect(markup).toContain('Source name (optional)')
     expect(markup).toContain('maxLength="80"')
@@ -32,6 +34,22 @@ describe('OpenVideoPanel', () => {
     expect(markup).toContain('placeholder="examples/example.mp4"')
     expect(markup).toContain('Open server path')
     expect(markup).toContain('More options')
+  })
+
+  it('keeps server-path registration collapsed on the empty upload screen', () => {
+    const markup = renderToStaticMarkup(
+      <OpenVideoPanel
+        disabled={false}
+        variant="empty"
+        onUpload={vi.fn()}
+        onOpenPath={vi.fn()}
+      />,
+    )
+
+    expect(markup).toContain('<details class="open-path-options">')
+    expect(markup).not.toContain('<details class="open-path-options" open="">')
+    expect(markup).toContain('More options')
+    expect(markup).toContain('Open server path')
   })
 
   it('uses unique server-path field ids when two open surfaces coexist', () => {

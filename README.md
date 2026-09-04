@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  A local virtual camera for panoramic sports footage.<br>
+  A local virtual camera for sports footage.<br>
   Select a player, track them with SAM 2, and export a smooth H.264 crop.
 </p>
 
@@ -16,10 +16,14 @@
 
 ## What PlayTrack does
 
-PlayTrack turns a fixed panoramic recording into a conventional video that follows
+PlayTrack turns a sports recording into a conventional video that follows
 one player. Click a player on a clear frame, then let SAM 2 propagate the selection
 through a chosen range. Review track health, tune
 the crop dimensions, zoom, and camera smoothness, and export an H.264 MP4 with audio.
+
+It works with conventional, wide-angle, and panoramic video; a panoramic source is
+useful when you want to create a virtual camera from a view that captures the whole play,
+but it is not required.
 
 The application is single-user and local-first. Videos, frame caches, tracks, and
 exports stay on the computer running FastAPI. The installable PWA caches only the

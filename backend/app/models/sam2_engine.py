@@ -9,7 +9,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from ..tracking import PropagationDirection
@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 # display driver to remain responsive while tracking runs.
 _VIDEO_RUNTIME_HEADROOM_BYTES = 3 * 1024**3
 _CUDA_SYSTEM_RESERVE_BYTES = 2 * 1024**3
+FrameLoadProgress = Callable[[int, int], None]
 
 
 def video_fits_in_vram(frame_count: int, *, image_size: int, free_bytes: int) -> bool:
@@ -304,6 +305,7 @@ class SAM2VideoEngine:
         box: tuple[int, int, int, int],
         *,
         directions: tuple[PropagationDirection, ...],
+        on_frame_load: FrameLoadProgress | None = None,
     ) -> object:
         with self._lock:
             torch = SAM2Engine._import_torch()
@@ -351,11 +353,36 @@ class SAM2VideoEngine:
                         image_size=int(getattr(predictor, "image_size", 1024)),
                         free_vram_bytes=free_vram_bytes,
                     )
-                    state = predictor.init_state(
-                        video_path=str(frame_directory),
-                        offload_video_to_cpu=offload_video,
-                        offload_state_to_cpu=offload_state,
-                    )
+                    from sam2.utils import misc as sam2_misc
+
+                    original_tqdm = sam2_misc.tqdm
+
+                    def reporting_tqdm(*args: Any, **kwargs: Any) -> object:
+                        progress = original_tqdm(*args, **kwargs)
+                        if (
+                            on_frame_load is None
+                            or kwargs.get("desc") != "frame loading (JPEG)"
+                        ):
+                            return progress
+                        total = getattr(progress, "total", None)
+
+                        def report_items() -> object:
+                            for completed, item in enumerate(progress, start=1):
+                                yield item
+                                if isinstance(total, int) and total > 0:
+                                    on_frame_load(completed, total)
+
+                        return report_items()
+
+                    sam2_misc.tqdm = reporting_tqdm
+                    try:
+                        state = predictor.init_state(
+                            video_path=str(frame_directory),
+                            offload_video_to_cpu=offload_video,
+                            offload_state_to_cpu=offload_state,
+                        )
+                    finally:
+                        sam2_misc.tqdm = original_tqdm
                     for direction_index, direction in enumerate(directions):
                         if direction_index > 0:
                             predictor.reset_state(state)

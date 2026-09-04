@@ -3,13 +3,13 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>PlayTrack — A local virtual camera for panoramic sports video</title>
-    <meta name="description" content="Select a player, track them with SAM 2, and export a smooth conventional crop from panoramic sports footage—locally on your computer.">
+    <title>PlayTrack — A local virtual camera for sports video</title>
+    <meta name="description" content="Select a player, track them with SAM 2, and export a smooth player-following crop from sports footage—locally on your computer.">
     <meta name="theme-color" content="#080b0f">
     <link rel="canonical" href="https://pf.run/playtrack/">
     <meta property="og:type" content="website">
     <meta property="og:title" content="PlayTrack — Your player. Your camera.">
-    <meta property="og:description" content="Turn panoramic sports footage into a smooth player-following video, locally.">
+    <meta property="og:description" content="Turn sports footage into a smooth player-following video, locally.">
     <meta property="og:url" content="https://pf.run/playtrack/">
     <meta property="og:image" content="https://pf.run/playtrack/assets/social-preview.jpg">
     <meta property="og:image:width" content="1200">
@@ -39,9 +39,9 @@
     <main id="main">
       <section class="hero" aria-labelledby="hero-title">
         <div class="hero-copy reveal">
-          <p class="eyebrow">Open source · local first · built for panoramic footage</p>
+          <p class="eyebrow">Open source · local first · built for sports footage</p>
           <h1 id="hero-title">Your player.<br><span>Your camera.</span></h1>
-          <p class="hero-lede">PlayTrack turns a fixed panoramic sports recording into a smooth, conventional video that follows the player you choose.</p>
+          <p class="hero-lede">PlayTrack turns sports footage into a smooth video that follows the player you choose—whether the source is conventional, wide-angle, or panoramic.</p>
           <div class="hero-actions">
             <a class="button primary" href="https://github.com/pedrofuentes/playtrack">Get PlayTrack</a>
             <a class="button secondary" href="#workflow">See the workflow</a>
@@ -63,9 +63,9 @@
         <p class="eyebrow">The wide-angle problem</p>
         <div class="split-heading">
           <h2 id="problem-title">The whole rink is useful.<br>The whole rink is not a highlight.</h2>
-          <p>Panoramic cameras capture every play, but leave the subject tiny and the viewer doing the searching. PlayTrack keeps the source wide and makes the final cut intentional.</p>
+          <p>Wide and panoramic cameras can capture every play while leaving the subject tiny and the viewer doing the searching. PlayTrack makes the final cut intentional—and works with conventional video too.</p>
         </div>
-        <div class="problem-strip" aria-label="Panorama transformed into focused output">
+        <div class="problem-strip" aria-label="Wide source transformed into focused output">
           <span>4096 × 1024 source</span><i aria-hidden="true"></i><span>player-aware crop</span><i aria-hidden="true"></i><strong>1080p or 720p output</strong>
         </div>
       </section>
@@ -112,7 +112,7 @@
         </div>
         <div class="benefit-grid">
           <article class="reveal"><span aria-hidden="true">⌂</span><h3>Private by architecture</h3><p>Videos, frame caches, tracks, and exports stay on the machine running PlayTrack.</p></article>
-          <article class="reveal"><span aria-hidden="true">◎</span><h3>Made for small subjects</h3><p>Click selection uses a high-resolution source crop instead of shrinking the whole panorama first.</p></article>
+          <article class="reveal"><span aria-hidden="true">◎</span><h3>Made for small subjects</h3><p>Click selection uses a high-resolution source crop instead of shrinking the whole frame first.</p></article>
           <article class="reveal"><span aria-hidden="true">⌁</span><h3>Camera motion with restraint</h3><p>Gap filling, spring smoothing, and acceleration limits produce a usable crop path—not a box that jitters frame to frame.</p></article>
           <article class="reveal"><span aria-hidden="true">↗</span><h3>Normal output</h3><p>PyAV and subpixel OpenCV crops produce a standard H.264 MP4 ready for editing or sharing.</p></article>
         </div>
@@ -183,7 +183,7 @@ backend/.venv/bin/python scripts/fetch_models.py
       <section id="usage" class="section usage" aria-labelledby="usage-title">
         <div class="section-heading reveal">
           <p class="eyebrow">First run</p>
-          <h2 id="usage-title">From panorama to player cut.</h2>
+          <h2 id="usage-title">From source video to player cut.</h2>
         </div>
         <ol class="usage-list reveal">
           <li><span>1</span><div><h3>Open footage</h3><p>Upload an MP4 or register a path already on the local server.</p></div></li>

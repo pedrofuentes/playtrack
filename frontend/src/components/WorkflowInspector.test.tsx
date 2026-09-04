@@ -34,8 +34,23 @@ const common = {
   exportPanel: <div>Export controls</div>,
 }
 
-function job(state: TrackJobUpdate['state'], progress = 0.64): TrackJobUpdate {
-  return { jobId: 'track-1', state, progress, message: state, track: [] }
+function job(
+  state: TrackJobUpdate['state'],
+  progress = 0.64,
+  trackCount = Math.round(progress * 930),
+): TrackJobUpdate {
+  return {
+    jobId: 'track-1',
+    state,
+    progress,
+    message: state,
+    track: Array.from({ length: trackCount }, (_item, frameIdx) => ({
+      frameIdx,
+      box: [1, 2, 3, 4],
+      center: [2, 3],
+      lost: false,
+    })),
+  }
 }
 
 describe('WorkflowInspector', () => {
@@ -100,11 +115,34 @@ describe('WorkflowInspector', () => {
         stage="track"
         selection={selection}
         trackFrameCount={100}
-        trackJob={job('running', 0.5)}
+        trackJob={job('running', 0.5, 50)}
       />,
     )
     expect(running).toContain('50 of 100 frames')
     expect(running).not.toContain('465 of 930 frames')
+  })
+
+  it('shows loading progress without counting loaded JPEGs as tracked frames', () => {
+    const loading = renderToStaticMarkup(
+      <WorkflowInspector
+        {...common}
+        stage="track"
+        selection={selection}
+        trackFrameCount={100}
+        trackJob={{
+          jobId: 'track-1',
+          state: 'running',
+          progress: 0.08,
+          message: 'Loading frames 80 of 100',
+          track: [],
+        }}
+        trackMessage="Loading frames 80 of 100"
+      />,
+    )
+
+    expect(loading).toContain('Loading frames 80 of 100')
+    expect(loading).toContain('0 of 100 frames tracked')
+    expect(loading).not.toContain('8 of 100 frames')
   })
 
   it('disables selection mutation controls while tracking is starting', () => {
