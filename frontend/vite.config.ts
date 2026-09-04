@@ -19,7 +19,7 @@ export default defineConfig({
       manifest: {
         name: 'PlayTrack',
         short_name: 'PlayTrack',
-        description: 'A local virtual camera for panoramic sports footage.',
+        description: 'A local virtual camera for sports footage.',
         theme_color: '#080b0f',
         background_color: '#080b0f',
         display: 'standalone',
@@ -33,6 +33,8 @@ export default defineConfig({
         ],
       },
       workbox: {
+        skipWaiting: true,
+        clientsClaim: true,
         globPatterns: ['**/*.{html,js,css,svg,png,webmanifest}'],
         globIgnores: [
           '**/*.mp4',

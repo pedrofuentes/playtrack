@@ -54,54 +54,6 @@ function Assert-NodeVersion {
     }
 }
 
-function Test-FrontendBuildStale {
-    param([Parameter(Mandatory = $true)][string]$FrontendPath)
-
-    $distPath = Join-Path $FrontendPath 'dist'
-    $indexPath = Join-Path $distPath 'index.html'
-    $assetsPath = Join-Path $distPath 'assets'
-    if (-not (Test-Path -LiteralPath $indexPath -PathType Leaf)) {
-        return $true
-    }
-    if (-not (Test-Path -LiteralPath $assetsPath -PathType Container)) {
-        return $true
-    }
-
-    $builtAt = (Get-Item -LiteralPath $indexPath).LastWriteTimeUtc
-    $inputPaths = @(
-        (Join-Path $FrontendPath 'src'),
-        (Join-Path $FrontendPath 'index.html'),
-        (Join-Path $FrontendPath 'package.json'),
-        (Join-Path $FrontendPath 'package-lock.json'),
-        (Join-Path $FrontendPath 'tsconfig.json'),
-        (Join-Path $FrontendPath 'tsconfig.app.json'),
-        (Join-Path $FrontendPath 'tsconfig.node.json'),
-        (Join-Path $FrontendPath 'vite.config.ts')
-    )
-
-    foreach ($inputPath in $inputPaths) {
-        if (-not (Test-Path -LiteralPath $inputPath)) {
-            continue
-        }
-        $item = Get-Item -LiteralPath $inputPath
-        if ($item.PSIsContainer) {
-            if ($item.LastWriteTimeUtc -gt $builtAt) {
-                return $true
-            }
-            $newerFile = Get-ChildItem -LiteralPath $inputPath -File -Recurse |
-                Where-Object { $_.LastWriteTimeUtc -gt $builtAt } |
-                Select-Object -First 1
-            if ($null -ne $newerFile) {
-                return $true
-            }
-        }
-        elseif ($item.LastWriteTimeUtc -gt $builtAt) {
-            return $true
-        }
-    }
-    return $false
-}
-
 function Test-NodeModulesStale {
     param([Parameter(Mandatory = $true)][string]$FrontendPath)
 
@@ -181,33 +133,32 @@ try {
     Assert-NodeVersion -Command $node
     Set-PlayTrackVideoToolEnvironment -RepoRoot $RepoRoot
 
-    $backendPython = Join-Path $BackendDir '.venv\Scripts\python.exe'
-    if (-not (Test-Path -LiteralPath $backendPython -PathType Leaf)) {
-        throw "Backend environment is missing. Run: uv sync --project backend --python 3.12 --extra dev"
-    }
+    Write-Host 'Synchronizing backend dependencies...'
+    Invoke-NativeCommand `
+        -Command $uv `
+        -Arguments @(
+            'sync', '--project', $BackendDir, '--python', '3.12',
+            '--managed-python', '--extra', 'dev', '--locked'
+        ) `
+        -FailureMessage 'Backend dependency synchronization failed'
 
-    if (Test-FrontendBuildStale -FrontendPath $FrontendDir) {
-        Write-Host 'The frontend build is missing or stale; rebuilding it...'
-        Push-Location $FrontendDir
-        try {
-            if (Test-NodeModulesStale -FrontendPath $FrontendDir) {
-                Write-Host 'Installing frontend dependencies with npm ci...'
-                Invoke-NativeCommand `
-                    -Command $npm `
-                    -Arguments @('ci') `
-                    -FailureMessage 'npm ci failed'
-            }
+    Write-Host 'Building the current frontend...'
+    Push-Location $FrontendDir
+    try {
+        if (Test-NodeModulesStale -FrontendPath $FrontendDir) {
+            Write-Host 'Installing frontend dependencies with npm ci...'
             Invoke-NativeCommand `
                 -Command $npm `
-                -Arguments @('run', 'build') `
-                -FailureMessage 'Frontend build failed'
+                -Arguments @('ci') `
+                -FailureMessage 'npm ci failed'
         }
-        finally {
-            Pop-Location
-        }
+        Invoke-NativeCommand `
+            -Command $npm `
+            -Arguments @('run', 'build') `
+            -FailureMessage 'Frontend build failed'
     }
-    else {
-        Write-Host 'Using the current frontend/dist build.'
+    finally {
+        Pop-Location
     }
 
     Write-Host "Starting PlayTrack at $AppUrl ..."

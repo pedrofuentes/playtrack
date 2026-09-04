@@ -7,7 +7,7 @@ as historical implementation records; do not treat their branding/config names a
 
 ## What this is
 
-A local web app that turns panoramic sports footage into a "virtual camera": the user
+A local web app that turns sports footage into a "virtual camera": the user
 opens a video, clicks a player to select them, SAM 2 tracks them
 through the video, and the app exports a cropped video that smoothly follows the player
 at user-chosen dimensions. Single user, localhost by default.
@@ -97,8 +97,9 @@ development ports and prints the LAN frontend URL; use it only on a trusted loca
 because PlayTrack has no authentication. `PLAYTRACK_HOST` remains a backward-compatible
 bind override, but `--network` is the preferred development interface.
 
-The backend serves `frontend/dist` when it exists — rebuild the frontend for UI changes
-to reach the running app; there is no hot reload in production mode.
+The backend serves `frontend/dist` when it exists. `scripts/run.ps1` rebuilds that
+production frontend on every launch; manual production starts must run `npm run build`
+after UI changes. There is no hot reload in production mode.
 
 The PWA uses `vite-plugin-pwa@1.3.0`, `generateSW`, and automatic updates. Precache is
 limited to compiled UI and local brand assets. Never add runtime caching for `/api`,

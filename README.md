@@ -66,8 +66,9 @@ dependencies, fetches the SAM 2 checkpoint, and installs a pinned portable FFmpe
 build under the gitignored `.tools/ffmpeg` directory. It does not require administrator
 rights or modify the system `PATH`.
 
-`run.ps1` checks the toolchain and video tools, installs/builds the frontend when
-needed, starts PlayTrack at <http://127.0.0.1:8000>, waits for health, and opens the browser.
+`run.ps1` checks the toolchain and video tools, synchronizes the locked backend
+dependencies, refreshes frontend dependencies when needed, rebuilds the frontend,
+starts PlayTrack at <http://127.0.0.1:8000>, waits for health, and opens the browser.
 On Windows, uv installs CUDA (cu132) PyTorch wheels automatically; no manual torch install is needed.
 
 For development with FastAPI reload and Vite hot reload:
@@ -100,11 +101,24 @@ This binds FastAPI to `0.0.0.0:8000` and Vite to `0.0.0.0:5173`. Open the
 network URL printed by the launcher. Network mode has no authentication; never expose
 these ports to the internet or an untrusted network.
 
+## Update PlayTrack
+
+Stop the running server with `Ctrl+C`, update the checkout, and launch PlayTrack again:
+
+```powershell
+git pull
+powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1
+```
+
+`git pull` remains explicit so the launcher never changes or conflicts with local work.
+Afterward, `run.ps1` handles dependency synchronization and creates a fresh production
+frontend build on every launch. The installed PWA checks for the new app shell immediately
+and reloads when it is ready; manual cache clearing is not part of the normal update flow.
+
 ## Use PlayTrack
 
-1. Open a constant-frame-rate sports video by upload or server path. If
-   `examples/example.mp4` exists, PlayTrack opens it automatically. No footage ships
-   with the repository; `examples/*.mp4` is gitignored.
+1. Upload a constant-frame-rate sports video, or use **More options** to register a
+   server path. No footage ships with the repository; `examples/*.mp4` is gitignored.
 2. Mark a useful in/out range, scrub to a clear frame, and click the player.
 3. Name the player and start tracking. The overlay fills as SAM 2 propagates forward
    and backward from the anchor.
@@ -126,7 +140,8 @@ cd ../backend && uv run uvicorn app.main:app --port 8000
 ```
 
 Open <http://127.0.0.1:8000> in a PWA-capable browser and use its install action.
-The installed shell updates automatically. If FastAPI is stopped, the cached shell
+The installed shell checks for updates immediately and reloads when a new build is ready.
+If FastAPI is stopped, the cached shell
 explains how to restart the server and provides a retry action. The service worker
 does not runtime-cache `/api`, `/ws`, source videos, exports, or tracking data.
 

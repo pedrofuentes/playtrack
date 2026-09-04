@@ -12,6 +12,9 @@ const worker = readFileSync('dist/sw.js', 'utf8')
 if (manifest.name !== 'PlayTrack' || manifest.short_name !== 'PlayTrack') {
   throw new Error('Manifest must use PlayTrack for name and short_name')
 }
+if (manifest.description !== 'A local virtual camera for sports footage.') {
+  throw new Error('Manifest must describe support for sports footage without requiring a panoramic source')
+}
 if (manifest.display !== 'standalone' || manifest.start_url !== './' || manifest.scope !== './') {
   throw new Error('Manifest must be standalone with relative start_url and scope')
 }
@@ -27,7 +30,16 @@ for (const expected of ['192x192:any', '512x512:any', '192x192:maskable', '512x5
 if (!html.includes('<title>PlayTrack</title>') || !html.includes('rel="manifest"')) {
   throw new Error('Built shell is missing PlayTrack title or manifest link')
 }
+if (!html.includes('content="A local virtual camera for sports footage."')) {
+  throw new Error('Built shell metadata must not require a panoramic source')
+}
 if (!worker.includes('precacheAndRoute')) throw new Error('Generated service worker is missing app-shell precache')
+if (worker.includes('SKIP_WAITING')) {
+  throw new Error('Generated service worker must activate directly instead of waiting for a message')
+}
+if (!worker.includes('self.skipWaiting()') || !/\.clientsClaim\(\)/.test(worker)) {
+  throw new Error('Generated service worker must skip waiting and claim open app windows')
+}
 for (const forbidden of ['url:"api/', 'url:"ws/', 'url:"data/', 'url:"exports/', '.mp4",revision']) {
   if (worker.includes(forbidden)) throw new Error(`Service-worker precache contains forbidden runtime entry: ${forbidden}`)
 }

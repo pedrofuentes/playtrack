@@ -10,7 +10,7 @@ def script_text(name: str) -> str:
     return (REPO_ROOT / "scripts" / name).read_text(encoding="utf-8")
 
 
-def test_run_script_checks_tools_builds_stale_frontend_and_opens_browser() -> None:
+def test_run_script_syncs_backend_always_rebuilds_frontend_and_opens_browser() -> None:
     script = script_text("run.ps1")
 
     assert "$ErrorActionPreference = 'Stop'" in script
@@ -19,8 +19,12 @@ def test_run_script_checks_tools_builds_stale_frontend_and_opens_browser() -> No
     assert "https://docs.astral.sh/uv/getting-started/installation/" in script
     assert "https://nodejs.org/en/download" in script
     assert "--version" in script
-    assert "Backend environment is missing" in script
-    assert "Test-FrontendBuildStale" in script
+    assert "Synchronizing backend dependencies" in script
+    assert all(token in script for token in ("sync", "--project", "--locked"))
+    assert "Backend environment is missing" not in script
+    assert "Test-FrontendBuildStale" not in script
+    assert "Using the current frontend/dist build." not in script
+    assert "Building the current frontend" in script
     assert all(token in script for token in ("npm", "run", "build"))
     assert "uvicorn" in script
     assert "-ArgumentList @('run', '--no-sync', 'uvicorn'" in script
