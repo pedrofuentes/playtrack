@@ -116,7 +116,7 @@ the local FastAPI server is required and offer retry when it is unreachable.
 | `PLAYTRACK_CHECKPOINTS_DIR` | `<repo>/checkpoints` | SAM2 weights dir |
 | `PLAYTRACK_SAM2_CHECKPOINT` / `PLAYTRACK_SAM2_CONFIG` | base-plus | checkpoint/config override |
 | `PLAYTRACK_SAM2_CROP_SIZE` | `1024` | click-select high-res crop size (source px) |
-| `SAM2_OFFLOAD_VIDEO_TO_CPU` / `SAM2_OFFLOAD_STATE_TO_CPU` | `0` | forced on automatically on MPS, and on CUDA when the stacked video tensor cannot fit free VRAM |
+| `SAM2_OFFLOAD_VIDEO_TO_CPU` / `SAM2_OFFLOAD_STATE_TO_CPU` | `0` | forced on automatically on MPS; on CUDA, auto-enabled unless the stacked video tensor fits alongside 3 GiB runtime headroom and a separate 2 GiB Windows/WDDM reserve |
 | `TRACKING_MAX_DIM` | `2048` | tracking frame-cache resolution (4096 ≈ 2× slower, no accuracy gain — measured) |
 | `PLAYTRACK_FFMPEG` / `PLAYTRACK_FFPROBE` | `ffmpeg`/`ffprobe` | binary paths; Windows launchers fall back to `.tools/ffmpeg` |
 | `PLAYTRACK_MAX_EXPORT_WIDTH` / `PLAYTRACK_MAX_EXPORT_HEIGHT` | `4096` / `2160` | maximum output dimensions |
@@ -126,7 +126,7 @@ the local FastAPI server is required and offer retry when it is unreachable.
 
 | Device | SAM 2.1 | Notes |
 |---|---|---|
-| CUDA Turing (target: RTX 2080 Ti, 11 GB) | base-plus, fp16, SDPA | flash-attn unsupported; CPU offload auto-engages when the stacked video tensor exceeds free VRAM; Windows locks torch 2.13.0+cu132 (still ships sm_75, needs a 580-family+ driver — verified on driver 610.74, 2026-08-28) |
+| CUDA Turing (target: RTX 2080 Ti, 11 GB) | base-plus, fp16, SDPA | flash-attn unsupported; CPU offload auto-engages when the video tensor plus runtime and system reserves exceeds free VRAM; Windows locks torch 2.13.0+cu132 (still ships sm_75, needs a 580-family+ driver — verified on driver 610.74, 2026-08-28) |
 | CUDA Ampere+ | large, bf16 | SDPA |
 | MPS (Mac dev) | base-plus | CPU offload forced |
 | CPU | small | compatibility path; slow |
@@ -173,11 +173,17 @@ the local FastAPI server is required and offer retry when it is unreachable.
   tensor inside `init_state` (930 frames ≈ 11,160 MiB — nearly all of an 11,264 MiB
   card, leaving no room for the loaded model). Windows/WDDM then oversubscribes GPU
   memory, utilization drops to ~0%, and the desktop can freeze until reboot (observed
-  on the RTX 2080 Ti, 2026-08-28). Job cancellation cannot interrupt the allocation —
-  it happens before the first tracked frame. `resolve_video_offload` in
-  `sam2_engine.py` now auto-enables offload when the tensor lacks headroom; don't
-  bypass it. Measured with offload: peak ~4.3 GB VRAM, 930 frames in 3m13s (~4.8 fps),
-  ~6× faster than MPS.
+  on the RTX 2080 Ti, 2026-08-28). A 524-frame range reproduced the problem on
+  2026-09-03: its 6,288 MiB tensor passed the former 3 GiB-only headroom check, the
+  forward pass completed, and the desktop hung before the backward pass while only
+  847 MiB remained free. Job cancellation cannot interrupt the initial allocation.
+  `resolve_video_offload` now requires the tensor to fit alongside 3 GiB of SAM2
+  runtime headroom and a separate 2 GiB Windows/WDDM reserve; don't bypass it.
+  Bidirectional propagation reuses one loaded frame tensor, and every exit path resets
+  and clears that per-video state while retaining the model. Re-verified on 2026-09-03:
+  a 524-frame range and the full 930-frame video completed with one frame load per job,
+  total board usage stayed below 4.6 GiB, and canceling a live 930-frame job returned
+  usage to the warm-model baseline.
 - **Small players**: click-select runs SAM2 on a `PLAYTRACK_SAM2_CROP_SIZE` window around
   the click, not the full panorama (a 4096-wide frame resized to SAM2's internal 1024²
   leaves a player ~15 px). Don't "simplify" it to full-frame.
@@ -194,8 +200,11 @@ the local FastAPI server is required and offer retry when it is unreachable.
 
 M0–M7 are complete and committed (git log is authoritative). Windows/RTX 2080 Ti was
 verified 2026-08-28: `run.ps1`/`dev.ps1` work, full 930-frame track in 3m13s (~4.8 fps,
-~6× Mac MPS), export in 40 s, peak ~4.3 GB VRAM with CPU offload (auto-engaged). The
-frame-650 identity switch reproduces identically on CUDA. Not yet done:
+~6× Mac MPS), export in 40 s, peak ~4.3 GB VRAM with CPU offload (auto-engaged).
+The stricter VRAM reserve, single-state bidirectional propagation, and cleanup behavior
+were re-verified on the same card on 2026-09-03 with 524-frame, full-video, and live
+cancellation runs. The frame-650 identity switch reproduces identically on CUDA. Not
+yet done:
 
 1. **Multi-anchor track splicing** (proposed, top priority for contact sports): re-anchor
    the track after an identity switch and merge segments into one exportable track.

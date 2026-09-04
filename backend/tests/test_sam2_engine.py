@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+import numpy as np
 import pytest
 
 import app.models.sam2_engine as sam2_engine
@@ -229,7 +230,8 @@ def test_cuda_offload_warning_reports_memory_budget(caplog: pytest.LogCaptureFix
     assert result == (True, True)
     assert len(caplog.records) == 1
     assert "11160 MiB video tensor" in caplog.messages[0]
-    assert "3072 MiB headroom" in caplog.messages[0]
+    assert "3072 MiB runtime headroom" in caplog.messages[0]
+    assert "2048 MiB system reserve" in caplog.messages[0]
     assert "9603 MiB free VRAM" in caplog.messages[0]
 
 
@@ -257,6 +259,19 @@ def test_cuda_offloads_when_video_tensor_lacks_headroom() -> None:
         frame_count=930,
         image_size=1024,
         free_vram_bytes=11_264 * 1024**2,
+    ) == (True, True)
+
+
+def test_cuda_offloads_524_frames_to_preserve_system_reserve() -> None:
+    # The old 3 GiB-only budget admitted this exact workload on the 11 GiB
+    # Windows target and left too little VRAM for WDDM to keep the desktop alive.
+    assert resolve_video_offload(
+        "cuda",
+        requested_video=False,
+        requested_state=False,
+        frame_count=524,
+        image_size=1024,
+        free_vram_bytes=10_000 * 1024**2,
     ) == (True, True)
 
 
@@ -319,6 +334,11 @@ class RecordingVideoPredictor:
 
     def __init__(self) -> None:
         self.init_kwargs: dict[str, bool] | None = None
+        self.init_calls = 0
+        self.add_calls = 0
+        self.propagation_calls: list[tuple[int, bool]] = []
+        self.reset_calls = 0
+        self.state: dict[str, object] | None = None
 
     def init_state(
         self,
@@ -326,34 +346,56 @@ class RecordingVideoPredictor:
         video_path: str,
         offload_video_to_cpu: bool,
         offload_state_to_cpu: bool,
-    ) -> object:
+    ) -> dict[str, object]:
+        self.init_calls += 1
         self.init_kwargs = {
             "offload_video_to_cpu": offload_video_to_cpu,
             "offload_state_to_cpu": offload_state_to_cpu,
         }
-        return object()
+        self.state = {"images": object(), "tracking": object()}
+        return self.state
 
     def add_new_points_or_box(self, **kwargs: object) -> None:
-        return None
+        self.add_calls += 1
 
     def propagate_in_video(
         self, state: object, *, start_frame_idx: int, reverse: bool
     ) -> object:
+        self.propagation_calls.append((start_frame_idx, reverse))
         return iter(())
 
+    def reset_state(self, state: object) -> None:
+        self.reset_calls += 1
+        assert isinstance(state, dict)
+        state.pop("tracking", None)
 
-def fake_video_torch(free_bytes: int) -> SimpleNamespace:
+
+class RecordingCudaMemory:
+    def __init__(self, free_bytes: int) -> None:
+        self.free_bytes = free_bytes
+        self.empty_cache_calls = 0
+
+    def mem_get_info(self) -> tuple[int, int]:
+        return self.free_bytes, 11_264 * 1024**2
+
+    def empty_cache(self) -> None:
+        self.empty_cache_calls += 1
+
+
+def fake_video_torch(
+    free_bytes: int, *, cuda: RecordingCudaMemory | None = None
+) -> SimpleNamespace:
     # Real torch cannot be used here: torch.autocast("cuda") and
     # torch.cuda.mem_get_info() are unavailable off-GPU.
     return SimpleNamespace(
         inference_mode=_NullContext,
         autocast=lambda **_kwargs: _NullContext(),
         float16="float16",
-        cuda=SimpleNamespace(mem_get_info=lambda: (free_bytes, 11_264 * 1024**2)),
+        cuda=cuda or RecordingCudaMemory(free_bytes),
     )
 
 
-def test_cuda_propagate_wires_offload_into_init_state(
+def test_cuda_propagation_wires_offload_into_init_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Proof that the guard's decision actually reaches SAM2: a 930-frame
@@ -374,8 +416,139 @@ def test_cuda_propagate_wires_offload_into_init_state(
         staticmethod(lambda: fake_video_torch(11_264 * 1024**2)),
     )
 
-    assert list(engine.propagate(frames, 0, (10, 10, 20, 20), reverse=False)) == []
+    assert list(
+        engine.propagate_directions(
+            frames,
+            0,
+            (10, 10, 20, 20),
+            directions=("forward",),
+        )
+    ) == []
     assert predictor.init_kwargs == {
         "offload_video_to_cpu": True,
         "offload_state_to_cpu": True,
     }
+
+
+def test_bidirectional_propagation_reuses_frames_and_clears_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    (frames / "00000.jpg").write_bytes(b"")
+    cuda = RecordingCudaMemory(10_000 * 1024**2)
+    engine = SAM2VideoEngine(tmp_path / "missing.pt", "cfg")
+    predictor = RecordingVideoPredictor()
+    engine._predictor = predictor
+    engine._profile = DeviceProfile("cuda", "float16", "base-plus", (7, 5))
+    monkeypatch.setattr(
+        SAM2Engine,
+        "_import_torch",
+        staticmethod(lambda: fake_video_torch(cuda.free_bytes, cuda=cuda)),
+    )
+
+    with caplog.at_level("INFO", logger="app.models.sam2_engine"):
+        assert list(
+            engine.propagate_directions(
+                frames,
+                0,
+                (10, 10, 20, 20),
+                directions=("forward", "backward"),
+            )
+        ) == []
+    assert predictor.init_calls == 1
+    assert predictor.add_calls == 2
+    assert predictor.propagation_calls == [(0, False), (0, True)]
+    assert predictor.reset_calls == 2
+    assert predictor.state == {}
+    assert cuda.empty_cache_calls == 3
+    assert any(
+        "SAM2 video state released: 10000 MiB free of 11264 MiB VRAM" in message
+        for message in caplog.messages
+    )
+
+
+class YieldingVideoPredictor(RecordingVideoPredictor):
+    def propagate_in_video(
+        self, state: object, *, start_frame_idx: int, reverse: bool
+    ) -> object:
+        self.propagation_calls.append((start_frame_idx, reverse))
+        return iter([(start_frame_idx, [1], np.ones((1, 2, 2), dtype=np.float32))])
+
+
+class FailingVideoPredictor(RecordingVideoPredictor):
+    def propagate_in_video(
+        self, state: object, *, start_frame_idx: int, reverse: bool
+    ) -> object:
+        self.propagation_calls.append((start_frame_idx, reverse))
+
+        def fail() -> object:
+            raise RuntimeError("SAM2 propagation failed")
+            yield
+
+        return fail()
+
+
+def test_closing_propagation_releases_per_video_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    (frames / "00000.jpg").write_bytes(b"")
+    cuda = RecordingCudaMemory(10_000 * 1024**2)
+    engine = SAM2VideoEngine(tmp_path / "missing.pt", "cfg")
+    predictor = YieldingVideoPredictor()
+    engine._predictor = predictor
+    engine._profile = DeviceProfile("cuda", "float16", "base-plus", (7, 5))
+    monkeypatch.setattr(
+        SAM2Engine,
+        "_import_torch",
+        staticmethod(lambda: fake_video_torch(cuda.free_bytes, cuda=cuda)),
+    )
+
+    propagation = engine.propagate_directions(
+        frames,
+        0,
+        (10, 10, 20, 20),
+        directions=("forward",),
+    )
+    assert next(propagation)[0:2] == ("forward", 0)
+    propagation.close()
+
+    assert predictor.reset_calls == 1
+    assert predictor.state == {}
+    assert cuda.empty_cache_calls == 2
+
+
+def test_failed_propagation_releases_per_video_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    (frames / "00000.jpg").write_bytes(b"")
+    cuda = RecordingCudaMemory(10_000 * 1024**2)
+    engine = SAM2VideoEngine(tmp_path / "missing.pt", "cfg")
+    predictor = FailingVideoPredictor()
+    engine._predictor = predictor
+    engine._profile = DeviceProfile("cuda", "float16", "base-plus", (7, 5))
+    monkeypatch.setattr(
+        SAM2Engine,
+        "_import_torch",
+        staticmethod(lambda: fake_video_torch(cuda.free_bytes, cuda=cuda)),
+    )
+
+    with pytest.raises(RuntimeError, match="SAM2 propagation failed"):
+        list(
+            engine.propagate_directions(
+                frames,
+                0,
+                (10, 10, 20, 20),
+                directions=("forward",),
+            )
+        )
+
+    assert predictor.reset_calls == 1
+    assert predictor.state == {}
+    assert cuda.empty_cache_calls == 2

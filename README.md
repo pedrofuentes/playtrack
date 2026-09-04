@@ -144,7 +144,7 @@ Defaults live in `backend/app/config.py`.
 | `PLAYTRACK_MAX_EXPORT_WIDTH` / `PLAYTRACK_MAX_EXPORT_HEIGHT` | `4096` / `2160` | Output dimension bounds. |
 | `PLAYTRACK_MAX_EXPORT_PIXELS` | `8847360` | Output pixels per frame. |
 | `TRACKING_MAX_DIM` | `2048` | Maximum tracking-cache frame dimension. |
-| `SAM2_OFFLOAD_VIDEO_TO_CPU` / `SAM2_OFFLOAD_STATE_TO_CPU` | `0` | SAM 2 memory offload; forced on MPS, auto-enabled on CUDA when the video tensor cannot fit free VRAM. |
+| `SAM2_OFFLOAD_VIDEO_TO_CPU` / `SAM2_OFFLOAD_STATE_TO_CPU` | `0` | SAM 2 memory offload; forced on MPS. On CUDA it is auto-enabled unless the video tensor fits with 3 GiB runtime headroom and a separate 2 GiB Windows/WDDM reserve. |
 
 This release is a clean environment-variable rename: obsolete `FINDME_*` settings are
 not accepted. Unbranded `SAM2_*` and `TRACKING_MAX_DIM` settings remain.
@@ -182,7 +182,7 @@ FindMe specs under `docs/superpowers/` are historical records from before the re
   after the collision; multi-anchor splicing is the planned fix.
 - Tracking/export each have one worker and two queue slots. Overload returns retryable HTTP 429.
 - Variable-frame-rate sources are rejected so frame-indexed tracking and export cannot drift.
-- Verified on RTX 2080 Ti (2026-08-28): 930-frame track in about 3 minutes (~4.8 fps) at ~4.3 GB peak VRAM with automatic CPU offload.
+- Re-verified on RTX 2080 Ti (2026-09-03): a 524-frame range and the full 930-frame video completed with one frame load per bidirectional job and under 4.6 GiB total board usage. Canceling a live job returned memory to the warm-model baseline; success, failure, and cancellation all release per-video state while keeping the model warm.
 - PlayTrack has no authentication. Do not expose it to the public internet.
 
 ## Contributing and security

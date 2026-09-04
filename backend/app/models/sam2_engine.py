@@ -9,20 +9,30 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ..tracking import PropagationDirection
 
 logger = logging.getLogger(__name__)
 
 # SAM2 keeps activations, the memory bank, and autocast copies alongside the
-# stacked video tensor; require this much slack beyond the tensor itself.
-_VIDEO_OFFLOAD_HEADROOM_BYTES = 3 * 1024**3
+# stacked video tensor. CUDA desktops also need enough unclaimed VRAM for the
+# display driver to remain responsive while tracking runs.
+_VIDEO_RUNTIME_HEADROOM_BYTES = 3 * 1024**3
+_CUDA_SYSTEM_RESERVE_BYTES = 2 * 1024**3
 
 
 def video_fits_in_vram(frame_count: int, *, image_size: int, free_bytes: int) -> bool:
     """Whether SAM2's stacked float32 [N, 3, S, S] video tensor fits free VRAM
-    with enough headroom left for the model and runtime allocations."""
+    with enough headroom for runtime allocations and the host desktop."""
     tensor_bytes = frame_count * 3 * image_size * image_size * 4
-    return tensor_bytes + _VIDEO_OFFLOAD_HEADROOM_BYTES <= free_bytes
+    return (
+        tensor_bytes
+        + _VIDEO_RUNTIME_HEADROOM_BYTES
+        + _CUDA_SYSTEM_RESERVE_BYTES
+        <= free_bytes
+    )
 
 
 def _sam2_cuda_extension_available() -> bool:
@@ -64,13 +74,16 @@ def resolve_video_offload(
         )
     ):
         tensor_mib = frame_count * 3 * image_size * image_size * 4 // 1024**2
-        headroom_mib = _VIDEO_OFFLOAD_HEADROOM_BYTES // 1024**2
+        headroom_mib = _VIDEO_RUNTIME_HEADROOM_BYTES // 1024**2
+        reserve_mib = _CUDA_SYSTEM_RESERVE_BYTES // 1024**2
         free_mib = free_vram_bytes // 1024**2
         logger.warning(
-            "SAM2 safety guard: %d MiB video tensor plus %d MiB headroom "
-            "exceeds %d MiB free VRAM; enabling CPU offload",
+            "SAM2 safety guard: %d MiB video tensor plus %d MiB runtime "
+            "headroom plus %d MiB system reserve exceeds %d MiB free VRAM; "
+            "enabling CPU offload",
             tensor_mib,
             headroom_mib,
+            reserve_mib,
             free_mib,
         )
         return True, True
@@ -284,13 +297,13 @@ class SAM2VideoEngine:
                 self._profile = detect_device()
             return self._profile
 
-    def propagate(
+    def propagate_directions(
         self,
         frame_directory: Path,
         anchor_frame_idx: int,
         box: tuple[int, int, int, int],
         *,
-        reverse: bool,
+        directions: tuple[PropagationDirection, ...],
     ) -> object:
         with self._lock:
             torch = SAM2Engine._import_torch()
@@ -302,63 +315,129 @@ class SAM2VideoEngine:
                     "NumPy is required for SAM 2 video propagation"
                 ) from exc
 
-            with ExitStack() as contexts:
-                contexts.enter_context(torch.inference_mode())
-                profile = self.device_profile
-                if profile.device == "cuda" and profile.autocast_dtype is not None:
-                    contexts.enter_context(
-                        torch.autocast(
-                            device_type="cuda",
-                            dtype=getattr(torch, profile.autocast_dtype),
+            profile = self.device_profile
+            state: Any | None = None
+            try:
+                with ExitStack() as contexts:
+                    contexts.enter_context(torch.inference_mode())
+                    if profile.device == "cuda" and profile.autocast_dtype is not None:
+                        contexts.enter_context(
+                            torch.autocast(
+                                device_type="cuda",
+                                dtype=getattr(torch, profile.autocast_dtype),
+                            )
                         )
+                    if profile.device == "cuda":
+                        gc.collect()
+                        self._empty_cuda_cache(torch, context="before video state")
+                    frame_count = sum(
+                        1
+                        for entry in Path(frame_directory).iterdir()
+                        if entry.suffix.lower() in {".jpg", ".jpeg"}
                     )
-                frame_count = sum(
-                    1
-                    for entry in Path(frame_directory).iterdir()
-                    if entry.suffix.lower() in {".jpg", ".jpeg"}
-                )
-                free_vram_bytes = (
-                    torch.cuda.mem_get_info()[0]
-                    if profile.device == "cuda"
-                    else None
-                )
-                offload_video, offload_state = resolve_video_offload(
-                    profile.device,
-                    requested_video=self.offload_video_to_cpu,
-                    requested_state=self.offload_state_to_cpu,
-                    frame_count=frame_count,
-                    image_size=int(getattr(predictor, "image_size", 1024)),
-                    free_vram_bytes=free_vram_bytes,
-                )
-                state = predictor.init_state(
-                    video_path=str(frame_directory),
-                    offload_video_to_cpu=offload_video,
-                    offload_state_to_cpu=offload_state,
-                )
-                predictor.add_new_points_or_box(
-                    inference_state=state,
-                    frame_idx=anchor_frame_idx,
-                    obj_id=1,
-                    box=np.asarray(box, dtype=np.float32),
-                )
-                propagation = predictor.propagate_in_video(
-                    state,
-                    start_frame_idx=anchor_frame_idx,
-                    reverse=reverse,
-                )
-                for output_frame_idx, object_ids, mask_logits in propagation:
-                    object_id_values = np.asarray(object_ids).reshape(-1).tolist()
+                    free_vram_bytes = None
+                    if profile.device == "cuda":
+                        free_vram_bytes, total_vram_bytes = torch.cuda.mem_get_info()
+                        logger.debug(
+                            "SAM2 CUDA memory before video state: %d MiB free of %d MiB",
+                            free_vram_bytes // 1024**2,
+                            total_vram_bytes // 1024**2,
+                        )
+                    offload_video, offload_state = resolve_video_offload(
+                        profile.device,
+                        requested_video=self.offload_video_to_cpu,
+                        requested_state=self.offload_state_to_cpu,
+                        frame_count=frame_count,
+                        image_size=int(getattr(predictor, "image_size", 1024)),
+                        free_vram_bytes=free_vram_bytes,
+                    )
+                    state = predictor.init_state(
+                        video_path=str(frame_directory),
+                        offload_video_to_cpu=offload_video,
+                        offload_state_to_cpu=offload_state,
+                    )
+                    for direction_index, direction in enumerate(directions):
+                        if direction_index > 0:
+                            predictor.reset_state(state)
+                            gc.collect()
+                            if profile.device == "cuda":
+                                self._empty_cuda_cache(
+                                    torch, context="between tracking directions"
+                                )
+                        predictor.add_new_points_or_box(
+                            inference_state=state,
+                            frame_idx=anchor_frame_idx,
+                            obj_id=1,
+                            box=np.asarray(box, dtype=np.float32),
+                        )
+                        propagation = predictor.propagate_in_video(
+                            state,
+                            start_frame_idx=anchor_frame_idx,
+                            reverse=direction == "backward",
+                        )
+                        try:
+                            for output_frame_idx, object_ids, mask_logits in propagation:
+                                object_id_values = (
+                                    np.asarray(object_ids).reshape(-1).tolist()
+                                )
+                                try:
+                                    object_index = object_id_values.index(1)
+                                except ValueError:
+                                    continue
+                                logits = mask_logits[object_index]
+                                if hasattr(logits, "detach"):
+                                    logits = logits.detach()
+                                if hasattr(logits, "cpu"):
+                                    logits = logits.cpu()
+                                mask = np.asarray(logits > 0, dtype=bool).squeeze()
+                                yield direction, int(output_frame_idx), mask
+                        finally:
+                            close = getattr(propagation, "close", None)
+                            if close is not None:
+                                close()
+                            propagation = None
+            finally:
+                if state is not None:
                     try:
-                        object_index = object_id_values.index(1)
-                    except ValueError:
-                        continue
-                    logits = mask_logits[object_index]
-                    if hasattr(logits, "detach"):
-                        logits = logits.detach()
-                    if hasattr(logits, "cpu"):
-                        logits = logits.cpu()
-                    mask = np.asarray(logits > 0, dtype=bool).squeeze()
-                    yield int(output_frame_idx), mask
+                        predictor.reset_state(state)
+                    except Exception:
+                        logger.warning(
+                            "SAM2 could not reset video inference state during cleanup",
+                            exc_info=True,
+                        )
+                    try:
+                        state.clear()
+                    except Exception:
+                        logger.warning(
+                            "SAM2 could not clear video inference state during cleanup",
+                            exc_info=True,
+                        )
+                    state = None
+                gc.collect()
+                if profile.device == "cuda":
+                    self._empty_cuda_cache(torch, context="after video state")
+                    try:
+                        free_vram_bytes, total_vram_bytes = torch.cuda.mem_get_info()
+                    except Exception:
+                        logger.debug(
+                            "SAM2 could not read CUDA memory after cleanup", exc_info=True
+                        )
+                    else:
+                        logger.info(
+                            "SAM2 video state released: %d MiB free of %d MiB VRAM; "
+                            "predictor remains loaded",
+                            free_vram_bytes // 1024**2,
+                            total_vram_bytes // 1024**2,
+                        )
+
+    @staticmethod
+    def _empty_cuda_cache(torch: Any, *, context: str) -> None:
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            logger.warning(
+                "SAM2 could not release unused CUDA memory %s", context, exc_info=True
+            )
 
     def unload(self) -> None:
         """Release the video predictor to free accelerator memory."""

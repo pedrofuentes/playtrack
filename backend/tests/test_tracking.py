@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from app.tracking import (
     LossDetector,
@@ -88,21 +89,26 @@ class FakeStore:
 
 class FakeVideoEngine:
     def __init__(self) -> None:
-        self.calls: list[tuple[int, tuple[int, int, int, int], bool]] = []
+        self.calls: list[
+            tuple[int, tuple[int, int, int, int], tuple[str, ...]]
+        ] = []
 
-    def propagate(
+    def propagate_directions(
         self,
         frame_directory: Path,
         anchor_frame_idx: int,
         box: tuple[int, int, int, int],
         *,
-        reverse: bool,
+        directions: tuple[str, ...],
     ) -> object:
         assert frame_directory == Path("/tmp/tracking-frames")
-        self.calls.append((anchor_frame_idx, box, reverse))
-        frame_indices = (2, 1, 0) if reverse else (2, 3, 4)
-        for frame_idx in frame_indices:
-            yield frame_idx, rectangle_mask(x1=10, y1=10, x2=20, y2=20)
+        self.calls.append((anchor_frame_idx, box, directions))
+        for direction in directions:
+            frame_indices = (2, 1, 0) if direction == "backward" else (2, 3, 4)
+            for frame_idx in frame_indices:
+                yield direction, frame_idx, rectangle_mask(
+                    x1=10, y1=10, x2=20, y2=20
+                )
 
 
 def test_tracker_runs_both_directions_and_merges_source_space_results() -> None:
@@ -128,8 +134,7 @@ def test_tracker_runs_both_directions_and_merges_source_space_results() -> None:
     )
 
     assert engine.calls == [
-        (2, (10, 10, 20, 20), False),
-        (2, (10, 10, 20, 20), True),
+        (2, (10, 10, 20, 20), ("forward", "backward")),
     ]
     assert [frame.frame_idx for frame in result] == [0, 1, 2, 3, 4]
     assert all(frame.box == (20, 20, 40, 40) for frame in result)
@@ -172,20 +177,25 @@ class RangeStore:
 
 class RangeVideoEngine:
     def __init__(self) -> None:
-        self.calls: list[tuple[int, tuple[int, int, int, int], bool]] = []
+        self.calls: list[
+            tuple[int, tuple[int, int, int, int], tuple[str, ...]]
+        ] = []
 
-    def propagate(
+    def propagate_directions(
         self,
         frame_directory: Path,
         anchor_frame_idx: int,
         box: tuple[int, int, int, int],
         *,
-        reverse: bool,
+        directions: tuple[str, ...],
     ) -> object:
-        self.calls.append((anchor_frame_idx, box, reverse))
-        frame_indices = (1, 0) if reverse else (1, 2)
-        for local_frame_idx in frame_indices:
-            yield local_frame_idx, rectangle_mask(x1=10, y1=10, x2=20, y2=20)
+        self.calls.append((anchor_frame_idx, box, directions))
+        for direction in directions:
+            frame_indices = (1, 0) if direction == "backward" else (1, 2)
+            for local_frame_idx in frame_indices:
+                yield direction, local_frame_idx, rectangle_mask(
+                    x1=10, y1=10, x2=20, y2=20
+                )
 
 
 def test_tracker_maps_local_range_frames_to_absolute_source_indices() -> None:
@@ -216,8 +226,7 @@ def test_tracker_maps_local_range_frames_to_absolute_source_indices() -> None:
     )
 
     assert engine.calls == [
-        (1, (10, 10, 20, 20), False),
-        (1, (10, 10, 20, 20), True),
+        (1, (10, 10, 20, 20), ("forward", "backward")),
     ]
     assert [frame.frame_idx for frame in result] == [1, 2, 3]
     assert [update[2].frame_idx for update in updates] == [2, 3, 1]
@@ -225,23 +234,24 @@ def test_tracker_maps_local_range_frames_to_absolute_source_indices() -> None:
 
 
 class TinyMaskEngine(FakeVideoEngine):
-    def propagate(
+    def propagate_directions(
         self,
         frame_directory: Path,
         anchor_frame_idx: int,
         box: tuple[int, int, int, int],
         *,
-        reverse: bool,
+        directions: tuple[str, ...],
     ) -> object:
-        self.calls.append((anchor_frame_idx, box, reverse))
-        if reverse:
-            yield 2, rectangle_mask(x1=10, y1=10, x2=20, y2=20)
-            yield 1, rectangle_mask(x1=10, y1=10, x2=11, y2=11)
-            yield 0, np.zeros((50, 100), dtype=bool)
-        else:
-            yield 2, rectangle_mask(x1=10, y1=10, x2=20, y2=20)
-            yield 3, rectangle_mask(x1=10, y1=10, x2=11, y2=11)
-            yield 4, np.zeros((50, 100), dtype=bool)
+        self.calls.append((anchor_frame_idx, box, directions))
+        for direction in directions:
+            if direction == "backward":
+                yield direction, 2, rectangle_mask(x1=10, y1=10, x2=20, y2=20)
+                yield direction, 1, rectangle_mask(x1=10, y1=10, x2=11, y2=11)
+                yield direction, 0, np.zeros((50, 100), dtype=bool)
+            else:
+                yield direction, 2, rectangle_mask(x1=10, y1=10, x2=20, y2=20)
+                yield direction, 3, rectangle_mask(x1=10, y1=10, x2=11, y2=11)
+                yield direction, 4, np.zeros((50, 100), dtype=bool)
 
 
 def test_tracker_emits_null_geometry_for_lost_frames() -> None:
@@ -267,3 +277,53 @@ def test_tracker_emits_null_geometry_for_lost_frames() -> None:
         for frame in result
         if frame.lost
     )
+
+
+class ClosingVideoEngine(FakeVideoEngine):
+    def __init__(self) -> None:
+        super().__init__()
+        self.closed = False
+
+    def propagate_directions(
+        self,
+        frame_directory: Path,
+        anchor_frame_idx: int,
+        box: tuple[int, int, int, int],
+        *,
+        directions: tuple[str, ...],
+    ) -> object:
+        try:
+            yield "forward", anchor_frame_idx, rectangle_mask(
+                x1=10, y1=10, x2=20, y2=20
+            )
+            yield "forward", anchor_frame_idx + 1, rectangle_mask(
+                x1=10, y1=10, x2=20, y2=20
+            )
+        finally:
+            self.closed = True
+
+
+def test_tracker_closes_engine_iterator_when_progress_reporting_stops() -> None:
+    sequence = TrackingFrameSequence(
+        path=Path("/tmp/tracking-frames"),
+        width=100,
+        height=50,
+        frame_count=5,
+        scale_x=0.5,
+        scale_y=0.5,
+    )
+    engine = ClosingVideoEngine()
+    tracker = VideoTracker(FakeStore(sequence), engine_provider=lambda: engine)
+
+    def stop_tracking(*_args: object) -> None:
+        raise RuntimeError("cancel now")
+
+    with pytest.raises(RuntimeError, match="cancel now"):
+        tracker.track(
+            "video-1",
+            frame_idx=2,
+            box=(20, 20, 40, 40),
+            on_update=stop_tracking,
+        )
+
+    assert engine.closed is True

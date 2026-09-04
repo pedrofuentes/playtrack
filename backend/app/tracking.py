@@ -5,7 +5,7 @@ import statistics
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Protocol, Sequence
+from typing import Any, Callable, Literal, Protocol, Sequence
 
 from .videos import InvalidFrameError, TrackingFrameSequence, VideoStore
 
@@ -30,14 +30,17 @@ class TrackFrame:
         }
 
 
+PropagationDirection = Literal["forward", "backward"]
+
+
 class VideoPropagationEngine(Protocol):
-    def propagate(
+    def propagate_directions(
         self,
         frame_directory: Path,
         anchor_frame_idx: int,
         box: tuple[int, int, int, int],
         *,
-        reverse: bool,
+        directions: tuple[PropagationDirection, ...],
     ) -> object: ...
 
 
@@ -156,29 +159,20 @@ class VideoTracker:
         engine = self.engine_provider()
         merged: dict[int, TrackFrame] = {}
 
-        self._run_direction(
+        directions: tuple[PropagationDirection, ...] = ("forward",)
+        if local_anchor > 0:
+            directions = ("forward", "backward")
+        self._run_directions(
             engine,
             sequence,
             local_anchor,
             tracking_box,
-            reverse=False,
+            directions=directions,
             merged=merged,
             total_frames=sequence.frame_count,
             on_update=on_update,
             source_anchor_frame_idx=frame_idx,
         )
-        if local_anchor > 0:
-            self._run_direction(
-                engine,
-                sequence,
-                local_anchor,
-                tracking_box,
-                reverse=True,
-                merged=merged,
-                total_frames=sequence.frame_count,
-                on_update=on_update,
-                source_anchor_frame_idx=frame_idx,
-            )
 
         for missing_idx in range(
             sequence.start_frame_idx,
@@ -190,46 +184,59 @@ class VideoTracker:
             )
         return [merged[index] for index in sorted(merged)]
 
-    def _run_direction(
+    def _run_directions(
         self,
         engine: VideoPropagationEngine,
         sequence: TrackingFrameSequence,
         local_anchor_frame_idx: int,
         tracking_box: tuple[int, int, int, int],
         *,
-        reverse: bool,
+        directions: tuple[PropagationDirection, ...],
         merged: dict[int, TrackFrame],
         total_frames: int,
         on_update: TrackUpdate | None,
         source_anchor_frame_idx: int,
     ) -> None:
-        direction = "backward" if reverse else "forward"
-        detector = LossDetector(
-            window_size=self.loss_window_size,
-            loss_ratio=self.loss_ratio,
-        )
-        for observed_local_idx, mask in engine.propagate(
+        detectors = {
+            direction: LossDetector(
+                window_size=self.loss_window_size,
+                loss_ratio=self.loss_ratio,
+            )
+            for direction in directions
+        }
+        propagation = engine.propagate_directions(
             sequence.path,
             local_anchor_frame_idx,
             tracking_box,
-            reverse=reverse,
-        ):
-            if observed_local_idx < 0 or observed_local_idx >= total_frames:
-                continue
-            observed_source_idx = sequence.start_frame_idx + observed_local_idx
-            frame = _frame_from_mask(observed_source_idx, mask, sequence, detector)
-            if (
-                observed_source_idx == source_anchor_frame_idx
-                and observed_source_idx in merged
-            ):
-                continue
-            merged[observed_source_idx] = frame
-            if on_update is not None:
-                on_update(
-                    len(merged) / total_frames,
-                    f"Tracking {direction}",
-                    frame,
+            directions=directions,
+        )
+        try:
+            for direction, observed_local_idx, mask in propagation:
+                if observed_local_idx < 0 or observed_local_idx >= total_frames:
+                    continue
+                observed_source_idx = sequence.start_frame_idx + observed_local_idx
+                frame = _frame_from_mask(
+                    observed_source_idx,
+                    mask,
+                    sequence,
+                    detectors[direction],
                 )
+                if (
+                    observed_source_idx == source_anchor_frame_idx
+                    and observed_source_idx in merged
+                ):
+                    continue
+                merged[observed_source_idx] = frame
+                if on_update is not None:
+                    on_update(
+                        len(merged) / total_frames,
+                        f"Tracking {direction}",
+                        frame,
+                    )
+        finally:
+            close = getattr(propagation, "close", None)
+            if close is not None:
+                close()
 
 
 def _frame_from_mask(
